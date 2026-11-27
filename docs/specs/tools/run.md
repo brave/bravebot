@@ -1530,25 +1530,38 @@ the window.
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::job_output_says_its_wait_ends_with_the_turn`
 
 <a id="RUN-18"></a>
-### RUN-18: the tool's own description routes a request to watch something to one of two techniques
+### RUN-18: the tool's own description routes a request to watch something to the skill that says which of two techniques
 
 `run`'s description must say that a request to watch something, or to be told when it changes, is
-first a question about **what** is being watched, because a file and a program are watched by
-different means. A file takes no command at all: `read_file` hands back a change token and the
-technique is comparing one look's token with the next's, per
-[read-file.md](read-file.md#READ-7). A program's own output is watched here, with `background: true`
-and then `job_output` with `wait_seconds`, per [RUN-17](#RUN-17). Neither reaches past the turn by
-itself: a background job is killed when the turn ends, and comparing a token needs a later look. So
-the description must say to take the first look now and call `schedule_next` at the end of the turn,
-which has the planner asked again after the wait with the person's line unchanged
-([SCHED-6](schedule-next.md#SCHED-6), [LOOP-14](../loop.md#LOOP-14)); and that where the request is
-to watch something or to be told when it changes, and no further look has been scheduled, the answer
-says so. The sentence opens with that condition, and the description must say that any other request
-gets no sentence about a later look. A turn nothing will ask again is told to say plainly that no
-later look is coming under the same condition, as [READ-6](read-file.md#READ-6) has it for
-`read_file`. A line the person typed while the session's own loop, goal or standing watch is live
-is told instead which of the three starts the next turn and what it looks at, under the same
-condition and in the same words.
+answered by loading the built-in skill `watching` ([SKILL-22](../skills.md#SKILL-22)) before the
+first look, because a file and a program are watched by different means. The skill's body says the
+rest. It must say that the request is first a question about **what** is being watched. A file takes
+no command at all: `read_file` hands back a change token and the technique is comparing one look's
+token with the next's, per [read-file.md](read-file.md#READ-7). A program's own output is watched
+with `run`, with `background: true` and then `job_output` with `wait_seconds`, per
+[RUN-17](#RUN-17). Neither reaches past the turn by itself: a background job is killed when the turn
+ends, and comparing a token needs a later look. So the body must say to take the first look now,
+and that where the later look comes from depends on the turn, which `read_file`'s description says
+([READ-6](read-file.md#READ-6)): a turn that can arrange one arranges it itself rather than telling
+somebody to, inside a loop the next tick is the next look, a line the person typed while the
+session's own loop, goal or standing watch is live is told which of the three starts the next turn
+and what it looks at, and a turn nothing will ask again says plainly that no later look is coming.
+It names no tool that arranges a look, since the body is the
+same in every turn and `schedule_next` is offered in some turns only. And where the request is to
+watch something or to be told when it changes, and no further look has been scheduled, the answer
+says so. That sentence opens with the condition, and the body must say that any other request gets
+no sentence about a later look.
+
+Where the turn cannot load the skill, because its catalogue does not hold it (a definition's
+`skills:` line left it out), holds a skill of the person's or the project's under that name in its
+place, or its list does not hold `load_skill`, `run`'s description carries the
+paragraph itself in place of the sentence that names the skill, naming `read_file` and `job_output`
+only where the list holds each ([TOOL-6](tool-surface.md#TOOL-6)).
+
+**Why a skill and not the description.** The paragraph was sent with every request of every turn,
+and it is read only in a turn asked to watch something. The sentence that names the skill is the
+part a planner needs before its first call, and costs one `load_skill` round in the turns that need
+the rest ([#4712](https://github.com/brave/bravebot/issues/4712)).
 
 **Why the file branch names no command.** The recipe this clause first shipped was `tail -f`, and it
 was wrong twice over. It is not in the read-proven table, so every watch of a file cost an approval
@@ -1557,20 +1570,20 @@ under it looked untouched. A planner that reached for it anyway wrote its own po
 the command-line grammar refused. The token needs no command, no approval, and no program whose
 output would come back quarantined.
 
-**A turn already inside a loop is the third case, and gets a sentence of its own.** There the next
-look is the next tick, so the description has such a turn report what this tick saw and leave the rest
-to the next one, and arrange nothing. Without that sentence a tick reads the instruction above and
-schedules a second look on top of the one its loop is already taking.
+**A turn already inside a loop is the third case.** There the next look is the next tick, so such a
+turn reports what this tick saw and leaves the rest to the next one, and arranges nothing. Without
+that a tick schedules a second look on top of the one its loop is already taking. The skill's body
+says so, and `read_file`'s description says it to a turn that is a tick ([READ-6](read-file.md#READ-6)).
 
 **A line the person typed under the session's own loop, goal or watch is a fourth case.** The
 session drops the wait such a turn would ask for, so it is offered no `schedule_next`, but the live
-loop, goal or watch does start another turn. The description says which one, says that this turn
+loop, goal or watch does start another turn. `read_file`'s description says which one, says that this turn
 does not set the wait, and does not say that nothing will ask again. Under a loop or a watch it has
 the turn take this look and not wait in the foreground for the look the loop or the watch takes.
 A turn told that nothing will ask again tells the person no later look is coming while the
 session's loop is about to take one, and waits in the foreground in place of that look.
 
-**The window, never a time of day.** The description must have the answer name the window it watched,
+**The window, never a time of day.** The body must have the answer name the window it watched,
 or the looks it compared, rather than date either, and must say why: the planner has no clock. It is told today's date and told not
 to ask a program for the time, so an instruction to say when it looked is an invitation to invent an
 hour, which is worse than the sample it was reporting.
@@ -1599,6 +1612,10 @@ worse answer than the single read this pair of clauses set out to correct, becau
 without even the file. Hence the first look happens in the turn that was asked.
 
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`
+`verified-by: bravebot_agent::skills::the_watching_skill_is_listed_and_carries_the_two_techniques`
+`verified-by: bravebot_agent::deferred_tools::the_first_request_routes_a_watch_request_to_a_skill_it_lists`
+`verified-by: bravebot_agent::deferred_tools::a_skill_of_the_persons_own_named_watching_does_not_take_the_route`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_run_description_on_watching_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request`
 `verified-by: bravebot_agent::tools::tests::run_and_read_file_text::what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange`

@@ -648,18 +648,11 @@ fn a_definition_asking_for_a_checkout_is_offered_as_working_in_one() {
     };
     assert_eq!(
         line("migrator"),
-        "- migrator: Does it. (limit: 120 rounds; a round is one reply with its tool calls) \
-         Its delegates work in a checkout of the last commit, which holds no change not yet \
+        "- migrator: Does it. (limit: 120 rounds) Its delegates work in a checkout of the last commit, which holds no change not yet \
          committed unless the call sets isolation to \"checkout_with_changes\"."
     );
-    assert_eq!(
-        line("reviewer"),
-        "- reviewer: Does it. (limit: 60 rounds; a round is one reply with its tool calls)"
-    );
-    assert_eq!(
-        line("tester"),
-        "- tester: Does it. (limit: 80 rounds; a round is one reply with its tool calls)"
-    );
+    assert_eq!(line("reviewer"), "- reviewer: Does it. (limit: 60 rounds)");
+    assert_eq!(line("tester"), "- tester: Does it. (limit: 80 rounds)");
 }
 
 /// DELEGATE-6: the planner sizes a task to the rounds its kind allows, so each kind's line in
@@ -690,13 +683,14 @@ fn each_kind_the_planner_may_pick_names_the_rounds_it_allows() {
             .find(|line| line.starts_with(&format!("- {name}: ")))
             .unwrap_or_else(|| panic!("no line for {name}: {described}"));
         assert!(
-            line.contains(&format!(
-                "(limit: {} rounds; a round is one reply with its tool calls)",
-                kind.rounds()
-            )),
+            line.ends_with(&format!("(limit: {} rounds)", kind.rounds())),
             "{name}: {line}"
         );
     }
+    assert!(
+        described.contains("A round is one reply with its tool calls."),
+        "the text does not say what a round is: {described}"
+    );
 }
 
 /// AGENT-5: an `each` that names no delegate is refused with a sentence saying it was empty. An
@@ -903,8 +897,9 @@ fn the_isolation_field_says_checkouts_share_refs_and_who_fetches_once() {
 }
 
 /// SCHED-6: a delegate is offered no `schedule_next`, so the descriptions it receives must not
-/// send it there. `read_file` and `run` carry a paragraph about the later look that differs by
-/// turn, and the delegate's list used to be built with the one for a turn that arranges it.
+/// send it there. `read_file` carries a paragraph about the later look that differs by turn,
+/// and the delegate's list used to be built with the one for a turn that arranges it. `run`
+/// sends a watch request to the skill `watching` (RUN-18), which names no such tool.
 #[test]
 fn a_delegates_descriptions_do_not_name_schedule_next() {
     use bravebot_core::capability::{Capability, CapabilitySet};
@@ -924,13 +919,17 @@ fn a_delegates_descriptions_do_not_name_schedule_next() {
             "a delegate was told to call schedule_next in {name}: {}",
             tool.function.description
         );
-        assert!(
-            tool.function
-                .description
-                .to_lowercase()
-                .contains("nothing will ask you again"),
-            "{name} does not say no later look is coming: {}",
-            tool.function.description
-        );
     }
+    let read = offered
+        .iter()
+        .find(|t| t.function.name == "read_file")
+        .expect("read_file is offered to this delegate");
+    assert!(
+        read.function
+            .description
+            .to_lowercase()
+            .contains("nothing will ask you again"),
+        "read_file does not say no later look is coming: {}",
+        read.function.description
+    );
 }

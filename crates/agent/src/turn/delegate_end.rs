@@ -186,12 +186,22 @@ pub(super) fn unfinished_account(
 /// delegate's kept checkout must not be told to call a tool it does not have. Where the list
 /// lacks it, the clause says only where the files are, so the person still knows, by another way.
 fn apply_checkout_clause(beside: tools::Beside, id: &str, path: &std::path::Path) -> String {
-    match beside.holds(tools::Named::ApplyCheckout) {
-        true => format!(
+    match (
+        beside.holds(tools::Named::ApplyCheckout),
+        beside.loadable(tools::Named::ApplyCheckout),
+    ) {
+        (true, _) => format!(
             " apply_checkout with checkout \"{id}\" brings the files it names back into the \
              working directory, asking the person about each."
         ),
-        false => format!(
+        // Held back for `load_tool` (TOOL-7): the one situation the tool is for, so the route is
+        // named with the load step.
+        (false, true) => format!(
+            " Call load_tool with the name apply_checkout to load it. apply_checkout with checkout \
+             \"{id}\" then brings the files it names back into the working directory, asking the \
+             person about each."
+        ),
+        (false, false) => format!(
             " The files it holds stay at {} until the person brings them back another way.",
             path.display()
         ),
@@ -499,6 +509,24 @@ mod tests {
         assert!(
             unnamed.contains("/tmp/checkout-c3") && unnamed.contains("another way"),
             "{unnamed}"
+        );
+
+        // TOOL-7: held back for `load_tool`, the clause names the load step and then the tool.
+        let loadable = without.with_loadable(&["apply_checkout".to_string()]);
+        let through_the_loader = apply_checkout_clause(loadable, "c3", path);
+        assert!(
+            through_the_loader.contains("Call load_tool with the name apply_checkout")
+                && through_the_loader.contains("apply_checkout with checkout \"c3\""),
+            "a held-back apply_checkout was not named through load_tool: {through_the_loader}"
+        );
+        // A list holding the tool is not told to load it.
+        assert_eq!(
+            apply_checkout_clause(
+                holding.with_loadable(&["apply_checkout".to_string()]),
+                "c3",
+                path
+            ),
+            named
         );
     }
 

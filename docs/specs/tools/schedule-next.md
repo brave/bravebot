@@ -109,11 +109,14 @@ writing differs: a tick reports what this look found and leaves the rest to the 
 turn that has just arranged the first later look is telling somebody a watch now exists and needs
 nothing from them.
 
-The two descriptions that route a request to be told when something changes, the read whose change
-token is compared and the run whose output is watched, say where the next look comes from, and say
-the same thing this clause does about the turn they are offered to. For a line typed under the
-session's loop, goal or watch they name which of the three starts the next turn and what that turn
-looks at, say that this turn does not set the wait, and do not say that nothing will ask again.
+The two routes to be told when something changes say where the next look comes from, and say the
+same thing this clause does about the turn they are offered to. The read whose change token is
+compared says it in `read_file`'s description. The run whose output is watched is routed by one
+sentence of `run`'s description to the built-in skill `watching` ([SKILL-22](../skills.md#SKILL-22),
+[RUN-18](run.md#RUN-18)), whose body is the same in every turn and points back to `read_file`'s
+description for which case this turn is. For a line typed under the session's loop, goal or watch
+`read_file`'s description names which of the three starts the next turn and what that turn looks
+at, says that this turn does not set the wait, and does not say that nothing will ask again.
 
 **Why.** A request to be told when something changes cannot be answered inside one turn, and a rule
 withholding the tool from every turn but a tick leaves the only honest answer a single read and a

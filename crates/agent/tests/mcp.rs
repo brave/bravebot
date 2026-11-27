@@ -8922,8 +8922,8 @@ fn a_loaded_tool_is_still_put_to_the_person_before_each_call() {
     assert_eq!(call.name(), "weather:get_forecast");
 }
 
-/// SERVERS-16: below the threshold nothing is deferred, so the tool is offered in full and there is
-/// no `load_tool` to name.
+/// SERVERS-16: below the threshold nothing of the server is deferred, so the tool is offered in full
+/// and the loader the turn has for held-back built-ins (TOOL-7) lists none of the server's tools.
 #[test]
 fn tools_under_the_threshold_are_offered_in_full_with_no_loader() {
     let scratch = Scratch::new("deferred-under");
@@ -8941,7 +8941,24 @@ fn tools_under_the_threshold_are_offered_in_full_with_no_loader() {
     let sent = rounds(&chat);
     let names = offered_names(&sent[0]);
     assert!(names.contains(&FORECAST.to_string()), "{names:?}");
-    assert!(!names.contains(&"load_tool".to_string()), "{names:?}");
+    assert!(
+        !loader_description(&sent[0]).contains("weather:get_forecast"),
+        "a server tool offered in full was listed for loading: {}",
+        loader_description(&sent[0])
+    );
+}
+
+/// The description of the `load_tool` a request offered, or nothing where it offered none.
+fn loader_description(request: &str) -> String {
+    let request: Value = serde_json::from_str(request).expect("a request");
+    request["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "load_tool")
+        .and_then(|tool| tool["function"]["description"].as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// SERVERS-16, BACKEND-24: the threshold a turn defers at is the one the settings in force read
@@ -9030,8 +9047,9 @@ fn defer_to_a_delegate(name: &str, spawn: &str) -> Delegated {
     }
 }
 
-/// SERVERS-16: a delegate that holds no server is offered no `load_tool`, because it has no tool to
-/// load, and its call to one is refused as an unknown name. A reader and a checker hold none by
+/// SERVERS-16: a delegate that holds no server is offered no server tool through `load_tool`, because
+/// it has none to load: the loader it is offered for held-back built-ins (TOOL-7) lists none, and its
+/// load of one is refused as a name the loader does not list. A reader and a checker hold none by
 /// kind, and a worker spawned keeping no server holds none by its call.
 #[test]
 fn a_delegate_holding_no_server_is_offered_no_loader_and_cannot_call_one() {
@@ -9063,14 +9081,19 @@ fn a_delegate_holding_no_server_is_offered_no_loader_and_cannot_call_one() {
             "{name}: the turn did not settle the list, so this says nothing"
         );
         assert!(
-            !offered_names(first).contains(&"load_tool".to_string()),
-            "{name}: was offered a loader: {:?}",
-            offered_names(first)
+            !loader_description(first).contains("weather:get_forecast"),
+            "{name}: was offered the server's tool to load: {}",
+            loader_description(first)
         );
         assert!(
-            answer_to_the_call(second).contains("no such tool"),
-            "{name}: its call to load_tool was not refused: {}",
+            answer_to_the_call(second).contains("no such tool")
+                || answer_to_the_call(second).contains("no tool named"),
+            "{name}: its load of the server's tool was not refused: {}",
             answer_to_the_call(second)
+        );
+        assert!(
+            !offered_names(second).contains(&FORECAST.to_string()),
+            "{name}: the server's tool was offered after all"
         );
         assert!(
             asked.calls.is_empty(),

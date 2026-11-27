@@ -8,7 +8,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 257
+      - crates/agent/src/tools.rs: 258
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 29
@@ -57,7 +57,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`download_url`](download-url.md) | `url`, `path` | none | the path and the byte count |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
 | [`search_skills`](search-skills.md) | `query` | none | matching skills' names and descriptions, or a count of further matches |
-| [`load_tool`](../mcp-servers.md#SERVERS-16) | `name` | none | confirmation that the tool is offered from the next request |
+| [`load_tool`](#TOOL-7) ([SERVERS-16](../mcp-servers.md#SERVERS-16) for a server's tool) | `name` | none | confirmation that the tool, a built-in held back or a server's tool, is offered from the next request |
 | [`todo_write`](todo-write.md) | none | `todos` | confirmation |
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |
 | [`watch_file`](watch-file.md) | `path` | none | confirmation that the watch exists |
@@ -131,6 +131,10 @@ tool is not checked, and neither is a name a tool reads to give its own answer: 
 for `spawn_processor` ([SPAWN-5](spawn-processor.md#SPAWN-5)), and `stop` for `schedule_next` in
 a turn arranging a look ([SCHED-4](schedule-next.md#SCHED-4)).
 
+A call to a built-in the turn holds back and has not loaded ([TOOL-7](#TOOL-7)) is refused as an
+unknown name is, with the sentence to call `load_tool` with its name first. It is refused before
+its arguments are checked, it runs nothing, nobody is asked about it, and it is not read ahead.
+
 `verified-by: bravebot_agent::turn::an_unknown_tool_is_reported_to_the_model`
 `verified-by: bravebot_agent::turn::a_refused_call_is_reported_as_one`
 `verified-by: bravebot_agent::turn::each_tool_call_is_announced_before_it_runs_and_summarised_after`
@@ -142,6 +146,7 @@ a turn arranging a look ([SCHED-4](schedule-next.md#SCHED-4)).
 `verified-by: bravebot_agent::turn::a_download_given_a_path_reference_gets_its_own_refusal_and_a_blank_one_none`
 `verified-by: bravebot_agent::turn::a_call_with_an_undeclared_argument_is_not_read_ahead`
 `verified-by: bravebot_agent::mcp::a_server_tool_is_sent_an_argument_its_schema_does_not_declare`
+`verified-by: bravebot_agent::deferred_tools::a_call_to_a_held_back_tool_is_refused_runs_nothing_and_asks_nobody`
 
 <a id="TOOL-4"></a>
 ### TOOL-4: a refusal is worded by the driver
@@ -205,6 +210,7 @@ server is sent the arguments as they stand and the person approving the call rea
 was for, so a session reads as a list of commands.
 
 `verified-by: bravebot_agent::tools::tests::the_tool_table::every_tool_offered_asks_why_it_is_being_called`
+`verified-by: bravebot_agent::deferred_tools::a_loaded_tool_is_offered_from_the_next_request_to_the_end_of_the_turn_and_asks_why`
 `verified-by: bravebot_agent::turn::each_call_is_announced_and_summarised_with_its_own_reason`
 `verified-by: bravebot_agent::tools::tests::held_calls::a_held_call_is_drawn_with_the_reason_the_planner_gave`
 `verified-by: bravebot_agent::tools::tests::held_calls::a_held_call_to_a_servers_tool_is_drawn_with_its_target`
@@ -259,8 +265,9 @@ refusals and notices of confinement are said only where the list holds `request_
 ([PATHREQ-5](request-path.md#PATHREQ-5), [SANDBOX-19](../sandboxing.md#SANDBOX-19),
 [SANDBOX-22](../sandboxing.md#SANDBOX-22)).
 
-The descriptions are written from the list as well. `run` names `read_file` and `job_output` in its
-paragraph on watching a program, and `read_output` in its `read` argument, each only where the list
+The descriptions are written from the list as well. `run` names `read_file` and `job_output` in the
+paragraph on watching it carries where the skill `watching` cannot be loaded
+([RUN-18](run.md#RUN-18)), and `read_output` in its `read` argument, each only where the list
 holds it. `read_file` names `spawn_processor` for a picture, a PDF and the saved outputs of a
 notebook cell, and `edit_file` for a notebook, `write_file` names `spawn_processor` in its
 `contents_ref` argument, `edit_file` names `write_file`, `repo_map` and `lsp` name `read_file`, and
@@ -269,6 +276,27 @@ notebook cell, and `edit_file` for a notebook, `write_file` names `spawn_process
 delegate cannot call, each only where the list holds it, and says nothing of them where it holds
 none, and names `spawn_processor`, for output a delegate cannot read either, only where the list
 holds it ([AGENT-1](spawn-agent.md#AGENT-1)).
+
+`load_skill` names `search_skills`, in its description and in its `name` argument, and
+`search_skills` names `load_skill`, each only where the list holds it. `download_url` names
+`fetch_url` only where the list holds it, and says "any file that is not text" otherwise. `ask_user`
+names each of `list_files`, `search`, `read_file` and `run`, as the tools to look with before
+asking, only where the list holds it, and where it holds none of them says to report what could not
+be found out. `watch_file` names `schedule_next`, `remember` names `recall` in its `supersedes`
+argument, and `propose_rule` names `remember`, each only where the list holds it.
+
+A turn that holds built-ins back for `load_tool` ([TOOL-7](#TOOL-7)) writes every one of these
+texts from the tools it offers in full, so no description in a request names a tool that request
+does not hold. A held-back tool's description is written once, from that same list and not from the
+other held-back tools, so a tool loaded later names no tool that is still held back. Where
+`watch_file` is held back, `read_file` drops the sentence that names it; where `schedule_next` is
+held back, `read_file` drops the half that names it beside `watch_file`, and the sentences of
+`read_file` and `run` that arrange the next look send the planner to the tool `load_tool` lists for
+it and name neither. A result where a held-back tool's situation arises names `load_tool` with the
+tool's name: the line after a failed step names `request_path` only through `load_tool`, and only
+where the session would accept a request, and the note of a kept checkout names `apply_checkout`
+after the step that loads it. Where the tool is neither offered nor held back, both say what they
+said before.
 
 `search` and `list_files` lose their `read` argument where the list lacks `vet_content`, since
 `read` asks for the release `vet_content` makes ([VET-6](vet-content.md#VET-6)).
@@ -314,11 +342,13 @@ It was also told in its own prompt what it cannot do, so it holds both answers a
 the tool list is the one that is true.
 
 Not every text is written this way yet. Some results and refusals still name `run`, `read_file`,
-`edit_file`, `read_output`, `job_output`, `search_skills`, `load_skill`, `download_url` or
+`edit_file`, `read_output`, `job_output`, `search_skills`, `load_skill` or
 `read_git` without reading the list: the decoding note of a page read, the
-result of an approved `request_path`, the unconfined way out that a refused write names, the descriptions of
-`load_skill`, `search_skills`, `download_url` and `ask_user`, the notice about `search_skills`, the
-planning, person-facing and environment prompts, and the reminder of a kept skill after compaction.
+result of an approved `request_path`, the unconfined way out that a refused write names, the notice
+about `search_skills`, the
+planning, person-facing and environment prompts, the reminder of a kept skill after compaction, and
+the body of the built-in skill `watching`, which names `read_file`, `run` and `job_output` whatever
+the turn that loads it holds.
 A refusal of a checkout names `read_git` as the reader it would have used only where the caller
 gives no other name: `checkout_for_cause_as` and `checkout_in_temporary_directory_cause_as` let
 `spawn_agent` name the reader this turn's own list holds, `read_git` where it does and a name that
@@ -415,3 +445,73 @@ without naming a tool to fetch them with.
 `verified-by: bravebot_agent::turn::a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::turn::delegate_end::the_apply_checkout_clause_names_the_tool_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::tests::tool_descriptions::the_checkout_notice_names_lsp_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_skill_download_and_ask_user_descriptions_name_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::a_held_back_tool_names_no_tool_the_offered_list_lacks`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_read_and_run_descriptions_name_a_held_back_watch_or_schedule_through_load_tool`
+`verified-by: bravebot_agent::confine::tests::a_held_back_request_path_is_named_with_load_tool_after_a_failure`
+
+<a id="TOOL-7"></a>
+### TOOL-7: a fixed core list is offered in full, and every other built-in is loaded by its exact name
+
+Every request a turn makes offers in full the built-ins of a fixed list, the core list, that the turn
+would offer: `read_file`, `list_files`, `search`, `write_file`, `edit_file`, `run`, `job_output`,
+`read_output`, `vet_content`, `spawn_processor`, `spawn_agent`, `load_skill`, `search_skills`,
+`ask_user`, `todo_write`, `fetch_url` and `read_git`. Every other built-in the turn would offer is held
+back, and the turn offers `load_tool`, whose description lists the held-back names. A tool the turn
+would not offer is neither offered nor listed, so it cannot be loaded. A delegate's turn is split the
+same way, from the list its kind and definition give it. A name a definition's `tools:` line or
+`--tools` names is offered in full, so a turn whose list such a line settled holds nothing back.
+A tick of a self-paced loop is offered `schedule_next` in full, because its preamble and the `loop`
+skill ask for it on every tick. What decides it is the turn's scheduling mode alone
+([SCHED-6](schedule-next.md#SCHED-6)): every other turn that would offer it holds it back, and a
+turn that would not offer it neither lists nor loads it.
+A turn in plan mode is offered `propose_plan` in full, because its preamble asks for it once the
+plan is settled ([MODE-14](../permission-modes.md#MODE-14)). What decides it is the permission
+mode alone, read where the turn settles its list, as the scheduling mode is read for
+`schedule_next`; a turn in any other mode is not offered it and does not list it.
+A manifest run's planning requests carry no tool list ([MANIFEST-5](../manifest.md#MANIFEST-5)), so
+nothing is held back from them and no plan has a load step.
+
+`load_tool` takes `name` as routing and nothing else, released as a skill's name is
+([LOAD-1](load-skill.md#LOAD-1)), and matched exactly against the held-back names and, where a
+server's tools are offered by name, against their `alias:tool` ([SERVERS-16](../mcp-servers.md#SERVERS-16)).
+A name one character out, in another case, or a prefix of one loads nothing
+([LOAD-2](load-skill.md#LOAD-2)), and the planner is told that the listed names are the only ones. A
+load asks nobody. It offers the tool's definition as it was written when the turn started
+([TOOL-6](#TOOL-6)), from the next request to the end of the turn, appended after every tool
+already offered, so the list in front of it is sent unchanged. From the next request a result whose
+situation is the loaded tool's names the tool itself and no longer sends the planner to `load_tool`.
+A loaded tool takes `why` and lists it as required, as
+every tool does ([TOOL-5](#TOOL-5)). A call to a held-back tool that is not loaded is refused
+([TOOL-3](#TOOL-3)).
+
+Which tools are offered in full is decided by the core list, which is a constant in the source, by
+the names a person wrote in a `tools:` line or `--tools`, by the turn's scheduling mode and
+permission mode, and by the
+`name` arguments the planner passed to `load_tool`. No byte of a file, a result or a server's reply
+is read to decide it.
+
+**Why.** Every built-in was otherwise sent in full on every request, about 73,000 bytes in a
+one-shot `--safe` turn's first request, most of it for tools the turn never calls.
+
+**Known cost.** The tool list is the front of the cached prefix, so the request after a load writes
+the cache from the first byte past the tools it held before. Appending the loaded definition keeps
+the earlier list identical, so only that one request pays the write.
+
+`verified-by: bravebot_agent::deferred_tools::a_turns_first_request_offers_the_core_list_in_full_and_the_rest_by_name`
+`verified-by: bravebot_agent::deferred_tools::a_loaded_tool_is_offered_from_the_next_request_to_the_end_of_the_turn_and_asks_why`
+`verified-by: bravebot_agent::deferred_tools::a_load_leaves_the_tools_offered_before_it_unchanged`
+`verified-by: bravebot_agent::deferred_tools::a_name_close_to_a_held_back_tool_loads_nothing`
+`verified-by: bravebot_agent::deferred_tools::a_call_to_a_held_back_tool_is_refused_runs_nothing_and_asks_nobody`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::a_held_back_tool_is_named_only_by_its_exact_name`
+`verified-by: bravebot_agent::deferred_tools::the_tools_a_turn_adds_for_its_situation_are_held_back_and_each_loads`
+`verified-by: bravebot_agent::deferred_tools::a_tool_the_turn_would_not_offer_is_not_listed_and_does_not_load`
+`verified-by: bravebot_agent::deferred_tools::a_delegate_is_offered_the_core_list_and_loads_the_rest_by_name`
+`verified-by: bravebot_agent::deferred_tools::a_delegate_definition_naming_a_held_back_tool_is_offered_it_in_full`
+`verified-by: bravebot_agent::deferred_tools::download_url_and_request_path_are_held_back_and_each_loads`
+`verified-by: bravebot_agent::manifest::the_planner_is_shown_capabilities_and_no_tool_names`
+`verified-by: bravebot_agent::deferred_tools::a_self_paced_tick_is_offered_schedule_next_in_full_and_other_turns_are_not`
+`verified-by: bravebot_agent::turn::propose_plan_is_offered_to_the_planner_in_plan_mode_only`
+`verified-by: bravebot_agent::tools_named_in_full::a_held_back_tool_named_by_the_command_line_is_offered_in_full`
+`verified-by: bravebot_agent::deferred_tools::a_loaded_tool_is_named_directly_in_a_later_result`
+`verified-by: bravebot_agent::deferred_tools::a_one_shot_turns_first_request_offers_tools_within_a_budget`

@@ -3383,7 +3383,9 @@ fn every_file_tool_records_a_path_refused_for_leaving_the_workspace() {
         &config,
         &egress,
         &workspace,
-        &Task::new("tidy up my notes").arming(bravebot_agent::watch::Arming::Allowed { free: 8 }),
+        &Task::new("tidy up my notes")
+            .offering_every_tool_in_full()
+            .arming(bravebot_agent::watch::Arming::Allowed { free: 8 }),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut sink,
     )
@@ -3500,11 +3502,13 @@ fn a_tick_of_a_self_paced_loop_says_when_to_run_again() {
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new("watch the build").ticking(Some(turn::Tick {
-        number: 1,
-        self_paced: true,
-        unpaceable: false,
-    }));
+    let task = Task::new("watch the build")
+        .offering_every_tool_in_full()
+        .ticking(Some(turn::Tick {
+            number: 1,
+            self_paced: true,
+            unpaceable: false,
+        }));
     let outcome = turns::run(
         &config,
         &egress,
@@ -3545,11 +3549,13 @@ fn a_tick_is_told_that_it_is_one_and_which_kind_of_loop_it_is_in() {
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
 
-        let task = Task::new("watch the build").ticking(Some(turn::Tick {
-            number: 3,
-            self_paced,
-            unpaceable: false,
-        }));
+        let task = Task::new("watch the build")
+            .offering_every_tool_in_full()
+            .ticking(Some(turn::Tick {
+                number: 3,
+                self_paced,
+                unpaceable: false,
+            }));
         turns::run(
             &config,
             &egress,
@@ -3787,7 +3793,9 @@ fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new("tell me when a.txt changes").looking_again(true);
+    let task = Task::new("tell me when a.txt changes")
+        .offering_every_tool_in_full()
+        .looking_again(true);
     let outcome = turns::run(
         &config,
         &egress,
@@ -3837,7 +3845,9 @@ fn stop_from_a_turn_arranging_a_look_is_not_read_in_a_whole_turn() {
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new("tell me when a.txt changes").looking_again(true);
+    let task = Task::new("tell me when a.txt changes")
+        .offering_every_tool_in_full()
+        .looking_again(true);
     let outcome = turns::run(
         &config,
         &egress,
@@ -3943,7 +3953,9 @@ fn an_address_the_person_typed_reaches_set_link_and_leaves_the_turn() {
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new(format!("work on {issue}")).keeping_links(true);
+    let task = Task::new(format!("work on {issue}"))
+        .offering_every_tool_in_full()
+        .keeping_links(true);
     let outcome = turns::run(
         &config,
         &egress,
@@ -4035,6 +4047,7 @@ fn an_address_only_a_named_sessions_excerpt_holds_is_not_one_the_person_typed() 
 
     let excerpt = format!("Excerpt of an earlier session.\n\nAssistant: open {from_excerpt}");
     let task = Task::new(format!("carry on from @session:abc on {typed}"))
+        .offering_every_tool_in_full()
         .with_session_excerpt("abc", excerpt)
         .keeping_links(true);
     let outcome = turns::run(
@@ -4081,6 +4094,7 @@ fn an_address_in_a_later_line_of_a_multi_line_prompt_is_one_the_person_typed() {
     let task = Task::new(format!(
         "look at this\n\nbuild failed\n  see {pasted}\nexit 1\n\nthanks"
     ))
+    .offering_every_tool_in_full()
     .keeping_links(true);
     let outcome = turns::run(
         &config,
@@ -4128,7 +4142,9 @@ fn an_address_no_typed_line_holds_is_refused_as_not_typed() {
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new("link the tracker").keeping_links(true);
+    let task = Task::new("link the tracker")
+        .offering_every_tool_in_full()
+        .keeping_links(true);
     let outcome = turns::run(
         &config,
         &egress,
@@ -4219,7 +4235,9 @@ fn a_link_recorded_in_a_turn_that_then_fails_still_leaves_the_turn() {
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new(format!("work on {issue}")).keeping_links(true),
+        &Task::new(format!("work on {issue}"))
+            .offering_every_tool_in_full()
+            .keeping_links(true),
         &mut bravebot_agent::Conversation::new(),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut bravebot_agent::IgnoreReports,
@@ -7437,7 +7455,9 @@ fn approving_a_plan_is_recorded_as_the_cause_of_leaving_plan_mode() {
         let mut sink = RecordingSink::new();
 
         let live = LiveMode::new(PermissionMode::Plan);
-        let task = Task::new("plan the work").with_permission_mode(live.clone());
+        let task = Task::new("plan the work")
+            .offering_every_tool_in_full()
+            .with_permission_mode(live.clone());
         let mut person = AnswersWith::new(vec![reply]);
         turns::run_with_trust(
             &config,
@@ -7670,9 +7690,11 @@ fn a_mode_chosen_during_a_turn_applies_to_the_rest_of_it() {
     );
 }
 
-/// MODE-14: the planner is offered `propose_plan` in plan mode and in no other mode. The
-/// regressions it rejects are a table that never offers the tool and one that offers it in every
-/// mode.
+/// MODE-14, TOOL-7: a plan-mode turn's first request offers `propose_plan` in full, with no option
+/// set to offer every tool, and no other mode offers it or lists it for `load_tool`. The
+/// regressions it rejects are a table that never offers the tool, one that offers it in every mode,
+/// and a plan-mode turn that holds it back for `load_tool`, which its preamble then sends the
+/// planner to as a tool it does not have.
 #[test]
 fn propose_plan_is_offered_to_the_planner_in_plan_mode_only() {
     use bravebot_agent::PermissionMode;
@@ -7700,9 +7722,8 @@ fn propose_plan_is_offered_to_the_planner_in_plan_mode_only() {
 
         let requests = every_request(&received);
         let request: serde_json::Value = serde_json::from_str(&requests[0]).expect("a request");
-        let names: Vec<&str> = request["tools"]
-            .as_array()
-            .expect("a table of tools")
+        let tools = request["tools"].as_array().expect("a table of tools");
+        let names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool["function"]["name"].as_str())
             .collect();
@@ -7710,10 +7731,23 @@ fn propose_plan_is_offered_to_the_planner_in_plan_mode_only() {
             names.contains(&"run"),
             "{mode:?}: the table is empty of the usual tools"
         );
+        assert!(
+            names.contains(&"load_tool"),
+            "{mode:?}: nothing is held back, so this turn does not show the split: {names:?}"
+        );
         assert_eq!(
             names.contains(&"propose_plan"),
             offered,
             "{mode:?}: {names:?}"
+        );
+        let loader = tools
+            .iter()
+            .find(|tool| tool["function"]["name"] == "load_tool")
+            .and_then(|tool| tool["function"]["description"].as_str())
+            .unwrap_or_default();
+        assert!(
+            !loader.contains("propose_plan"),
+            "{mode:?}: propose_plan is listed for loading: {loader}"
         );
     }
 }
@@ -8255,7 +8289,7 @@ fn a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal() {
             &config_for(&endpoint),
             &bravebot_net::Egress::new(),
             &workspace,
-            &Task::new("get it"),
+            &Task::new("get it").offering_every_tool_in_full(),
             &mut person,
             &mut sink,
             trusting_the_workspace(),
@@ -8304,7 +8338,7 @@ fn a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal() {
             &config_for(&endpoint),
             &bravebot_net::Egress::new(),
             &workspace,
-            &Task::new("save it"),
+            &Task::new("save it").offering_every_tool_in_full(),
             person,
             &mut sink,
             trusting_the_workspace(),
@@ -9450,7 +9484,9 @@ fn run_calls_under(
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
 
-    let task = Task::new("work with the files").with_permissions(permissions);
+    let task = Task::new("work with the files")
+        .offering_every_tool_in_full()
+        .with_permissions(permissions);
     turns::run_with_trust(
         &config,
         &egress,
@@ -13392,6 +13428,7 @@ fn download_while_a_program_starts_under(
         ..Default::default()
     };
     let task = Task::new("refresh the data")
+        .offering_every_tool_in_full()
         .with_file_authority(authority)
         .with_permission_mode(mode);
     turns::run_with_trust(
@@ -13647,7 +13684,7 @@ fn download_while_a_link_is_put_in_place() -> (Vec<u8>, String, Vec<String>) {
         })),
         ..Default::default()
     };
-    let task = Task::new("refresh the data");
+    let task = Task::new("refresh the data").offering_every_tool_in_full();
     turns::run_with_trust(
         &config,
         &egress,
@@ -18447,7 +18484,7 @@ fn a_repo_map_shows_vouched_declarations_and_none_from_an_unvouched_file() {
     let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
     trust.trust("mine");
 
-    let task = Task::new("map the repository");
+    let task = Task::new("map the repository").offering_every_tool_in_full();
     turns::run_with_trust(
         &config,
         &egress,
@@ -23249,6 +23286,7 @@ fn a_watch_with_a_blank_path_reference_arms_and_a_real_reference_is_refused() {
         &bravebot_net::Egress::new(),
         &workspace,
         &Task::new("watch the notes")
+            .offering_every_tool_in_full()
             .looking_again(true)
             .arming(free),
         &mut bravebot_agent::confirm::ApproveWrites,
@@ -23307,7 +23345,7 @@ fn a_download_given_a_path_reference_gets_its_own_refusal_and_a_blank_one_none()
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("save the data"),
+        &Task::new("save the data").offering_every_tool_in_full(),
         &mut confirmer,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -23352,10 +23390,15 @@ fn a_run_that_keeps_no_watches_answers_a_call_to_arm_one_as_an_unknown_name() {
 
     for (task, armed) in [
         (
-            Task::new("watch the notes").arming(bravebot_agent::watch::Arming::Allowed { free: 8 }),
+            Task::new("watch the notes")
+                .offering_every_tool_in_full()
+                .arming(bravebot_agent::watch::Arming::Allowed { free: 8 }),
             true,
         ),
-        (Task::new("watch the notes"), false),
+        (
+            Task::new("watch the notes").offering_every_tool_in_full(),
+            false,
+        ),
     ] {
         let (endpoint, received) = serve_sequence(vec![
             tool_request("watch_file", r#"{"path":"notes.txt"}"#),
@@ -24172,7 +24215,7 @@ fn an_edit_a_download_and_a_picture_landing_in_the_session_directory_count_no_wr
             &config,
             &bravebot_net::Egress::new(),
             &workspace,
-            &Task::new("save it"),
+            &Task::new("save it").offering_every_tool_in_full(),
             &mut bravebot_agent::Conversation::new(),
             &mut ApprovesFetchesAndWrites::default(),
             &mut bravebot_agent::report::RecordingReporter::default(),
@@ -32643,7 +32686,7 @@ fn a_symbol_query_is_recorded_as_the_models_choice() {
         &config,
         &egress,
         &workspace,
-        &Task::new("find where Capability is declared"),
+        &Task::new("find where Capability is declared").offering_every_tool_in_full(),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut sink,
         trusting_the_workspace(),
@@ -40399,7 +40442,9 @@ fn requests_for_one_run(
         &config,
         &egress,
         &workspace,
-        &Task::new("run it").with_confined_runs(confining),
+        &Task::new("run it")
+            .offering_every_tool_in_full()
+            .with_confined_runs(confining),
         &mut bravebot_agent::Conversation::new(),
         &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -40961,6 +41006,7 @@ fn requests_for_one_run_vouching(
         // unless that parent is the home or above it, so a stand-in home lets a parent of the
         // checkout through and the strict read below succeeds on a machine whose `PATH` has one.
         &Task::new("run it")
+            .offering_every_tool_in_full()
             .with_profile(Some(
                 bravebot_agent::home::profile().unwrap_or_else(|| root.join("profile")),
             ))
@@ -42923,6 +42969,7 @@ fn runs<C: bravebot_agent::Confirmer + Send>(
     let egress = bravebot_net::Egress::new();
     let programs = programs(&scratch.path);
     let task = Task::new("run it")
+        .offering_every_tool_in_full()
         .with_profile(Some(
             bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
         ))
@@ -44938,7 +44985,9 @@ fn in_an_untrusted_workspace_a_failed_job_names_no_request_path() {
             &config,
             &egress,
             &workspace,
-            &Task::new("start it and get on with something else").with_confined_runs(true),
+            &Task::new("start it and get on with something else")
+                .offering_every_tool_in_full()
+                .with_confined_runs(true),
             &mut bravebot_agent::Conversation::new(),
             &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
             &mut bravebot_agent::report::RecordingReporter::default(),
@@ -60968,6 +61017,7 @@ fn define(home: &Scratch, name: &str, fields: &str, body: &str) {
 /// A turn addressed to one of the person's definitions, with everything else as a session sets it.
 fn addressed(prompt: &str, home: &Scratch, name: &str) -> Task {
     Task::new(prompt)
+        .offering_every_tool_in_full()
         .with_home(Some(home.path.clone()))
         .with_model(Some("custom-parent-model".to_string()))
         .addressing(Some(name.to_string()))
@@ -61352,7 +61402,8 @@ fn an_addressed_reader_reads_a_read_git_that_names_no_run() {
 }
 
 /// TOOL-6. A definition that keeps `ask_user` and drops `run` is read by a turn whose `ask_user`
-/// description must not send it to `run`.
+/// description must not send it to `run`. It keeps `read_file` and neither `list_files` nor
+/// `search`, so those are not named either.
 #[test]
 fn an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run() {
     let scratch = Scratch::new("address-ask-user");
@@ -61389,11 +61440,12 @@ fn an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run() {
         "the definition did not keep ask_user and drop run: {request}"
     );
     assert!(
-        request.contains("look with list_files, search or read_file instead"),
+        request.contains("go and look with read_file instead"),
         "ask_user was not written for a turn without run: {request}"
     );
     assert!(
-        !request.contains("search, read_file or run instead"),
+        !request.contains("search, read_file or run instead")
+            && !request.contains("look with list_files"),
         "ask_user sent the turn to a tool it was not offered: {request}"
     );
 }
@@ -61477,7 +61529,9 @@ fn an_addressed_turn_arranges_no_later_look_and_arms_no_watch() {
     let config = config_for(&endpoint);
     let free = bravebot_agent::watch::Arming::Allowed { free: 8 };
     for task in [
-        Task::new("UNADDRESSED-TASK").with_home(Some(home.path.clone())),
+        Task::new("UNADDRESSED-TASK")
+            .offering_every_tool_in_full()
+            .with_home(Some(home.path.clone())),
         addressed("ADDRESSED-TASK", &home, "rule-reviewer"),
     ] {
         turns::run_cancellable(
@@ -68336,7 +68390,9 @@ fn run_in_a_repository_answering(
         &config,
         &egress,
         workspace,
-        &Task::new(prompt).with_home(Some(home.to_path_buf())),
+        &Task::new(prompt)
+            .offering_every_tool_in_full()
+            .with_home(Some(home.to_path_buf())),
         &mut confirmer,
         &mut sink,
         trust,
@@ -71935,7 +71991,9 @@ fn a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling() 
         &config,
         &egress,
         &workspace,
-        &Task::new("PARENT-OF-A-LINKED-REDIRECTION").with_home(Some(home.path.clone())),
+        &Task::new("PARENT-OF-A-LINKED-REDIRECTION")
+            .offering_every_tool_in_full()
+            .with_home(Some(home.path.clone())),
         &mut confirmer,
         &mut sink,
         trust,
@@ -72049,7 +72107,9 @@ fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
         &config,
         &egress,
         &workspace,
-        &Task::new("PARENT-OF-A-PROGRAMS-WORK").with_home(Some(home.path.clone())),
+        &Task::new("PARENT-OF-A-PROGRAMS-WORK")
+            .offering_every_tool_in_full()
+            .with_home(Some(home.path.clone())),
         &mut confirmer,
         &mut sink,
         trust,
@@ -75802,6 +75862,7 @@ impl DerivedTextFixture {
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
         let task = Task::new("email me the top story from the page with a summary")
+            .offering_every_tool_in_full()
             .with_permissions(rules(&[], &[], &["WebFetch(domain:127.0.0.1)"]));
         let outcome = turn::resume(
             &config,
@@ -83346,7 +83407,11 @@ fn the_descriptions_of_the_processor_and_read_output_follow_the_tools_a_turn_is_
 
 /// A delegate is never offered `vet_content`, a reader holds no `write_file`, `run` or
 /// `read_output`, and a worker holds all of the rest. What each is sent names what it has: the
-/// descriptions of `spawn_processor` and `read_output` and the reference it is handed.
+/// descriptions of `spawn_processor` and `read_output` and the reference it is handed. The session
+/// runs with the core list (TOOL-7), so `download_url` is held back for `load_tool` and the
+/// `spawn_agent` description it is sent names the three tools it holds and not `download_url`
+/// (TOOL-6). The regression it rejects is a description written beside the held-back tools as well
+/// as the offered ones, which sends the planner to a name its list does not hold.
 #[test]
 fn a_delegate_is_not_told_to_use_a_tool_it_is_not_offered() {
     for (kind, writes, shell) in [("reader", false, false), ("worker", true, true)] {
@@ -83426,12 +83491,17 @@ fn a_delegate_is_not_told_to_use_a_tool_it_is_not_offered() {
         );
         assert!(names(&description_in(first, "read_output"), "vet_content"));
 
-        // The planner writing the task is told what the delegate cannot call. The delegate, which
-        // holds none of the four, is told nothing of them where it is offered the tool at all.
+        // The planner writing the task is told what the delegate cannot call, of what its own
+        // list holds. `download_url` is held back, so it is not named. The delegate, which holds
+        // none of the four, is told nothing of them where it is offered the tool at all.
         let told_the_planner = description_in(first, "spawn_agent");
-        for tool in ["vet_content", "ask_user", "fetch_url", "download_url"] {
+        for tool in ["vet_content", "ask_user", "fetch_url"] {
             assert!(names(&told_the_planner, tool), "{kind}: {told_the_planner}");
         }
+        assert!(
+            !names(&told_the_planner, "download_url"),
+            "{kind}: the planner was told of a tool its list holds back: {told_the_planner}"
+        );
         let parsed: serde_json::Value = serde_json::from_str(last).expect("a request");
         for offered in parsed["tools"].as_array().expect("tools offered") {
             let name = offered["function"]["name"].as_str().expect("a name");
@@ -101814,7 +101884,9 @@ fn consulting(
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let task = Task::new("choose the first file to read").with_advisor(advisor.map(str::to_string));
+    let task = Task::new("choose the first file to read")
+        .offering_every_tool_in_full()
+        .with_advisor(advisor.map(str::to_string));
     let outcome = turns::run_with_trust(
         &config,
         &egress,
@@ -101898,7 +101970,7 @@ fn an_advisor_the_settings_name_is_offered_and_asked_without_the_flag() {
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("choose the first file to read"),
+        &Task::new("choose the first file to read").offering_every_tool_in_full(),
         &mut bravebot_agent::Unattended,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -102122,7 +102194,9 @@ fn a_failed_advisor_call_counts_against_the_three_a_turn_may_make() {
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        &Task::new("choose the first file to read")
+            .offering_every_tool_in_full()
+            .with_advisor(Some("advisor-model".into())),
         &mut bravebot_agent::Unattended,
         &mut sink,
         trusting_the_workspace(),
@@ -102159,7 +102233,9 @@ fn a_failed_advisor_call_tells_the_planner_only_the_category() {
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        &Task::new("choose the first file to read")
+            .offering_every_tool_in_full()
+            .with_advisor(Some("advisor-model".into())),
         &mut bravebot_agent::Unattended,
         &mut sink,
         trusting_the_workspace(),
@@ -102193,7 +102269,9 @@ fn an_advisor_model_the_machine_refuses_is_not_asked() {
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        &Task::new("choose the first file to read")
+            .offering_every_tool_in_full()
+            .with_advisor(Some("advisor-model".into())),
         &mut bravebot_agent::Unattended,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -102226,6 +102304,7 @@ fn an_advisor_model_that_searches_the_web_is_not_asked() {
         &bravebot_net::Egress::new(),
         &workspace,
         &Task::new("choose the first file to read")
+            .offering_every_tool_in_full()
             .with_advisor(Some("openai/gpt-5-search-api".into())),
         &mut bravebot_agent::Unattended,
         &mut RecordingSink::new(),
@@ -102265,7 +102344,7 @@ fn a_refused_advisor_the_settings_name_is_answered_per_call_and_stops_nothing() 
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("choose the first file to read"),
+        &Task::new("choose the first file to read").offering_every_tool_in_full(),
         &mut bravebot_agent::Unattended,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -102343,7 +102422,9 @@ fn an_advisor_the_settings_name_that_nothing_serves_is_answered_per_call_and_sto
         &config,
         &egress,
         &workspace,
-        &Task::new("choose the first file to read").with_model(Some("gw/a-model".into())),
+        &Task::new("choose the first file to read")
+            .offering_every_tool_in_full()
+            .with_model(Some("gw/a-model".into())),
         &mut bravebot_agent::Unattended,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -102421,7 +102502,7 @@ fn an_advisor_the_settings_name_for_a_service_with_no_block_is_answered_per_call
         &config,
         &egress,
         &workspace,
-        &Task::new("choose the first file to read"),
+        &Task::new("choose the first file to read").offering_every_tool_in_full(),
         &mut bravebot_agent::Unattended,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -102531,7 +102612,9 @@ fn an_advisor_that_was_shown_untrusted_content_is_quarantined() {
         &workspace,
         &mut conversation,
         bravebot_core::trust::TrustStore::new("/work"),
-        Task::new("choose the first file to read").with_advisor(Some("advisor-model".into())),
+        Task::new("choose the first file to read")
+            .offering_every_tool_in_full()
+            .with_advisor(Some("advisor-model".into())),
     )
     .expect("turn runs");
     let requests = every_request(&received);
@@ -104460,6 +104543,7 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut task = Task::new("reach it")
+        .offering_every_tool_in_full()
         .with_profile(Some(places.home.clone()))
         .with_permission_mode(permission)
         .with_confined_runs(true)
@@ -105638,6 +105722,7 @@ fn under_read_only_the_file_tools_write_nothing_in_any_permission_mode() {
             reply_with("done"),
         ]);
         let task = Task::new("write the notes")
+            .offering_every_tool_in_full()
             .with_confined_runs(true)
             .with_sandbox_mode(sandbox)
             .with_permission_mode(mode);
@@ -108353,7 +108438,7 @@ fn a_download_saves_every_byte_exactly() {
         &config,
         &egress,
         &workspace,
-        &Task::new("save the logo"),
+        &Task::new("save the logo").offering_every_tool_in_full(),
         &mut confirmer,
         &mut sink,
         trusting_the_workspace(),
@@ -108395,7 +108480,7 @@ fn a_download_asks_about_the_host_and_then_shows_url_and_path() {
         &config,
         &egress,
         &workspace,
-        &Task::new("save the paper"),
+        &Task::new("save the paper").offering_every_tool_in_full(),
         &mut confirmer,
         &mut sink,
         trusting_the_workspace(),
@@ -108439,7 +108524,7 @@ fn a_download_over_an_existing_file_is_put_as_an_overwrite() {
         &config,
         &egress,
         &workspace,
-        &Task::new("refresh the data"),
+        &Task::new("refresh the data").offering_every_tool_in_full(),
         &mut confirmer,
         &mut sink,
         trusting_the_workspace(),
@@ -108483,7 +108568,7 @@ fn a_declined_destination_sends_no_request_and_leaves_the_file() {
         &config,
         &egress,
         &workspace,
-        &Task::new("replace it"),
+        &Task::new("replace it").offering_every_tool_in_full(),
         &mut confirmer,
         &mut sink,
         trusting_the_workspace(),
@@ -108536,7 +108621,7 @@ fn a_download_to_a_file_outside_the_workspace_is_refused_before_the_person_is_as
         &config,
         &egress,
         &workspace,
-        &Task::new("save it outside"),
+        &Task::new("save it outside").offering_every_tool_in_full(),
         &mut confirmer,
         &mut sink,
         trusting_the_workspace(),
@@ -108596,7 +108681,7 @@ fn a_note_beside_a_refused_download_is_told_to_the_planner() {
         &config,
         &egress,
         &workspace,
-        &Task::new("save the data"),
+        &Task::new("save the data").offering_every_tool_in_full(),
         &mut confirmer,
         &mut sink,
         trusting_the_workspace(),
@@ -108643,7 +108728,7 @@ fn a_download_from_a_host_the_person_rejects_tells_the_planner_not_to_retry_it()
         &config,
         &egress,
         &workspace,
-        &Task::new("save it"),
+        &Task::new("save it").offering_every_tool_in_full(),
         &mut bravebot_agent::confirm::Unattended,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -108693,7 +108778,9 @@ fn a_download_over_the_cap_saves_nothing_and_one_at_it_is_saved() {
     let mut confirmer = ApprovesFetchesAndWrites::default();
 
     // One byte under the body's size, so every call is over the cap.
-    let task = Task::new("fetch both").with_download_cap(Some(4999));
+    let task = Task::new("fetch both")
+        .offering_every_tool_in_full()
+        .with_download_cap(Some(4999));
     turns::run_with_trust(
         &config,
         &egress,
@@ -108735,7 +108822,9 @@ fn a_download_over_the_cap_saves_nothing_and_one_at_it_is_saved() {
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
-    let task = Task::new("fetch it").with_download_cap(Some(5000));
+    let task = Task::new("fetch it")
+        .offering_every_tool_in_full()
+        .with_download_cap(Some(5000));
     turns::run_with_trust(
         &config,
         &egress,
@@ -108779,7 +108868,7 @@ fn a_downloaded_file_is_untrusted_and_nothing_of_it_reaches_the_planner() {
         &config,
         &egress,
         &workspace,
-        &Task::new("save the notes and read them"),
+        &Task::new("save the notes and read them").offering_every_tool_in_full(),
         &mut ApprovesFetchesAndWrites::default(),
         &mut sink,
         trusting_the_workspace(),
@@ -108838,8 +108927,9 @@ fn a_download_from_a_denied_host_is_refused_without_asking() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut confirmer = ApprovesFetchesAndWrites::default();
-    let task =
-        Task::new("save it").with_permissions(rules(&["WebFetch(domain:127.0.0.1)"], &[], &[]));
+    let task = Task::new("save it")
+        .offering_every_tool_in_full()
+        .with_permissions(rules(&["WebFetch(domain:127.0.0.1)"], &[], &[]));
 
     turns::run_with_trust(
         &config,
@@ -108881,8 +108971,9 @@ fn a_download_from_another_spelling_of_a_denied_host_is_refused_without_asking()
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut confirmer = ApprovesFetchesAndWrites::default();
-    let task =
-        Task::new("save it").with_permissions(rules(&["WebFetch(domain:127.0.0.1)"], &[], &[]));
+    let task = Task::new("save it")
+        .offering_every_tool_in_full()
+        .with_permissions(rules(&["WebFetch(domain:127.0.0.1)"], &[], &[]));
 
     turns::run_with_trust(
         &config,
@@ -108932,7 +109023,7 @@ fn a_download_redirected_to_another_host_saves_nothing() {
         &config,
         &egress,
         &workspace,
-        &Task::new("save it"),
+        &Task::new("save it").offering_every_tool_in_full(),
         &mut ApprovesFetchesAndWrites::default(),
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -108984,7 +109075,7 @@ fn a_body_that_stops_half_way_leaves_the_destination_alone_and_no_staging_file()
         &config,
         &egress,
         &workspace,
-        &Task::new("fetch the big file"),
+        &Task::new("fetch the big file").offering_every_tool_in_full(),
         &mut confirmer,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -109051,7 +109142,7 @@ fn a_chunked_body_that_ends_without_its_closing_chunk_leaves_the_destination_alo
             &config,
             &egress,
             &workspace,
-            &Task::new("fetch the big file"),
+            &Task::new("fetch the big file").offering_every_tool_in_full(),
             &mut confirmer,
             &mut RecordingSink::new(),
             trusting_the_workspace(),
@@ -109138,7 +109229,7 @@ fn a_download_the_person_stops_leaves_the_destination_alone_and_no_staging_file(
         &config,
         &egress,
         &workspace,
-        &Task::new("fetch the big file"),
+        &Task::new("fetch the big file").offering_every_tool_in_full(),
         &mut ApprovesFetchesAndWrites::default(),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut RecordingSink::new(),
@@ -109184,7 +109275,7 @@ fn a_download_sends_no_accept_preference_of_its_own() {
         &config,
         &egress,
         &workspace,
-        &Task::new("save the paper"),
+        &Task::new("save the paper").offering_every_tool_in_full(),
         &mut ApprovesFetchesAndWrites::default(),
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -109229,8 +109320,9 @@ fn an_allow_rule_answers_a_downloads_host_and_the_destination_is_still_asked() {
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut confirmer = ApprovesFetchesAndWrites::default();
-    let task =
-        Task::new("save it").with_permissions(rules(&[], &[], &["WebFetch(domain:127.0.0.1)"]));
+    let task = Task::new("save it")
+        .offering_every_tool_in_full()
+        .with_permissions(rules(&[], &[], &["WebFetch(domain:127.0.0.1)"]));
 
     turns::run_with_trust(
         &config,
@@ -109287,7 +109379,7 @@ fn a_download_from_a_name_that_resolves_to_this_machine_fails_without_reaching_i
         &config,
         &egress,
         &workspace,
-        &Task::new("save it"),
+        &Task::new("save it").offering_every_tool_in_full(),
         &mut ApprovesFetchesAndWrites::default(),
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -109350,7 +109442,7 @@ fn a_download_tells_the_planner_its_status_and_size_and_the_person_a_cleaned_con
         &config,
         &egress,
         &workspace,
-        &Task::new("save the blob"),
+        &Task::new("save the blob").offering_every_tool_in_full(),
         &mut ApprovesFetchesAndWrites::default(),
         &mut reporter,
         &mut RecordingSink::new(),
@@ -109625,7 +109717,7 @@ fn a_downloads_size_is_the_streams_own_count() {
         &config,
         &egress,
         &workspace,
-        &Task::new("save the blob"),
+        &Task::new("save the blob").offering_every_tool_in_full(),
         &mut confirmer,
         &mut sink,
         trusting_the_workspace(),
@@ -109851,9 +109943,11 @@ fn sending(
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("tell the build session").with_courier(
-            courier.map(|courier| courier as Arc<dyn bravebot_agent::messages::Courier>),
-        ),
+        &Task::new("tell the build session")
+            .offering_every_tool_in_full()
+            .with_courier(
+                courier.map(|courier| courier as Arc<dyn bravebot_agent::messages::Courier>),
+            ),
         person,
         &mut reporter,
         &mut RecordingSink::new(),
@@ -109943,9 +110037,11 @@ fn a_delegate_is_offered_no_message_session_and_its_call_is_an_unknown_name() {
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("HAVE-A-DELEGATE-MESSAGE").with_courier(Some(
-            Arc::clone(&courier) as Arc<dyn bravebot_agent::messages::Courier>
-        )),
+        &Task::new("HAVE-A-DELEGATE-MESSAGE")
+            .offering_every_tool_in_full()
+            .with_courier(Some(
+                Arc::clone(&courier) as Arc<dyn bravebot_agent::messages::Courier>
+            )),
         &mut person,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut RecordingSink::new(),
@@ -110050,9 +110146,11 @@ fn recounted_after_sending(
         &config,
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("tell the build session").with_courier(Some(
-            Arc::new(OneSession::default()) as Arc<dyn bravebot_agent::messages::Courier>
-        )),
+        &Task::new("tell the build session")
+            .offering_every_tool_in_full()
+            .with_courier(Some(
+                Arc::new(OneSession::default()) as Arc<dyn bravebot_agent::messages::Courier>
+            )),
         &mut conversation,
         &mut person,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -111120,7 +111218,9 @@ fn accepting_edits_puts_a_download_into_a_hook_to_the_person() {
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
         &workspace,
-        &Task::new("save the hook").with_permission_mode(mode),
+        &Task::new("save the hook")
+            .offering_every_tool_in_full()
+            .with_permission_mode(mode),
         &mut confirmer,
         &mut RecordingSink::new(),
         trusting_the_workspace(),
@@ -114291,7 +114391,9 @@ fn a_save_is_undone_by_undo() {
         reply_with("kept"),
     ]);
     let config = config_for(&endpoint);
-    let task = Task::new("remember how the forge is polled").with_home(Some(home.clone()));
+    let task = Task::new("remember how the forge is polled")
+        .offering_every_tool_in_full()
+        .with_home(Some(home.clone()));
     let mut conversation = bravebot_agent::Conversation::new();
     take_a_turn(
         &config,
@@ -116491,7 +116593,7 @@ fn one_run_offered_by(
     ]);
     let task = match definition {
         Some(_) => addressed("run it", &home, "runner"),
-        None => Task::new("run it"),
+        None => Task::new("run it").offering_every_tool_in_full(),
     }
     .with_profile(Some(
         bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
@@ -116706,7 +116808,7 @@ fn a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it() 
         ]);
         let task = match definition {
             Some(_) => addressed("run it", &home, "runner"),
-            None => Task::new("run it"),
+            None => Task::new("run it").offering_every_tool_in_full(),
         };
         let live = bravebot_agent::LiveSandbox::new(WorkspaceWrite);
         let typed = live.clone();
@@ -117269,7 +117371,7 @@ fn a_downloads_cut_body_reaches_the_diagnostic_log_unless_the_turn_was_stopped()
                 &config,
                 &egress,
                 &workspace,
-                &Task::new("save the blob"),
+                &Task::new("save the blob").offering_every_tool_in_full(),
                 &mut bravebot_agent::Conversation::new(),
                 &mut confirmer,
                 &mut reporter,
@@ -117772,6 +117874,7 @@ fn a_failed_git_commit_in_a_linked_worktree_trusting(
         &bravebot_net::Egress::new(),
         &workspace,
         &Task::new("commit it")
+            .offering_every_tool_in_full()
             .with_profile(Some(
                 bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
             ))

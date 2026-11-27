@@ -1915,8 +1915,10 @@ content.
 The `deferMcpToolsAbove` setting names a size in tokens, as a number or as `limit` does (`"20k"`),
 and is absent by default. Where it is set and the definitions of every tool the turn is offered
 would weigh more than that, estimated from their length at four characters a token, the planner is
-offered no server tool in full. It is offered `load_tool` instead, whose description lists the
-tools as `alias:tool`, and a person's own list is the only source of those names. `load_tool` takes
+offered no server tool in full. The `load_tool` that loads a held-back built-in
+([TOOL-7](tools/tool-surface.md#TOOL-7)) lists them as well, as `alias:tool`, and a person's own list
+is the only source of those names. One loader serves both, and it is offered wherever anything is
+held back. `load_tool` takes
 `name` as routing and nothing else, matched exactly against that list as
 [LOAD-1](tools/load-skill.md#LOAD-1) and [LOAD-2](tools/load-skill.md#LOAD-2) match a skill's: a name
 one character out, in another case or a prefix of one loads nothing, and nothing falls back to a
@@ -1928,12 +1930,15 @@ and is not put to the person or sent to the server. Loading changes what is offe
 about who is asked: a loaded tool is put to the person before each call as any other is
 ([SERVERS-7](#SERVERS-7)). The search is not over descriptions and nothing is chosen by what a server
 wrote, so no decision is taken on bytes a person did not vouch for ([SERVERS-8](#SERVERS-8)). No
-description of a tool is sent until it is loaded. `load_tool` is offered only where the run holds a
-server and `--tools` has not taken servers away. A reader, a checker, a definition with a `tools:`
-line and no `mcpServers:` line, a delegate whose `mcp_servers` leaves it none and a run limited by
-`--tools` are offered no loader, and a call to one is refused as any unknown name is
-([TOOL-6](tools/tool-surface.md#TOOL-6)). A turn below the size, and every turn without the
-setting, is offered every tool in full and no `load_tool`.
+description of a tool is sent until it is loaded. `load_tool` lists a server's tools only where the
+run holds a server and `--tools` has not taken servers away. A reader, a checker, a definition with a
+`tools:` line and no `mcpServers:` line, a delegate whose `mcp_servers` leaves it none and a run
+limited by `--tools` are offered no server tool through it: the loader they may be offered for
+held-back built-ins lists none, and a load naming one is refused as a name the loader does not list.
+Where nothing else is held back such a turn is offered no loader, and a call to one is refused as any
+unknown name is ([TOOL-6](tools/tool-surface.md#TOOL-6)). A turn below the size, and every turn
+without the setting, is offered every server tool in full, and its `load_tool`, where it has one,
+lists no server tool.
 
 The size is read through the layers of [BACKEND-24](backends.md#BACKEND-24). A project or local
 settings file may lower it, or state one where the person's own settings and the file `--settings`

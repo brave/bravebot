@@ -719,6 +719,28 @@ a project was vouched for from outliving the vouching.
 `verified-by: bravebot_tui::app::tests::instructions::a_resumed_session_is_in_the_mode_its_record_names`
 `verified-by: bravebot_tui::render::the_box_names_the_mode_while_one_is_in_force`
 
+<a id="SKILL-22"></a>
+### SKILL-22: `watching` is a built-in skill holding how a request about change is answered
+
+The built-in skill `watching` ([SKILL-12](#SKILL-12)) is listed beside `loop` in every session. Its
+body is the account of watching that [RUN-18](tools/run.md#RUN-18) requires: a file and a program
+are watched by different means, the first look is taken now, where the next look comes from, and
+what to say about a later look. Its description names one condition, per [SKILL-13](#SKILL-13): the
+planner is asked to watch something or to say when it changes. `run`'s description names the skill
+for that request, before the first look.
+
+The body is the same in every turn and names no tool that arranges a look, since
+[SCHED-6](tools/schedule-next.md#SCHED-6) offers one in some turns and not others. `read_file`'s
+description says which case this turn is ([READ-6](tools/read-file.md#READ-6)).
+
+**Why.** Guidance used in a minority of turns was in `run`'s description, sent on every request.
+A built-in skill costs its name and one line in the prompt, and a `load_skill` round in the turns
+that need it. A skill and not a refusal or a result, because a watch request has no failed call to
+answer: the mistake it prevents was a turn that read once, reported, and made no further call.
+
+`verified-by: bravebot_agent::skills::the_watching_skill_is_listed_and_carries_the_two_techniques`
+`verified-by: bravebot_agent::deferred_tools::the_first_request_routes_a_watch_request_to_a_skill_it_lists`
+
 ## Known costs
 
 - **A skill nobody searches for is seen with `skill eval`.** Whether `search_skills` finds a skill of

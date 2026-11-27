@@ -985,12 +985,55 @@ struct BuiltIn {
 /// is already supplying the repetition. Naming a watch request here would advertise them to a
 /// session that is not a loop, where the account of a tick reads as an instruction to look once and
 /// say what changed, and where the tool it offers for pacing the next tick is not in the table.
-const BUILT_IN: [BuiltIn; 1] = [BuiltIn {
-    name: "loop",
-    description: "How a repeating turn works: what one tick is, what to do in it, and how to \
-                  say when the next is due. Load it when this turn is a tick of a loop.",
-    body: LOOP,
-}];
+const BUILT_IN: [BuiltIn; 2] = [
+    BuiltIn {
+        name: "loop",
+        description: "How a repeating turn works: what one tick is, what to do in it, and how to \
+                      say when the next is due. Load it when this turn is a tick of a loop.",
+        body: LOOP,
+    },
+    BuiltIn {
+        name: WATCHING_SKILL,
+        description: "How to answer a request about change: which technique fits a file and \
+                      which a program, and what to say about the next look. Load it when asked \
+                      to watch something or to say when it changes.",
+        body: WATCHING,
+    },
+];
+
+/// The name of the built-in skill that `run`'s description sends a request to watch something to
+/// (RUN-18).
+pub const WATCHING_SKILL: &str = "watching";
+
+/// How a request to watch something is answered (RUN-18). This was a paragraph of `run`'s
+/// description, sent on every request of every turn; it is needed only in a turn asked to watch
+/// something, so `run` names this skill and the body says the rest once it is loaded.
+///
+/// It names no tool that arranges a later look, because which turn this is decides that and the
+/// body is the same in every turn: `read_file`'s description says it for the turn it is in
+/// (READ-6).
+const WATCHING: &str = "\
+A request to watch something, or to be told when it changes, is first a question about what is \
+being watched, because a file and a program are watched by different means.
+
+A file takes no command at all: read_file hands back a change token, and comparing the token from \
+one look with the token from the next is the whole of the technique.
+
+A program's own output is watched with run: start it with background: true and call job_output \
+with wait_seconds, which is one call covering a window rather than a look per turn.
+
+Neither reaches past this turn by itself: a background job is killed when the turn ends unless the \
+account of its start says the session keeps it, and comparing a token needs a later look. So take \
+the first look now. Where the later look comes from depends on the turn, and read_file's \
+description says which: a turn that can arrange one arranges it itself at the end of the turn, \
+rather than telling somebody to arrange it; inside a loop the next tick is the next look; and a \
+turn nothing will ask again says plainly that no later look is coming.
+
+Say which window you watched, or which looks you compared, rather than a time of day, which you \
+have no clock for. Where the request is to watch something or to be told when it changes, and you \
+have scheduled no further look, say that too. Any other request gets no sentence about a later \
+look.
+";
 
 /// What the planner is told about the documentation skill, ending in the one condition it is for.
 const HELP_DESCRIPTION: &str = "The documentation of this version of bravebot: its commands, \

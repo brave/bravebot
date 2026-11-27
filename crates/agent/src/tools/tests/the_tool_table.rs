@@ -42,6 +42,64 @@ fn the_tool_set_is_reads_plus_gated_writes() {
     );
 }
 
+/// TOOL-7: what is held back is the table less the core list, by exact name. A held-back name
+/// is named only exactly: another case, one character out, a prefix and a longer name are not
+/// it, and a core tool or a name the turn never offered is not held back at all. A name a
+/// definition's `tools:` line wrote stays in full. The regressions it rejects are a split that
+/// holds a core tool back, one that loses a held-back tool, and a lookup that matches loosely.
+#[test]
+fn a_held_back_tool_is_named_only_by_its_exact_name() {
+    let table = available(
+        Scheduling::ArrangingALook,
+        Arming::Allowed { free: 1 },
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    );
+    let mut offered = table.clone();
+    let mut deferred = Deferred::split(&mut offered, &[]);
+    let kept: Vec<&str> = offered.iter().map(|t| t.function.name.as_str()).collect();
+    assert!(kept.iter().all(|name| CORE.contains(name)), "{kept:?}");
+    assert_eq!(
+        kept.len() + deferred.names().len(),
+        table.len(),
+        "a tool was lost in the split"
+    );
+    assert!(deferred.names().contains(&"watch_file".to_string()));
+
+    assert_eq!(deferred.named("watch_file"), Some(false));
+    for near in [
+        "Watch_file",
+        "watch_fil",
+        "watch_file2",
+        "watch",
+        " watch_file",
+    ] {
+        assert_eq!(deferred.named(near), None, "{near:?}");
+        assert!(deferred.load(near).is_none(), "{near:?} loaded");
+    }
+    assert_eq!(
+        deferred.named("read_file"),
+        None,
+        "a core tool was held back"
+    );
+    assert_eq!(
+        deferred.named("propose_plan"),
+        None,
+        "an unoffered tool was held"
+    );
+
+    let loaded = deferred.load("watch_file").expect("loaded");
+    assert_eq!(loaded.function.name, "watch_file");
+    assert_eq!(deferred.named("watch_file"), Some(true));
+    assert!(!deferred.is_unloaded("watch_file"));
+    assert!(deferred.load("watch_file").is_none(), "loaded twice");
+
+    let mut named = table.clone();
+    let kept_in_full = Deferred::split(&mut named, &["watch_file".to_string()]);
+    assert!(named.iter().any(|t| t.function.name == "watch_file"));
+    assert_eq!(kept_in_full.named("watch_file"), None);
+}
+
 /// MODE-14: the plan tool is added for a plan-mode turn only, takes the plan and a reason,
 /// and is never in the table a delegate is built from.
 #[test]
@@ -419,7 +477,11 @@ fn every_tool_offered_asks_why_it_is_being_called() {
     }
 
     offer_advisor(&mut offered);
-    offer_tool_loader(&mut offered, &["server:tool".to_string()]);
+    offer_tool_loader(
+        &mut offered,
+        &["watch_file".to_string()],
+        &["server:tool".to_string()],
+    );
     offer_message_session(&mut offered);
     offer_propose_plan(&mut offered);
     offer_remember(&mut offered);
@@ -782,7 +844,11 @@ fn every_list_a_turn_can_offer() -> Vec<Tool> {
         ));
     }
     offer_advisor(&mut offered);
-    offer_tool_loader(&mut offered, &["server:tool".to_string()]);
+    offer_tool_loader(
+        &mut offered,
+        &["watch_file".to_string()],
+        &["server:tool".to_string()],
+    );
     offer_propose_plan(&mut offered);
     offer_message_session(&mut offered);
     offer_remember(&mut offered);

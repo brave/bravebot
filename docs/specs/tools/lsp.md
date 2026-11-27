@@ -504,8 +504,9 @@ An `lsp` call needs its own capability, so a run that was granted file reads has
 granted a language server. A delegate gets it only where its capability set says so.
 
 The `checker` and `worker` kinds hold it ([DELEGATE-4](../delegation.md#DELEGATE-4)), so a delegate
-of either kind, or a turn addressed to one, is offered `lsp` wherever the session holds it. A
-`reader` does not.
+of either kind, or a turn addressed to one, may use `lsp` wherever the session holds it: the tool is
+outside the core list, so it is offered by name under `load_tool` and in full once loaded
+([TOOL-7](tool-surface.md#TOOL-7)). A `reader` is neither offered it nor can load it.
 
 [CHECKOUT-20](../checkouts.md#CHECKOUT-20) offers no `lsp` to a checker
 or a worker working in a checkout of its own, since the session's servers are rooted at the working
@@ -522,6 +523,7 @@ exactly the kinds that hold `ShellExec`.
 `verified-by: bravebot_lsp::server::a_request_without_the_capability_is_refused`
 `verified-by: bravebot_core::capability::the_lsp_capability_produces_no_routing_safe_output`
 `verified-by: bravebot_agent::lsp::a_checker_and_a_worker_are_offered_lsp_and_a_reader_is_not`
+`verified-by: bravebot_agent::deferred_tools::a_checker_may_load_lsp_and_a_reader_may_not`
 `verified-by: bravebot_agent::lsp::a_reader_delegate_is_not_answered_by_the_sessions_server`
 `verified-by: bravebot_core::delegate::a_kind_holds_a_language_server_exactly_where_it_may_run_programs`
 `verified-by: bravebot_core::policy::a_turn_addressed_to_a_checker_or_a_worker_keeps_the_language_server`

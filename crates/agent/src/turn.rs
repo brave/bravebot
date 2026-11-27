@@ -621,6 +621,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             offered: None,
             servers: None,
             mcp: None,
+            deferred: None,
             jobs: &mut jobs,
             permission_mode: task.permission_mode.clone(),
             vouched_channel: task.vouched_channel,
@@ -2645,8 +2646,6 @@ struct Plan<'p> {
     may_write: bool,
     may_run: bool,
     running: tools::Running,
-    /// Which of the tools that results name the turn's list holds, built where the list settles.
-    beside: tools::Beside,
     may_fall_back: bool,
     pinned_by: Option<String>,
     scheduling: tools::Scheduling,
@@ -2713,6 +2712,11 @@ struct State<'s> {
     notices: Vec<crate::skills::Notice>,
     subscription: Option<crate::shared::Spending<'s>>,
     offered: Vec<bravebot_aichat::protocol::Tool>,
+    /// The built-ins held back until the planner loads one by name (TOOL-7).
+    deferred: tools::Deferred,
+    /// Which of the tools that results name the turn's list holds, and which it holds back for
+    /// `load_tool`, built where the list settles and moved by each load (TOOL-6, TOOL-7).
+    beside: tools::Beside,
     mcp: Option<(crate::mcp::Offer, bravebot_aichat::protocol::Usage)>,
     servers: Option<&'s mut crate::lsp::LanguageServers>,
     hook_notices: &'s mut Vec<String>,
@@ -3176,6 +3180,47 @@ where
         }
     };
 
+    // Every built-in outside the fixed core list is held back and offered by name under
+    // `load_tool` (TOOL-7). Decided here, before anything is written from the list, so the
+    // descriptions, the refusals and the results below are written from the core list. A name a
+    // definition's `tools:` line or `--tools` named is offered in full, since a person wrote it.
+    // Which tools are held back is decided by the constant list and those lines and by nothing a
+    // file, a result or a server holds.
+    let named_in_full: Vec<String> = match (&task.delegate, &addressed) {
+        (Some(spec), _) => spec.tools().map(<[String]>::to_vec),
+        (None, Some(addressed)) => delegates
+            .get(addressed.name())
+            .and_then(bravebot_core::delegate::Definition::tools)
+            .map(<[String]>::to_vec),
+        (None, None) => None,
+    }
+    .into_iter()
+    .flatten()
+    .chain(
+        bravebot_core::tool_set::settled()
+            .only
+            .into_iter()
+            .flatten(),
+    )
+    // A tick of a self-paced loop is asked by its preamble and by the `loop` skill to call
+    // `schedule_next` on every tick, so that tick is offered it in full. Decided by the turn's
+    // scheduling mode alone.
+    .chain(
+        matches!(scheduling, tools::Scheduling::PacingALoop).then(|| "schedule_next".to_string()),
+    )
+    // A turn in plan mode is asked by its preamble to call `propose_plan` once the plan is
+    // settled (MODE-14), so that turn is offered it in full. Decided by the permission mode
+    // alone, read as the list above read it.
+    .chain(
+        (task.permission_mode.get() == crate::PermissionMode::Plan)
+            .then(|| "propose_plan".to_string()),
+    )
+    .collect();
+    let mut deferred = match task.every_tool_in_full {
+        true => tools::Deferred::default(),
+        false => tools::Deferred::split(&mut offered, &named_in_full),
+    };
+
     // Decided as the turn starts, from the same facts a `scopes` argument and a `request_path` call
     // are refused on, so the description does not name a route the session turns down. A turn is
     // built for each message, so a workspace trusted since the last one is named from the next. The
@@ -3242,6 +3287,18 @@ where
         policy.without_reading();
     }
     tools::state_what_is_beside(&mut offered);
+    deferred.state_what_is_beside(&offered);
+    tools::state_what_is_held(&mut offered, &deferred.names());
+    // `run` sends a request to watch something to the built-in skill `watching` (RUN-18); a turn
+    // whose catalogue lacks it, or holds a skill of the person's or the project's under that name in
+    // its place, or that is offered no `load_skill`, is told the paragraph instead. Decided from
+    // where the catalogue's entry came from, which discovery set, and never from its text.
+    tools::state_watching_route(
+        &mut offered,
+        catalogue
+            .get(crate::skills::WATCHING_SKILL)
+            .is_some_and(|skill| skill.source == crate::skills::Source::BuiltIn),
+    );
 
     let setup::ModelForTheTurn {
         pinned_by,
@@ -3688,22 +3745,36 @@ where
     }
     if let Some((offer, _)) = &mcp {
         offered.extend(offer.functions());
-        if offer.is_deferred() {
-            tools::offer_tool_loader(&mut offered, &offer.unloaded());
-        }
+    }
+    // One loader for the built-ins held back and the server tools offered by name (TOOL-7,
+    // SERVERS-16), after every tool offered in full, so a load appends after it and the list in
+    // front of it stays the same.
+    let servers_unloaded = mcp
+        .as_ref()
+        .filter(|(offer, _)| offer.is_deferred())
+        .map(|(offer, _)| offer.unloaded())
+        .unwrap_or_default();
+    if deferred.holds_any() || !servers_unloaded.is_empty() {
+        tools::offer_tool_loader(&mut offered, &deferred.names(), &servers_unloaded);
     }
 
     // Whether a write tool is offered at all, which a run offered none cannot be nudged into.
-    // Read once: a tool loaded while the turn runs is a server's, never one of these. The mode
-    // can change while it runs, and is read where the nudge is decided.
+    // Read once, from the list the turn starts with. A built-in loaded later can write
+    // (`download_url`, `apply_checkout`), but one is held back only from a list that kept the core
+    // list's `write_file` and `edit_file` wherever its kind may write, and a `tools:` line or
+    // `--tools` offers in full what it names, so the answer is the same after a load. A server's
+    // tool loaded later is never one of these. The mode can change while the turn runs, and is
+    // read where the nudge is decided.
     let may_write = tools::offer_writes(&offered);
     let may_run = tools::offer_runs(&offered);
     // The same question in the form the refusals read it in: a tool that will not answer may say
     // to use `run` only where this turn has one to use.
     let running = tools::Running::on(&offered);
     // Which of the tools that results and refusals name this turn's list holds, so none of that
-    // text names one the list lacks (TOOL-6).
-    let beside = tools::Beside::on(&offered);
+    // text names one the list lacks (TOOL-6). What the turn holds back for `load_tool` is named
+    // only beside `load_tool`, in a result whose situation is the held tool's (TOOL-7). Kept on
+    // the rounds' state, since a load moves a tool from the second set to the first.
+    let beside = tools::Beside::on(&offered).with_loadable(&deferred.names());
     // The pipelines this turn leaves running. Held here so they end here: dropping this kills
     // whatever is still going, which is what keeps a background job from outliving the turn that
     // started it and becoming an effect nobody is watching.
@@ -3723,7 +3794,6 @@ where
         may_write,
         may_run,
         running,
-        beside,
         // A delegate and a turn on a definition's model do not move to the fallback model
         // (BACKEND-53): that model is a boundary its file drew.
         may_fall_back: task.delegate.is_none() && pinned_by.is_none(),
@@ -3822,6 +3892,8 @@ where
         notices,
         subscription,
         offered,
+        deferred,
+        beside,
         mcp,
         servers,
         hook_notices,
@@ -3855,7 +3927,7 @@ where
                 &mut *state.hook_notices,
                 &mut state.worked,
                 state.steps,
-                plan.beside,
+                state.beside,
             );
         }
         result
@@ -4193,7 +4265,6 @@ where
         };
         match round_steps::after_a_reply(
             inputs,
-            plan,
             state,
             policy,
             conversation,
@@ -4888,7 +4959,7 @@ where
                                 reporter,
                                 &mut state.objections,
                                 &reference.slot,
-                                plan.beside,
+                                state.beside,
                             )
                         };
                         // A check made here is a model call like the one read_output makes, so
@@ -5272,7 +5343,7 @@ where
                                 output_cap,
                             )
                         };
-                        let advice = advice_beside(plan.beside);
+                        let advice = advice_beside(state.beside);
                         // `read: true` asked of `fetch_url` or a server's tool that still came
                         // back as a reference: said once, so it does not read as an unexplained
                         // quarantine. Nothing for a run, whose sentence is `run_advice`'s.
@@ -5285,7 +5356,7 @@ where
                                 reference.bytes,
                                 output_cap,
                                 &output.tool,
-                                plan.beside,
+                                state.beside,
                             )
                         };
                         // Only where git ran in a directory whose repository read_git
@@ -5298,7 +5369,7 @@ where
                                 .ran_git_in
                                 .iter()
                                 .any(|directory| workspace.read_git_opens(policy, directory)),
-                            plan.beside,
+                            state.beside,
                         );
                         let left_out = sentences::left_out_note(output.left_out);
                         let respelled = sentences::respelled_note(output.respelled);
@@ -8488,7 +8559,8 @@ mod tests {
             let session = AccountSession::begin();
             let task = Task::new("choose the first file to read")
                 .in_account_session(session.clone())
-                .with_advisor(Some("chatgpt/an-advisor".into()));
+                .with_advisor(Some("chatgpt/an-advisor".into()))
+                .offering_every_tool_in_full();
 
             let taken = take(
                 "account-session-advisor",

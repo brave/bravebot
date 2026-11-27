@@ -48,19 +48,23 @@ mod statements;
 pub(crate) use statements::LOOPBACK_CONNECT_RULE;
 #[cfg(test)]
 pub use statements::stated_to_the_planner;
+use statements::{
+    REQUEST_PATH_LOADABLE_SENTENCE, commit_sentence, credential_locations_sentence, loopback_reach,
+    macos_git_sentence, requests_menu_sentence,
+};
 pub use statements::{
     RunStatement, change_notice_for, stated_in_the_description_for, stated_to_the_planner_for,
 };
-use statements::{
-    commit_sentence, credential_locations_sentence, loopback_reach, macos_git_sentence,
-    requests_menu_sentence,
-};
 
-/// Whether the turn's tool list holds `request_path` (TOOL-6).
+/// Whether the turn's tool list holds `request_path` (TOOL-6), or holds it back for `load_tool`
+/// (TOOL-7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RequestPath {
     Listed,
     Unlisted,
+    /// Held back for `load_tool`: no sentence names it, and the profile line after a failed step,
+    /// where a request is accepted, says once that `load_tool` loads it.
+    Loadable,
 }
 
 /// Whether anybody can be asked in this run (CLI-1). Where nobody can, no sentence names a route
@@ -1081,6 +1085,16 @@ impl Confinement {
         self
     }
 
+    /// This confinement with whether the turn holds `request_path` back for `load_tool` (TOOL-7),
+    /// which a list that holds the tool leaves as it is.
+    #[must_use]
+    pub fn with_request_path_loadable(mut self, loadable: bool) -> Self {
+        if loadable && self.request_path == RequestPath::Unlisted {
+            self.request_path = RequestPath::Loadable;
+        }
+        self
+    }
+
     /// This confinement with whether nobody can be asked in this run (CLI-1), which decides
     /// whether a failure sentence names a route only a person can take (SANDBOX-19).
     #[must_use]
@@ -2055,8 +2069,12 @@ impl Confinement {
         // Each term is the condition that chose its sentence, and no composed text is tested.
         let names_it = unconfined_offered
             && (signs || git_names_it || launch_names_it || linked_names_it || identity_names_it);
+        let loadable = match self.request_path == RequestPath::Loadable && self.names_requests() {
+            true => REQUEST_PATH_LOADABLE_SENTENCE,
+            false => "",
+        };
         let said = format!(
-            "{linked}{}{}{source}{refusal}{identity}{commit}{git}{launch}{listing}{shell}{assigned}{}",
+            "{linked}{}{}{source}{refusal}{identity}{commit}{git}{launch}{listing}{shell}{assigned}{}{loadable}",
             self.cache_sentence(steps),
             self.reach(steps),
             credential_locations_sentence(

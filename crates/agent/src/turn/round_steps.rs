@@ -241,7 +241,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
                 sandbox,
                 tools::workspace_is_trusted(policy, workspace),
             ) && task.permission_mode.answers_requests(),
-            request_path_listed: plan.beside.holds(tools::Named::RequestPath),
+            request_path_listed: state.beside.holds(tools::Named::RequestPath),
             askable: crate::confine::Askable::nobody_when(task.permission_mode.nobody_to_ask()),
         },
     ) {
@@ -288,7 +288,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         state.hook_notices,
         &mut state.worked,
         state.steps,
-        plan.beside,
+        state.beside,
     )?;
 
     // After the collection above, which adds what a finished delegate spent, so a delegate
@@ -330,7 +330,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
         !task.permission_mode.get().answers_a_run_unasked(),
         read_output_is(),
-        plan.beside,
+        state.beside,
         policy,
         conversation,
         reporter,
@@ -383,7 +383,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // the session kept from an earlier turn is something the planner has no other way
     // to know is there (RUN-15).
     if !std::mem::replace(&mut state.told_of_kept_jobs, true) {
-        tell_of_kept_jobs(state.jobs, plan.beside, conversation);
+        tell_of_kept_jobs(state.jobs, state.beside, conversation);
     }
 
     // Once, beside the jobs and for the same reason: what earlier turns left open is gone from
@@ -507,7 +507,6 @@ pub(super) enum AfterReply {
 )]
 pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
     inputs: Inputs<'_>,
-    plan: &Plan<'_>,
     state: &mut State<'_>,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
@@ -591,7 +590,7 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
             state.hook_notices,
             &mut state.worked,
             state.steps,
-            plan.beside,
+            state.beside,
         )?;
         return Ok(AfterReply::Answer);
     }
@@ -623,7 +622,7 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
                 state.hook_notices,
                 &mut state.worked,
                 state.steps,
-                plan.beside,
+                state.beside,
             )?;
             // A wake by a typed line collected nobody, and its window still belongs to the
             // delegates' requests that ran inside it.
@@ -1231,6 +1230,9 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
         // What the turn that started it says its context has met, met with what it starts from:
         // a constant the caller chose, so nothing here reads a byte of anything a delegate saw.
         seeded.context = seeded.context.meet(task.delegates_have_met);
+        // The turn's own switch, which only its caller sets, so a delegate holds back what the
+        // turn that started it holds back (TOOL-7).
+        seeded.every_tool_in_full = task.every_tool_in_full;
         let vouched = seeded.vouched.clone();
         let checkout = seeded
             .workspace
@@ -2106,7 +2108,7 @@ pub(super) fn tools_for_a_call<'a>(
         scheduling: plan.scheduling,
         arming: plan.arming,
         running: plan.running,
-        beside: plan.beside,
+        beside: state.beside,
         armed: &mut state.armed,
         home: task.home.as_deref(),
         profile: task.profile.as_deref(),
@@ -2148,6 +2150,7 @@ pub(super) fn tools_for_a_call<'a>(
         offered: Some(&state.offered),
         servers: state.servers.as_deref_mut(),
         mcp: state.mcp.as_ref().map(|(offer, _)| offer),
+        deferred: Some(&state.deferred),
         jobs: &mut *state.jobs,
         permission_mode: task.permission_mode.clone(),
         vouched_channel: task.vouched_channel,
@@ -2366,11 +2369,22 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // What the call's arguments named, reported as they are found so the list is current while the
     // turn runs and a turn that then fails has handed it over (PANEL-16).
     keep_references(state, reporter, &output.references);
-    // A tool the planner loaded is offered from the next request on (SERVERS-16).
-    if let Some(wire) = output.tool_loaded.take()
-        && let Some((offer, _)) = &mut state.mcp
-    {
-        state.offered.extend(offer.load(&wire));
+    // A tool the planner loaded is offered from the next request on, appended after the list, so
+    // what is in front of it is sent as it was (TOOL-7, SERVERS-16).
+    if let Some(name) = output.tool_loaded.take() {
+        match state.deferred.load(&name) {
+            // From the next request the tool is on the list, so a result whose situation is its
+            // own names it directly and no longer sends the planner to `load_tool` (TOOL-6).
+            Some(tool) => {
+                state.beside = state.beside.with_loaded(&tool.function.name);
+                state.offered.push(tool);
+            }
+            None => {
+                if let Some((offer, _)) = &mut state.mcp {
+                    state.offered.extend(offer.load(&name));
+                }
+            }
+        }
     }
     // What a loaded skill's file asks the rounds after it to run as (SKILL-15).
     // Shown before the next round and kept in the turn's notices (SKILL-11),

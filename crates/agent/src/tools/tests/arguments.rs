@@ -138,6 +138,7 @@ pub(super) fn with_tools_and_skills<R>(
         offered: None,
         servers: None,
         mcp: None,
+        deferred: None,
         jobs: &mut jobs,
         permission_mode: crate::LiveMode::default(),
         vouched_channel: false,
