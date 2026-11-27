@@ -4704,8 +4704,9 @@ impl Bridge {
     }
 
     /// Open a session in `project` with `running` as its turn and its view started, for a test
-    /// outside this module that needs a turn waiting on a question.
-    #[cfg(test)]
+    /// outside this module that needs a turn waiting on a question. Only the host's tests use it,
+    /// and the host is built on Unix alone.
+    #[cfg(all(test, unix))]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     pub(crate) fn open_running_for_test(&mut self, project: &Path, running: Running) -> String {
         let handle = self.mint(Open {
