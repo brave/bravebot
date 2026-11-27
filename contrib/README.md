@@ -487,6 +487,13 @@ sent the next step's keys while it is busy; raise `--answer` for such a script. 
 typed once the program has drawn something and gone still, or after `--settle` seconds (default 5)
 if it draws nothing.
 
+Any output after a step's last key counts as the interface's answer to it. An interface that
+redraws as soon as a key arrives, for example to clear its input box after Enter, and then works
+without drawing for longer than `--quiet` is sent the next step's keys while it is busy. The
+driver cannot tell that redraw from the screen drawn once the work is done. For such an interface,
+raise `--quiet` above the time the work takes, or have the interface draw while it works, as a
+spinner does.
+
 Before a step's last key, the driver reads what the earlier keys drew until the interface has been
 quiet for 0.3 seconds, for at most 2 seconds, and that output does not count. An interface that is
 still drawing after 2 seconds, or that draws an earlier key more than 0.3 seconds late, can still
