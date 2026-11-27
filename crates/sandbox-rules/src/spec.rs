@@ -1,11 +1,16 @@
-//! What the quoting in [`crate::quote`] is proved to give: the value it was handed, read back by
-//! the platform's own rules (SANDBOX-4).
+//! What the code in this crate is proved to give.
 //!
-//! Each reader is written from the platform's documented rules, not from the code it checks:
-//! Seatbelt's string literal, and the quoted argument `CommandLineToArgvW` splits a command line
-//! into. A proof here is about bravebot's half, that what is written reads back as the value. That
-//! the platform reads it by those rules is the platform's, and is not proved.
+//! The quoting in [`crate::quote`] gives the value it was handed, read back by the platform's own
+//! rules (SANDBOX-4). Each reader is written from the platform's documented rules, not from the
+//! code it checks: Seatbelt's string literal, and the quoted argument `CommandLineToArgvW` splits a
+//! command line into. A proof here is about bravebot's half, that what is written reads back as the
+//! value. That the platform reads it by those rules is the platform's, and is not proved.
+//!
+//! A Seatbelt profile [`crate::seatbelt::rules`] builds opens by refusing everything, and each rule
+//! after that is one [`may_hold`] allows for the parts it was built from (SANDBOX-3, SANDBOX-31).
 
+use crate::seatbelt::{Action, Hold, Operation, Parts, Row, Rule, Target, Write};
+use crate::seatbelt::{LOOPBACK, MACH_SERVICES, RESOLVER, SYSCTL_NAMES, TRUST_SERVICES};
 use vstd::prelude::*;
 
 verus! {
@@ -364,6 +369,156 @@ pub proof fn lemma_written_push(a: Seq<char>, c: char, n: nat)
             }
         }
     }
+}
+
+// Seatbelt profiles.
+
+/// The rule every profile opens with, which refuses everything the rules after it do not grant.
+pub open spec fn deny_default() -> Rule {
+    Rule { action: Action::Deny, operation: Operation::Default, target: Target::Any }
+}
+
+/// Whether `name` is one of the names in `list`.
+pub open spec fn in_list<const N: usize>(list: [&'static str; N], name: Seq<char>) -> bool {
+    exists|j: int| 0 <= j < N && #[trigger] list@[j]@ == name
+}
+
+/// Whether one of `rows` grants `path`.
+pub open spec fn granted(rows: Seq<Row>, path: Seq<char>) -> bool {
+    exists|j: int| 0 <= j < rows.len() && #[trigger] rows[j].path@ == path && rows[j].allows
+}
+
+/// A Mach service a profile may allow a lookup of: one of the fixed list, or a trust service
+/// where the network is allowed (SANDBOX-31).
+pub open spec fn service_allowed(name: Seq<char>, network: bool) -> bool {
+    in_list(MACH_SERVICES, name) || (network && in_list(TRUST_SERVICES, name))
+}
+
+/// Whether `target` is any port on the loopback address.
+pub open spec fn is_loopback(target: Target) -> bool {
+    match target {
+        Target::LocalIp(address) => address@ == LOOPBACK@,
+        Target::RemoteIp(Some(address)) => address@ == LOOPBACK@,
+        _ => false,
+    }
+}
+
+/// The rule a row is written as, for `operation`.
+pub open spec fn row_rule(row: Row, operation: Operation) -> Rule {
+    Rule {
+        action: if row.allows { Action::Allow } else { Action::Deny },
+        operation,
+        target: Target::Subpath(row.path),
+    }
+}
+
+/// The operation a rule about `write` is about.
+pub open spec fn write_operation(write: Write) -> Operation {
+    match write {
+        Write::Any => Operation::FileWrite,
+        Write::Unlink => Operation::FileWriteUnlink,
+        Write::Create => Operation::FileWriteCreate,
+    }
+}
+
+/// Whether `operation` is a write of any kind.
+pub open spec fn is_write(operation: Operation) -> bool {
+    operation == Operation::FileWrite || operation == Operation::FileWriteUnlink || operation
+        == Operation::FileWriteCreate
+}
+
+/// Whether one of `holds` is the rule `rule`.
+pub open spec fn held(holds: Seq<Hold>, rule: Rule) -> bool {
+    exists|j: int|
+        0 <= j < holds.len() && #[trigger] holds[j].action == rule.action && write_operation(
+            holds[j].write,
+        ) == rule.operation && holds[j].target == rule.target
+}
+
+/// Whether a profile for `parts` may allow a connect to `target`: a socket a socket row grants,
+/// the resolver and any address where egress is open to every address, the one address egress is
+/// held to, and the loopback address where loopback is granted and egress is not held.
+pub open spec fn connect_allowed(target: Target, parts: Parts) -> bool {
+    match target {
+        Target::Subpath(path) => parts.network && granted(parts.sockets@, path@),
+        Target::Literal(path) => parts.network && parts.egress_to is None && path@ == RESOLVER@,
+        Target::RemoteIp(None) => parts.network && parts.egress_to is None,
+        Target::RemoteIp(Some(address)) => (parts.network && parts.egress_to is Some
+            && address@ == parts.egress_to->Some_0@) || (parts.loopback && parts.egress_to is None
+            && address@ == LOOPBACK@),
+        _ => false,
+    }
+}
+
+/// What a rule after a profile's first may be, for the parts the profile was built from.
+///
+/// None refuses or grants everything again. The process information of other processes is never
+/// granted, and a signal reaches only what the profile started. A machine-information query and a
+/// Mach lookup are of the fixed lists, the trust services only where the network is allowed. A
+/// rule about the network is there only where the network is allowed, or where loopback is and it
+/// names the loopback address. A listen is allowed only where loopback is granted, and only on the
+/// loopback address. A connect is allowed only where [`connect_allowed`] says. A read is allowed
+/// only of the root directory itself and of the paths the read rows grant, and a write only where
+/// a write row or one of the holds grants it. A process starts another only where `subprocesses`
+/// is set.
+pub open spec fn may_hold(rule: Rule, parts: Parts) -> bool {
+    &&& rule.operation != Operation::Default
+    &&& rule.operation == Operation::ProcessInfo ==> rule.action == Action::Deny
+    &&& rule.operation == Operation::ProcessInfoPidinfo ==> rule.target == Target::SelfProcess
+    &&& rule.operation == Operation::ProcessFork ==> parts.subprocesses
+    &&& rule.operation == Operation::Signal ==> rule.target == Target::SameSandbox
+    &&& rule.operation == Operation::SysctlRead ==> match rule.target {
+        Target::SysctlNames(names) => forall|k: int|
+            0 <= k < names@.len() ==> in_list(SYSCTL_NAMES, #[trigger] names@[k]@),
+        _ => false,
+    }
+    &&& rule.operation == Operation::MachLookup ==> match rule.target {
+        Target::GlobalNames(names) => forall|k: int|
+            0 <= k < names@.len() ==> service_allowed(#[trigger] names@[k]@, parts.network),
+        _ => false,
+    }
+    &&& (rule.operation == Operation::NetworkOutbound || rule.operation
+        == Operation::NetworkInbound) ==> (parts.network || (parts.loopback && is_loopback(
+        rule.target,
+    )))
+    &&& rule.operation == Operation::NetworkInbound ==> parts.loopback && is_loopback(rule.target)
+    &&& (rule.action == Action::Allow && rule.operation == Operation::NetworkOutbound)
+        ==> connect_allowed(rule.target, parts)
+    &&& (rule.action == Action::Allow && is_write(rule.operation)) ==> (held(parts.holds@, rule) || (
+    rule.operation == Operation::FileWrite && match rule.target {
+        Target::Subpath(path) => granted(parts.writes@, path@),
+        _ => false,
+    }))
+    &&& (rule.action == Action::Allow && rule.operation == Operation::FileRead) ==> match rule.target {
+        Target::Literal(path) => path@ == "/"@,
+        Target::Subpath(path) => granted(parts.reads@, path@),
+        _ => false,
+    }
+}
+
+/// A profile [`crate::seatbelt::rules`] builds refuses everything before it grants anything, and
+/// every rule after that is one [`may_hold`] allows. So with the network closed and loopback not
+/// granted no rule is about the network, without loopback nothing listens, without subprocesses
+/// nothing starts another process, the trust services are not looked up, and a read is allowed
+/// only of `/` and of the read rows.
+pub proof fn a_seatbelt_profile_refuses_first_and_grants_only_what_its_parts_allow(
+    profile: Seq<Rule>,
+    parts: Parts,
+)
+    requires
+        profile.len() > 0,
+        profile[0] == deny_default(),
+        forall|i: int| 1 <= i < profile.len() ==> may_hold(#[trigger] profile[i], parts),
+    ensures
+        forall|i: int| 1 <= i < profile.len() ==> #[trigger] profile[i].operation != Operation::Default,
+        !parts.network && !parts.loopback ==> forall|i: int|
+            0 <= i < profile.len() ==> #[trigger] profile[i].operation != Operation::NetworkOutbound
+                && profile[i].operation != Operation::NetworkInbound,
+        !parts.subprocesses ==> forall|i: int|
+            0 <= i < profile.len() ==> #[trigger] profile[i].operation != Operation::ProcessFork,
+        !parts.loopback ==> forall|i: int|
+            0 <= i < profile.len() ==> #[trigger] profile[i].operation != Operation::NetworkInbound,
+{
 }
 
 } // verus!

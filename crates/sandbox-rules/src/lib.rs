@@ -24,5 +24,6 @@
 use vstd::prelude::*;
 
 pub mod quote;
+pub mod seatbelt;
 #[cfg(verus_keep_ghost)]
 mod spec;
