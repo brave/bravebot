@@ -22,7 +22,7 @@ It compares the three files at the merge base with the checkout and reports, lin
 A contract or a mutation added, and an assumption or a survivor removed, is a strengthening and is
 not reported. With `--summary` the report is written as Markdown for a job summary, and with
 `--github-output` the job is told whether anything was found, which the `Proof weakened` workflow
-reads to label the pull request and ask the owners of verify/ to review it. That workflow runs the
+reads to label the pull request and ask bbondy and darkdh to review it. That workflow runs the
 default branch's copy of this script, with `--head` on the pull request's commit, so a pull request
 cannot change what is reported about it. It exits 0 either way: whether a weakening is right is a person's call.
 
@@ -175,8 +175,8 @@ def render(found, markdown):
             "## Files that change what the checks mean",
             "",
             "These hold the definitions every contract names, or run the checks. An edit to one"
-            " weakens nothing by itself, and can change what every contract means, so an owner of"
-            " `verify/` reads it.",
+            " weakens nothing by itself, and can change what every contract means, so a person"
+            " reads it.",
             "",
         ]
         lines.extend(f"- `{path}`" for path in tooling(found))

@@ -5,7 +5,7 @@ name: Proof weakened
 # ledger, the mutations and the survivors with the merge base, and names the definitions and
 # scripts that change what every contract means. A weakening labels the pull request
 # `proof-weakened`, and an edit to one of those files `proof-tooling-changed`, since that weakens
-# nothing by itself. Either writes what it found to the job summary and asks the owners of verify/
+# nothing by itself. Either writes what it found to the job summary and asks bbondy and darkdh
 # to review, and a label whose list is empty comes off. It fails nothing: whether a weakening is
 # right is the reviewer's call.
 #
@@ -115,7 +115,7 @@ jobs:
           label proof-tooling-changed "$TOOLING" \
             "Edits spec.rs or a script that runs the Verus checks"
 
-      - name: Ask the owners of verify/ to review
+      - name: Ask the Verus reviewers to review
         if: >-
           ${{ steps.weakened.outputs.weakened == 'true' ||
           steps.weakened.outputs.tooling == 'true' }}
@@ -124,7 +124,8 @@ jobs:
           PR_NUMBER: ${{ steps.pull.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
-          # The owners CODEOWNERS names for verify/, less the author, who cannot review their own.
+          # The people who review the Verus checks, less the author, who cannot review their own.
+          # CODEOWNERS names them for spec.rs and the scripts; verify/ has no owner there.
           author=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author --jq .author.login)
           for owner in bbondy darkdh; do
             if [ "$owner" != "$author" ]; then
@@ -152,10 +153,10 @@ jobs:
         run: |
           if [ "$WEAKENED" = true ]; then
             conclusion=neutral
-            title="Weakens what Verus checks; an owner of verify/ reads it"
+            title="Weakens what Verus checks; a Verus reviewer reads it"
           elif [ "$TOOLING" = true ]; then
             conclusion=neutral
-            title="Weakens nothing, and edits what the checks mean; an owner of verify/ reads it"
+            title="Weakens nothing, and edits what the checks mean; a Verus reviewer reads it"
           else
             conclusion=success
             title="Weakens nothing Verus checks"
