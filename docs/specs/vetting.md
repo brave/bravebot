@@ -810,7 +810,8 @@ ended with the person's stop.
   out of the planner rather than off the wire. That is a real widening of what a `read_file` on a
   quarantined path does, and it is the price of the person being told something before they answer.
   It is bounded by the offer being made once per path per turn (again after an answer thrown away
-  because the file changed or a program started while the question was open; each repeat is
+  because the file changed or a program started while a person's question was open, or the file changed
+  while the mode's was; each repeat is
   answered by the person, or by the mode under bypass), by never being made for a picture
   or a directory, and by the confined conversation holding no tools, no memory and no destination.
 

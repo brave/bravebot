@@ -5364,6 +5364,9 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         WorkspaceError::Stale {
             path: carried.to_string(),
         },
+        WorkspaceError::StaleUnasked {
+            path: carried.to_string(),
+        },
         WorkspaceError::Contended {
             path: carried.to_string(),
         },
@@ -5424,6 +5427,25 @@ fn a_displayed_failure_still_names_the_path_it_happened_on() {
          was written or a command started, so nothing was written; read it again if its contents \
          matter, then repeat the call"
     );
+}
+
+/// A write nobody was asked about that is refused as stale says what happened and that no question
+/// was put, so the planner does not read it as an approval prompt or as another session writing
+/// into the directory, and it is told the call can be repeated.
+#[test]
+fn a_refusal_of_a_write_nobody_was_asked_about_does_not_say_the_user_was_asked() {
+    let failure = WorkspaceError::StaleUnasked {
+        path: "src/main.rs".to_string(),
+    };
+    for told in [failure.to_string(), failure.describe("src/main.rs")] {
+        assert_eq!(
+            told,
+            "'src/main.rs' may have been written, or a command started, since this write was \
+             prepared, so nothing was written. This did not come from an approval question: \
+             nobody was asked. Repeat the call; read the file again first if its contents matter"
+        );
+        assert!(!told.contains("while the user was being asked"));
+    }
 }
 
 /// The paged read must agree with the whole-file read about what is binary.
@@ -11652,6 +11674,40 @@ fn a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
         std::fs::read_to_string(given.path().join("workings.txt")).expect("the file is there"),
         "intermediate"
     );
+}
+
+/// A directory inside the session's own directory, such as the one a delegate is given, is reached
+/// by its absolute path as the session's directory is. A delegate's reach is the session's whole
+/// directory, so the directory of a sibling delegate is one it can name.
+///
+/// Rejects a reach narrowed to the directory a delegate was given without the spec saying so, and a
+/// reach that stops at the top of the session's directory and leaves a directory inside it
+/// unresolved.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_file_in_a_directory_inside_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
+    let project = Scratch::new("scratch-reach-inside");
+    let given = SessionScratch::create().expect("a directory of its own");
+    let inside = given.path().join("d2");
+    std::fs::create_dir(&inside).expect("a directory inside");
+    std::fs::write(inside.join("body.md"), "another's text").expect("already there");
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let named = inside.join("body.md").display().to_string();
+    workspace
+        .read(&mut policy, &Labelled::trusted(named))
+        .expect("a file in a directory inside the session's own is readable");
 }
 
 /// An undo puts the project back, and a file the turn wrote for its own use is not the project.

@@ -526,21 +526,41 @@ every returned error or cancellation, as [manifest.md](manifest.md) requires.
 Approvals based on a preview are checked before effect entry against the path's stamp, which is
 its revision and the number of `run` lines started, both taken in the same capture that drew the
 preview and compared as numbers, so a changed path cannot spend the old approval. One comparison
-makes that check for every approval of a write, so none can compare the revision alone: a vouch,
-the approval of a `write_file` (text or a picture), of a `download_url` destination, of an
-`edit_file` and of a write step of a manifest run. An `edit_file` takes its stamp when it reads the
-file for the edit, in the same capture as the bytes it will compare, and not when it writes. A
-`run` line that starts while the person is asked voids the answer, because a program opens files
-its line does not name and moves no revision. A vouch answered after that is thrown away and the
-read says so. A write or an edit answered after that writes nothing, leaves the file as it was and
-tells the planner that the path may have changed while the user was being asked, so it reads the
-file again if its contents matter and repeats the call. An edit is refused before its endorsement
-is used. A path whose vouch was thrown away is offered again by the next read of it, about the file
+makes that check for every approval of a write: a vouch, the approval of a `write_file` (text or a
+picture), of a `download_url` destination, of an `edit_file` and of a write step of a manifest
+run. An `edit_file` takes its stamp when it reads the
+file for the edit, in the same capture as the bytes it will compare, and not when it writes. The
+revision is compared for every write. The count of `run` lines is compared only where a person was
+asked: a `run` line that starts while a person is asked voids the answer, because a program opens
+files its line does not name and moves no revision, and the person read a preview it may have made
+untrue. A write the mode answered, or that a rule or the trust map allowed without a question, was
+shown to nobody, so a `run` line that started after its stamp, such as one a sibling delegate
+started, voids nothing. A write the mode leaves to a person, such as one that creates a credential
+or lands on a protected path under a mode that answers other writes, counts as asked. A vouch the
+mode answered is compared the same way, by revision alone, and one a person answered is compared
+whole. Whether a person was asked is the word of the confirmer that put the question, taken from
+one look at the mode with the answer, so a mode changed while the question was put does not change
+how the write is compared. A new file in the session's own directory ([TRUST-14](#TRUST-14)) has no
+rule of its own here: it is compared as any other write, by revision alone where nobody was asked
+and whole where a person was, and a file that appears at the path after the stamp moves the
+revision and refuses the write. A vouch a person answered after a `run` line started is thrown away and the read says so. A
+write or an edit a person answered after that writes nothing, leaves the file as it was and tells
+the planner that the path may have changed while the user was being asked, so it reads the file
+again if its contents matter and repeats the call. A write nobody was asked about whose revision
+moved writes nothing, leaves the file as it was and tells the planner that the file may have been
+written, or a command started, since the write was prepared, that no approval question was put, and
+to repeat the call. Both refusals are recorded as refusals, saying whether a person was being asked
+([trace.md](trace.md)). An edit is refused before its endorsement is used. A path whose vouch was thrown away is offered again by the next read of it, about the file
 as it is then, so the read's own advice to read again is true. An answer that was spent, and a no,
 keep the path asked about for the rest of the turn. A change to another path invalidates no
 approval and no vouch, but any `run` line that started since the preview was drawn voids a vouch,
-a write approval and an edit approval of every path. The price is one more question, or one refused
-write, after a `run` line that started while the question was open, even a line that wrote nothing.
+a write approval and an edit approval a person gave, of every path. The price is one more question,
+or one refused write, after a `run` line that started while a person's question was open, even a
+line that wrote nothing. A write nobody was asked about pays nothing for a `run` line.
+What a write nobody was asked about gives up: a `run` line that a sibling delegate started after the
+stamp can rewrite the file without moving its revision, and the write then replaces those bytes
+without anyone having seen them. This is the accepted cost of comparing by revision alone, so that
+one delegate's `run` line does not refuse the writes of the others under a mode that asks nobody.
 The count moves no revision, so the output of other running commands keeps its label. The
 write-back exception in [WRITE-4](tools/write-file.md#WRITE-4) compares the same count against the
 count taken when its slot was read. A backup records the trust of its bytes at capture, taken under
@@ -697,6 +717,25 @@ enters. A program that something other than the turn started is not tracked or c
 `verified-by: bravebot_agent::turn::an_edit_is_made_when_no_run_started_while_it_was_being_asked`
 `verified-by: bravebot_agent::manifest::a_run_that_started_while_a_planned_write_was_being_asked_voids_the_yes`
 `verified-by: bravebot_agent::manifest::a_planned_write_is_made_when_no_run_started_while_it_was_being_asked`
+`verified-by: bravebot_core::file_authority::a_stamp_holds_by_revision_and_by_run_lines_only_where_a_person_was_asked`
+`verified-by: bravebot_agent::workspace::a_run_line_voids_only_a_write_a_person_was_asked_about_and_the_revision_voids_both`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_a_write_does_not_void_it`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_a_picture_write_does_not_void_it`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_a_download_does_not_void_it`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_an_edit_does_not_void_it`
+`verified-by: bravebot_agent::manifest::a_run_that_started_while_the_mode_answered_a_planned_write_does_not_void_it`
+`verified-by: bravebot_agent::turn::a_run_line_a_sibling_starts_does_not_void_a_delegates_unasked_write`
+`verified-by: bravebot_agent::turn::a_run_line_a_sibling_starts_does_not_void_a_new_file_in_the_sessions_own_directory`
+`verified-by: bravebot_agent::turn::a_file_that_appears_in_the_sessions_own_directory_after_the_stamp_is_not_overwritten`
+`verified-by: bravebot_agent::turn::a_mode_moved_to_asking_before_the_confirmer_looks_leaves_the_write_compared_as_asked`
+`verified-by: bravebot_agent::turn::a_mode_moved_to_bypass_before_the_confirmer_looks_leaves_the_write_compared_by_revision`
+`verified-by: bravebot_agent::permission_mode::a_write_names_who_answered_it_from_one_look_at_the_mode`
+`verified-by: bravebot_agent::permission_mode::plan_mode_names_itself_for_the_refusal_of_a_write`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_protected_write_was_being_asked_voids_the_yes_in_accept_edits`
+`verified-by: bravebot_agent::turn::an_unasked_write_over_a_file_whose_revision_moved_is_refused_without_saying_a_person_was_asked`
+`verified-by: bravebot_agent::workspace::a_refusal_of_a_write_nobody_was_asked_about_does_not_say_the_user_was_asked`
+`verified-by: bravebot_core::policy::a_vouch_a_mode_answered_is_spent_after_a_program_started_beside_it`
+`verified-by: bravebot_agent::turn::a_vouch_the_mode_answered_survives_a_run_line_a_sibling_started`
 `verified-by: bravebot_core::policy::a_path_is_offered_again_only_after_an_answer_was_thrown_away`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,
@@ -1556,6 +1595,28 @@ inode of the directory at the time it was opened, added or reopened, with the na
 workspace made for a delegate or a checkout carries the records. A stage's grant of such a directory
 holds only while its name still leads to that directory ([SANDBOX-18](sandboxing.md#SANDBOX-18)).
 
+A delegate is given a directory of its own inside the session's, made as the delegate starts. Its
+name is the delegate's number, which the driver assigns (`d2`, and `d1.1` for a delegate the first
+started), so no word a planner or a delegate wrote reaches the path, and a delegate that a delegate
+starts has its directory beside its parent's and not inside it. A delegate in a checkout is given
+its directory in the session's and not in the checkout. It is made at a mode that lets nobody else
+in, and it is created rather than adopted: a name already taken is refused and what is there is left
+as it was. Nothing is made while the name of the session's directory no longer leads to the
+directory the session made ([SANDBOX-18](sandboxing.md#SANDBOX-18)). Where the directory cannot be
+made the delegate goes on with the session's, told that other delegates write there as well
+([instructions.md](instructions.md)), and a session that has no directory gives its delegates none.
+
+**Why a directory for each delegate.** The delegates of one call run at the same time. Given the
+session's directory, two of them write the same name there and one reads back what the other wrote,
+which a delegate then reports as its own work. A directory for each makes a name one delegate
+chooses a name in its own directory, with no instruction a model has to follow. The number is the
+driver's own and is unique among the delegates running at once, which is why it is the name and a
+word from the task is not. Beside the parent's rather than inside it, and in the session's rather
+than in a checkout, because a directory ends with the delegate that owns it: inside its parent's it
+would go when the parent did, under a delegate still running, and inside a checkout a commit from
+the checkout could take it. The session's directory is made as the session opens, so a delegate's
+needs no further lock; what stands in for one is refusing a name already taken.
+
 `verified-by: bravebot_agent::scratch::a_session_is_given_a_directory_of_its_own`
 `verified-by: bravebot_agent::scratch::a_name_something_else_holds_is_refused`
 `verified-by: bravebot_agent::scratch::nobody_else_may_read_what_a_session_writes_there`
@@ -1571,6 +1632,15 @@ holds only while its name still leads to that directory ([SANDBOX-18](sandboxing
 `verified-by: bravebot_tui::status::the_sessions_scratch_directory_is_reported_for_what_it_is`
 `verified-by: bravebot_tui::status::a_session_with_no_scratch_directory_reports_none`
 `verified-by: bravebot_ui_bridge::dispatch::a_desktop_session_is_given_a_directory_of_its_own`
+`verified-by: bravebot_agent::scratch::a_delegate_is_given_a_directory_named_for_its_number_that_goes_when_it_ends`
+`verified-by: bravebot_agent::scratch::delegates_and_a_nested_delegate_are_each_given_a_directory_of_their_own`
+`verified-by: bravebot_agent::scratch::a_delegate_directory_that_is_already_taken_is_refused_and_left_alone`
+`verified-by: bravebot_agent::scratch::a_delegate_directory_is_not_made_through_a_name_that_leads_elsewhere`
+`verified-by: bravebot_agent::turn::each_delegate_of_one_call_is_given_its_own_scratch_directory`
+`verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_given_its_own_scratch_directory_in_the_sessions`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_delegate_is_given_a_scratch_directory_of_its_own`
+`verified-by: bravebot_agent::turn::a_delegate_whose_directory_cannot_be_made_is_given_the_sessions_and_told_it_is_shared`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_session_with_no_scratch_directory_is_told_nothing_of_one_and_still_starts`
 
 <a id="TRUST-15"></a>
 ### TRUST-15: nothing in the session's directory outlives the session
@@ -1580,6 +1650,15 @@ being left or by an error on the way out. A session that carries on from another
 resume, a fork, the session `/clear` begins and the copy `/branch` carries on in
 ([SESSION-31](sessions.md#SESSION-31)) each open a new directory, and the one belonging to the
 session they followed is removed rather than handed on.
+
+A delegate's directory goes as the delegate ends, with everything written in it, whichever way it
+ends: an answer, a failure, a stop by the person or its bound. A panic in its thread removes it
+too wherever panics unwind, which is every build but a release one. A release build aborts on a
+panic, so the process ends with the directory still there, and it goes with the session's directory
+at the next start ([TRUST-25](#TRUST-25)). It is removed only while its name still leads to the
+directory the delegate was given, so a directory or a link a program put at that name is left
+alone, and goes with the session's directory when the session ends.
+What one delegate wrote is not there for a delegate that starts after it ends.
 
 Ending the session waits a quarter of a second at most for the directory to go. The removal runs on
 a thread of its own that keeps the directory's lock until it has finished, so a directory too large
@@ -1608,6 +1687,12 @@ behind, and there is no ordering to get right between removing it and still bein
 `verified-by: bravebot_agent::scratch::leaving_waits_for_a_directory_that_goes_quickly`
 `verified-by: bravebot_agent::scratch::a_directory_being_removed_stays_held_until_it_is_gone`
 `verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
+`verified-by: bravebot_agent::scratch::a_delegate_directory_is_removed_when_the_delegate_panics`
+`verified-by: bravebot_agent::scratch::a_delegate_directory_replaced_by_a_link_is_not_followed_when_the_delegate_ends`
+`verified-by: bravebot_agent::scratch::a_directory_put_at_the_delegates_name_is_not_removed_when_the_delegate_ends`
+`verified-by: bravebot_agent::turn::a_delegate_that_failed_leaves_no_scratch_directory_behind`
+`verified-by: bravebot_agent::turn::a_delegate_a_person_stopped_leaves_no_scratch_directory_behind`
+`verified-by: bravebot_agent::turn::a_delegate_held_to_its_bound_leaves_no_scratch_directory_behind`
 `verified-by: bravebot_tui::app::tests::trust_paths::branching_replaces_the_sessions_directory_only_where_a_copy_was_made`
 `verified-by: bravebot_tui::app::tests::trust_paths::clearing_and_a_handoff_each_replace_the_sessions_directory`
 `verified-by: bravebot_tui::app::tests::trust_paths::a_session_begun_from_a_record_is_given_a_directory_of_its_own`
@@ -1619,6 +1704,13 @@ A path under the session's own directory resolves, so a file there is read, writ
 searched by its absolute path. What that reach covers is that directory: the temporary directory it
 sits in is not reachable, a path leaving it is refused as one leaving the project is (TRUST-10), and
 it is not one of the directories the user opened by name.
+
+A delegate's reach is the session's directory as well, and not only the directory it was given. A
+delegate reads, writes, lists and searches the files its parent left there, and a path under the
+directory of a sibling delegate resolves for it by that path, since the reach is the whole directory
+the session made. The directory each delegate is given keeps a name one delegate chooses from
+being the name another chooses. It does not keep a delegate from naming another's directory by its
+path, and a delegate that does is held to the gates any path in the session's directory is held to.
 
 Neither `/add-dir` nor `/cd` takes it, and a directory inside it is refused the same way. Adding it
 would write a rule over a directory whose whole point is carrying none, and it is reachable without
@@ -1700,19 +1792,24 @@ says out loud is reach somebody discovers by accident.
 `verified-by: bravebot_core::policy::an_untrusted_file_in_the_sessions_own_directory_stays_untrusted`
 `verified-by: bravebot_core::policy::a_name_climbing_out_of_the_sessions_own_directory_is_not_answered_for_it`
 `verified-by: bravebot_core::policy::a_line_reading_the_sessions_own_directory_still_sees_the_rules_inside_it`
+`verified-by: bravebot_agent::workspace::a_file_in_a_directory_inside_the_sessions_own_directory_is_reachable_by_its_absolute_path`
 
 <a id="TRUST-17"></a>
-### TRUST-17: a program a `run` starts is told where the session's directory is
+### TRUST-17: a program a `run` starts is told where its own directory is
 
-Every stage of a line is spawned with `BRAVEBOT_SCRATCH_DIR` holding the path of the directory this
-session was given (TRUST-14), in the background as in the foreground. An assignment of that name on
+Every stage of a line is spawned with `BRAVEBOT_SCRATCH_DIR` holding the path of the directory the
+run was given (TRUST-14), in the background as in the foreground. For the planner of a session that
+is the session's directory. For a delegate that was given a directory of its own it is that one, so
+the programs of two delegates are told two paths, and for a delegate that keeps the session's it is
+the session's. An assignment of that name on
 the line wins, as the same assignment in front of a program wins in a shell
 ([tools/command-line.md](tools/command-line.md)). A session that has no directory of its own sets
 nothing, so a program finds the name absent rather than pointing at a directory that is not there.
 
 **Given as the session opens, not asked for by a tool.** The directory is there before the first
 line runs and its path is in the environment each stage is spawned with, so a program that wants
-somewhere to write finds it without anything having been called first. The planner is told the
+somewhere to write finds it without anything having been called first. A delegate's directory is
+made as the delegate starts, before its first line. The planner is told the
 same way and at the same point, as one of the facts the system prompt states about this machine
 ([instructions.md](instructions.md)), since a variable nothing knows to read is a variable nothing
 reads.
@@ -1770,6 +1867,9 @@ account's temporary directory.
 `verified-by: bravebot_agent::exec::a_session_with_no_directory_of_its_own_names_none`
 `verified-by: bravebot_agent::exec::a_stage_keeps_the_temporary_directory_this_process_has`
 `verified-by: bravebot_agent::turn::a_program_a_turn_runs_is_told_where_the_sessions_directory_is`
+`verified-by: bravebot_agent::turn::each_delegate_of_one_call_is_given_its_own_scratch_directory`
+`verified-by: bravebot_agent::turn::eight_delegates_of_one_call_each_read_back_the_text_they_wrote_to_body_md`
+`verified-by: bravebot_agent::turn::a_confined_stage_of_a_delegate_writes_in_its_own_directory_and_nowhere_else`
 
 ## How a path is named to the map
 

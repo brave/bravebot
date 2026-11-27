@@ -2590,6 +2590,7 @@ fn write<S: Sink, C: Confirmer>(
         &landed,
     );
 
+    let mut person_asked = false;
     if crate::tools::write_needs_approval(policy, workspace, &path, body_label, Destination::Named)
         || !to_approve.is_empty()
     {
@@ -2622,11 +2623,13 @@ fn write<S: Sink, C: Confirmer>(
         };
         // Read as the question is put, exactly as a turn's write reads it.
         let mode = permission_mode.get();
-        let answer = confirmer.confirm_write(&request);
-        policy.record_answer(
+        let (answer, who) = confirmer.confirm_write_noting_the_mode(&request);
+        let answered_by = crate::confirm::answered_by(who, || {
             mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
-                .then(|| mode.name()),
-        );
+                .then(|| mode.name())
+        });
+        person_asked = answered_by.is_none();
+        policy.record_answer(answered_by);
         if !answer.approved() {
             policy.refuse_unapproved_write(&format!("step {}: write_file", index + 1));
             return Err(format!("the user did not approve writing {path}"));
@@ -2640,10 +2643,21 @@ fn write<S: Sink, C: Confirmer>(
             policy,
             &Labelled::trusted(path.clone()),
             &body,
-            Some(approved_at),
+            Some(crate::workspace::Prepared::new(approved_at, person_asked)),
             Some(&reach),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            match e {
+                crate::workspace::WorkspaceError::Stale { .. } => {
+                    policy.refuse_stale_write(&format!("step {}: write_file", index + 1), true)
+                }
+                crate::workspace::WorkspaceError::StaleUnasked { .. } => {
+                    policy.refuse_stale_write(&format!("step {}: write_file", index + 1), false)
+                }
+                _ => {}
+            }
+            e.to_string()
+        })?;
 
     let crate::tools::Reviewed {
         note,
@@ -3181,8 +3195,17 @@ mod tests {
         /// Runs a planned write over `a.txt`, which nobody vouched for, with a person who says
         /// yes. Returns what the file holds afterwards and the step's error, if it had one.
         fn write_step(starts_a_program: bool) -> (String, Option<String>) {
-            let (kept, _other, error) = planned_write(
-                &format!("bravebot-manifest-write-{starts_a_program}"),
+            write_step_under(crate::PermissionMode::Ask, starts_a_program)
+        }
+
+        /// [`write_step`] in `mode`, which decides whether the person who says yes was asked.
+        fn write_step_under(
+            mode: crate::PermissionMode,
+            starts_a_program: bool,
+        ) -> (String, Option<String>) {
+            let (kept, _other, error) = planned_write_under(
+                &format!("bravebot-manifest-write-{starts_a_program}-{mode:?}"),
+                mode,
                 starts_a_program,
                 None,
             );
@@ -3192,8 +3215,24 @@ mod tests {
         /// [`write_step`] where `a.txt` and `other.txt` both exist and `when_asked`, given the
         /// directory, changes the files while the person is asked. Returns what `a.txt` holds, what
         /// `other.txt` holds and the step's error, if it had one.
+        #[cfg(unix)]
         fn planned_write(
             name: &str,
+            starts_a_program: bool,
+            when_asked: Option<fn(&std::path::Path)>,
+        ) -> (String, String, Option<String>) {
+            planned_write_under(
+                name,
+                crate::PermissionMode::Ask,
+                starts_a_program,
+                when_asked,
+            )
+        }
+
+        /// [`planned_write`] with the run in `mode`.
+        fn planned_write_under(
+            name: &str,
+            mode: crate::PermissionMode,
             starts_a_program: bool,
             when_asked: Option<fn(&std::path::Path)>,
         ) -> (String, String, Option<String>) {
@@ -3248,7 +3287,7 @@ mod tests {
                 crate::findings::Recording::default(),
                 &SlotStore::new(),
                 &mut person,
-                &crate::LiveMode::new(crate::PermissionMode::Ask),
+                &crate::LiveMode::new(mode),
                 0,
                 &plan.steps()[0],
             );
@@ -3271,6 +3310,23 @@ mod tests {
                 error.is_some_and(|error| error.contains("may have changed")),
                 "the step did not say the yes was voided"
             );
+        }
+
+        /// TRUST-4 at a planned write the mode answers: nobody was shown a preview, so a `run` line
+        /// a delegate started beside the run, between the stamp and the write, does not void it.
+        /// Rejects a step that compares the whole stamp whatever answered, which refuses the write
+        /// after "the user was being asked" although nobody was. Bypass and accept-edits both answer
+        /// this write.
+        #[test]
+        fn a_run_that_started_while_the_mode_answered_a_planned_write_does_not_void_it() {
+            for mode in [
+                crate::PermissionMode::Bypass,
+                crate::PermissionMode::AcceptEdits,
+            ] {
+                let (kept, error) = write_step_under(mode, true);
+                assert_eq!(error, None, "{mode:?}");
+                assert_eq!(kept, "replaced\n", "{mode:?}: the unasked step was refused");
+            }
         }
 
         /// TRUST-10 at a planned write: a link put at the destination while the person was asked

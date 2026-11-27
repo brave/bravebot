@@ -291,6 +291,13 @@ from another is given its own. A program started by [`run`](../reference/tools.m
 path from `BRAVEBOT_SCRATCH_DIR`. A session that could not be given a directory says so and runs
 without one, and the line is then absent rather than naming somewhere that is not there.
 
+A delegate is told a directory of its own and not the session's: a subdirectory of the session's,
+made as the delegate starts and removed when it ends, so two delegates started together do not write
+the same file. A program a delegate runs reads that one from `BRAVEBOT_SCRATCH_DIR`, and the
+delegate's system prompt says the directory is its alone. A delegate that could not be given one keeps
+the session's, and is told that other delegates write there as well and to put a unique id in every
+file name. A delegate can still read or write another delegate's directory if it names the path.
+
 It is stated because no `run` could discover it: nothing names that directory but this program, and a
 planner never told of it puts an intermediate file in the project instead. Reaching it grants nothing.
 A file there is read and written by its absolute path, but it prompts exactly when a file in the

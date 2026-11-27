@@ -711,15 +711,36 @@ fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> St
          there. You do not need to run `pwd`, `uname` or `date` to learn any of the above.\n",
     );
     if scratch.is_some() {
-        out.push_str(
-            "\nThis session has a scratch directory of its own, which the first message of the \
+        // A delegate that was given a directory of its own reads this block too, and the directory
+        // its first message names is that one: it is its alone and goes when the delegate ends,
+        // before the session does. Neither sentence holds a path, so the delegates of one session
+        // compose one prompt.
+        let (owner, ends) = match (
+            workspace.delegate_scratch(),
+            workspace.shares_scratch_with_other_delegates(),
+        ) {
+            (Some(_), _) => (
+                "This delegate has a scratch directory to itself",
+                "No other delegate writes there. It is removed when this delegate ends",
+            ),
+            (None, true) => (
+                "This session has a scratch directory that other delegates write in as well",
+                "Put a unique id in every file name. It is removed when this session ends",
+            ),
+            (None, false) => (
+                "This session has a scratch directory of its own",
+                "It is removed when this session ends",
+            ),
+        };
+        out.push_str(&format!(
+            "\n{owner}, which the first message of the \
              conversation names, since its name changes with every start and a name here would \
              change the prefix every request is matched against. Put a file there that the work \
              needs on disk but nobody is asking to keep, such as output to grep or an archive to \
              look inside, rather than in the project where somebody has to notice it and delete \
-             it. It is removed when this session ends, and a program a `run` starts reads the same \
-             path from BRAVEBOT_SCRATCH_DIR.\n",
-        );
+             it. {ends}, and a program a `run` starts reads the same \
+             path from BRAVEBOT_SCRATCH_DIR.\n"
+        ));
     }
     out
 }
@@ -917,10 +938,29 @@ fn os_release() -> Option<String> {
 /// process write the whole prompt again and read none of it. Said again in a resumed session, whose
 /// directory is a new one, and the sentence says it replaces any an earlier message named.
 pub fn scratch_note(workspace: &Workspace) -> Option<String> {
+    // A delegate with a directory of its own is told that one, and not the session's, which its
+    // siblings write in as well. The path is built from the delegate's number by the driver
+    // (`DelegateScratch`), so the sentence carries nothing a model wrote.
+    if let Some(own) = workspace.delegate_scratch() {
+        return Some(format!(
+            "The scratch directory of this delegate is {}. It belongs to this delegate alone and \
+             is removed when this delegate ends. It replaces any path an earlier message gave \
+             for it.",
+            own.display()
+        ));
+    }
+    // A delegate that could not be given a directory of its own writes in the session's beside the
+    // others, which a file of the same name would overwrite.
+    let shared = if workspace.shares_scratch_with_other_delegates() {
+        " Other delegates of this session write there as well, so put a unique id in every file \
+         name."
+    } else {
+        ""
+    };
     workspace.scratch().map(|directory| {
         format!(
-            "The scratch directory of this session is {}. It replaces any path an earlier \
-             message gave for it.",
+            "The scratch directory of this session is {}.{shared} It replaces any path an \
+             earlier message gave for it.",
             directory.display()
         )
     })
@@ -1580,6 +1620,74 @@ mod tests {
     fn a_windows_version_is_the_three_numbers_a_build_is_named_by() {
         assert_eq!(version(10, 0, 26100), "10.0.26100");
         assert_eq!(version(6, 1, 7601), "6.1.7601");
+    }
+
+    /// A delegate's system prompt says the directory its first message names is its own, that no
+    /// other delegate writes there and that it goes when the delegate ends, and not that the session
+    /// has one of its own. A delegate that could not be given one says the session's is shared and to
+    /// put a unique id in every file name, and a session says what it always has. None of the three
+    /// holds a path, so the delegates of a session compose one prompt (INSTR-9).
+    ///
+    /// Rejects one sentence for all three, which tells a delegate a directory is its own when its
+    /// siblings write in it, and a path in the prompt.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_system_prompt_says_whose_scratch_directory_it_is_for_a_session_and_each_kind_of_delegate()
+     {
+        let root = crate::testutil::scratch_dir("preamble-scratch-wording");
+        std::fs::remove_dir_all(&root).ok();
+        let session = root.join("session");
+        let own = session.join("d1");
+        std::fs::create_dir_all(&own).expect("directories");
+        let session_directory =
+            crate::ScratchDirectory::observed(session.clone()).expect("a directory");
+        let delegate_directory =
+            crate::ScratchDirectory::observed(own.clone()).expect("a directory");
+        let mut workspace = Workspace::new(&root).expect("workspace");
+        workspace.open_scratch(Some(session_directory));
+
+        let for_session = environment(&workspace, false, false);
+        let for_delegate = environment(
+            &workspace
+                .clone()
+                .with_delegate_scratch(Some(delegate_directory)),
+            false,
+            false,
+        );
+        let for_sharing = environment(&workspace.clone().with_delegate_scratch(None), false, false);
+
+        assert!(
+            for_session.contains(
+                "This session has a scratch directory of its own, which the first message"
+            ) && for_session.contains("It is removed when this session ends, and a program"),
+            "{for_session}"
+        );
+        assert!(
+            for_delegate.contains(
+                "This delegate has a scratch directory to itself, which the first message"
+            ) && for_delegate.contains(
+                "No other delegate writes there. It is removed when this delegate ends, and a program"
+            ),
+            "{for_delegate}"
+        );
+        assert!(
+            !for_delegate.contains("scratch directory of its own")
+                && !for_delegate.contains("when this session ends"),
+            "a delegate was told what is true of the session: {for_delegate}"
+        );
+        assert!(
+            for_sharing.contains("that other delegates write in as well")
+                && for_sharing.contains("Put a unique id in every file name.")
+                && !for_sharing.contains("scratch directory of its own"),
+            "{for_sharing}"
+        );
+        for said in [&for_session, &for_delegate, &for_sharing] {
+            assert!(
+                !said.contains(&session.display().to_string()),
+                "a path is in the prompt: {said}"
+            );
+        }
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// A machine without the CLI is told so rather than told nothing: a planner reading no line

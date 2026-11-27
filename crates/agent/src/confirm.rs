@@ -2143,6 +2143,32 @@ impl RunDecision {
     }
 }
 
+/// Who answered a write question, as the confirmer that put it saw it (TRUST-4, TRACE-7).
+///
+/// Fixed words and a flag. Nothing a turn read is in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhoAnswered {
+    /// The permission mode answered and nobody was asked. Holds the mode's name for the trail.
+    Mode(&'static str),
+    /// The question was put to a person.
+    Person,
+}
+
+/// The name of the mode that answered a write, or `None` where a person was asked.
+///
+/// `said` is what the confirmer reported. Where it reported nothing, `read` is the mode as the
+/// caller read it before the question, which is what a confirmer that is not a mode leaves.
+pub(crate) fn answered_by(
+    said: Option<WhoAnswered>,
+    read: impl FnOnce() -> Option<&'static str>,
+) -> Option<&'static str> {
+    match said {
+        Some(WhoAnswered::Mode(name)) => Some(name),
+        Some(WhoAnswered::Person) => None,
+        None => read(),
+    }
+}
+
 /// What the user decided about a write.
 ///
 /// The two standing answers are about what the credential scan found and nothing else ([CRED-13]).
@@ -2392,6 +2418,21 @@ pub trait Confirmer {
     /// write. An implementation that cannot ask must refuse **and** not remember, for the reason
     /// [`Confirmer::confirm_run`] gives.
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision;
+
+    /// [`Confirmer::confirm_write`], and with the answer who gave it: the mode, which asked nobody,
+    /// or a person who was asked (TRUST-4, TRACE-7).
+    ///
+    /// One call rather than a question and then a read of the mode, so the answer and who gave it
+    /// come from one look at the mode. A mode changed between a read made before the question and
+    /// the look the confirmer makes would otherwise leave a write compared as if nobody was asked
+    /// after a person was. A confirmer that is not a mode, and a wrapper that does not forward
+    /// this, answers `None`, and the caller falls back on the mode it read before asking.
+    fn confirm_write_noting_the_mode(
+        &mut self,
+        request: &WriteRequest,
+    ) -> (WriteDecision, Option<WhoAnswered>) {
+        (self.confirm_write(request), None)
+    }
 
     /// Ask about running a pipeline. Implementations must default to refusal when they cannot ask.
     ///
@@ -3647,6 +3688,13 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         self.timing(|inner| inner.confirm_write(request))
+    }
+
+    fn confirm_write_noting_the_mode(
+        &mut self,
+        request: &WriteRequest,
+    ) -> (WriteDecision, Option<WhoAnswered>) {
+        self.timing(|inner| inner.confirm_write_noting_the_mode(request))
     }
 
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {

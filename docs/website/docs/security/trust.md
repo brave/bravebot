@@ -241,7 +241,9 @@ over a string the planner chose rather than one you typed.
 **A yes is not spent if the file may have changed while you were asked.** If the file changed, or a
 `run` line started while the question was open, the yes is thrown away, the file stays quarantined
 and the read says so. A program can rewrite files its line does not name, so the text you read in the
-preview may no longer be what the file holds.
+preview may no longer be what the file holds. Where the permission mode vouches in your place, nobody
+read a preview, so only a change to the file throws the vouch away, and a `run` line that started
+meanwhile does not.
 
 ### `/add-dir`
 
@@ -369,6 +371,13 @@ line itself wins, as it would in a shell. A session with no directory of its own
 program finds the name absent rather than pointing somewhere that is not there. The planner is told
 the same path at the same point, since a variable nothing knows to read is a variable nothing reads.
 `$TMPDIR` for such a program stays whatever it was.
+
+A delegate is given a directory of its own inside the session's, named from its number, made as it
+starts and removed when it ends, and `BRAVEBOT_SCRATCH_DIR` for the programs it runs holds that
+one, so delegates started together do not overwrite each other's files. Where one cannot be made the
+delegate keeps the session's, and says so to the model. Reach is unchanged: a delegate can still
+name the directory of another delegate by its path, and a stage of a delegate writes the session's
+directory as any stage does.
 
 The reason this exists is that the alternatives are worse. A file in the project is one a build, a
 test run, a `git add -A` and a reviewer each have to deal with, and one somebody has to remember to

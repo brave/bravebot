@@ -607,11 +607,21 @@ impl Unasked {
 
     /// The answer to a write, or `None` where a person is to be asked. See [`Confining::confirm_write`].
     pub fn write(&self, request: &WriteRequest) -> Option<WriteDecision> {
+        self.write_noting_the_mode(request)
+            .map(|(answer, _)| answer)
+    }
+
+    /// The answer to a write and the name of the mode that gave it, read from one look at the mode.
+    /// `None` where a person is to be asked.
+    pub fn write_noting_the_mode(
+        &self,
+        request: &WriteRequest,
+    ) -> Option<(WriteDecision, &'static str)> {
         let creates_a_credential = !request.credentials.is_empty();
         match self.mode.get() {
-            PermissionMode::Plan => Some(WriteDecision::reject()),
+            mode @ PermissionMode::Plan => Some((WriteDecision::reject(), mode.name())),
             mode if mode.answers_a_write_unasked(creates_a_credential, request.protected) => {
-                Some(WriteDecision::approve())
+                Some((WriteDecision::approve(), mode.name()))
             }
             _ => None,
         }
@@ -824,9 +834,21 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// reached, in this mode as in every other. Neither yes remembers anything, since no prompt was
     /// drawn for a key to reach.
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
-        match self.unasked.write(request) {
-            Some(answer) => answer,
-            None => self.asking().confirm_write(request),
+        self.confirm_write_noting_the_mode(request).0
+    }
+
+    /// The answer and who gave it, from one look at the mode: the mode where it answers, and a
+    /// person where the question went to the confirmer behind it (TRUST-4, MODE-8).
+    fn confirm_write_noting_the_mode(
+        &mut self,
+        request: &WriteRequest,
+    ) -> (WriteDecision, Option<crate::confirm::WhoAnswered>) {
+        match self.unasked.write_noting_the_mode(request) {
+            Some((answer, mode)) => (answer, Some(crate::confirm::WhoAnswered::Mode(mode))),
+            None => (
+                self.asking().confirm_write(request),
+                Some(crate::confirm::WhoAnswered::Person),
+            ),
         }
     }
 
@@ -1820,6 +1842,64 @@ mod tests {
         assert_eq!(
             confining.confirm_write(&a_protected_write()),
             WriteDecision::approve()
+        );
+    }
+
+    /// A confirmer asked to say who answered a write names the mode where the mode answered and a
+    /// person where the question went to the confirmer behind it, from one look at the mode. The
+    /// regression it rejects is a confirmer that reports nothing, which leaves the caller to guess
+    /// from the mode it read before the question and to compare a person's yes as if nobody was
+    /// asked after the mode changed in between (TRUST-4, MODE-8).
+    #[test]
+    fn a_write_names_who_answered_it_from_one_look_at_the_mode() {
+        use crate::confirm::WhoAnswered;
+        let mut approving = crate::confirm::ApproveWrites;
+        for (mode, who) in [
+            (PermissionMode::Bypass, WhoAnswered::Mode("bypass")),
+            (
+                PermissionMode::AcceptEdits,
+                WhoAnswered::Mode("accept-edits"),
+            ),
+            (PermissionMode::Ask, WhoAnswered::Person),
+        ] {
+            let mut confining = Confining::new(&mut approving, mode, false);
+            assert_eq!(
+                confining.confirm_write_noting_the_mode(&a_write()),
+                (WriteDecision::approve(), Some(who)),
+                "{mode:?}"
+            );
+        }
+        // A protected write is left to a person in accept-edits, so it names no mode.
+        let mut confining = Confining::new(&mut approving, PermissionMode::AcceptEdits, false);
+        let protected = WriteRequest {
+            protected: true,
+            ..a_write()
+        };
+        assert_eq!(
+            confining.confirm_write_noting_the_mode(&protected).1,
+            Some(WhoAnswered::Person)
+        );
+        // A confirmer that is not a mode says nothing, and the caller falls back on its own read.
+        assert_eq!(
+            crate::confirm::ApproveWrites
+                .confirm_write_noting_the_mode(&a_write())
+                .1,
+            None
+        );
+    }
+
+    /// Reads only the mode and the flags the policy layer derived, never a byte of the write, so
+    /// this is the one place a plan mode refusal is also credited to the mode.
+    #[test]
+    fn plan_mode_names_itself_for_the_refusal_of_a_write() {
+        let mut approving = crate::confirm::ApproveWrites;
+        let mut confining = Confining::new(&mut approving, PermissionMode::Plan, false);
+        assert_eq!(
+            confining.confirm_write_noting_the_mode(&a_write()),
+            (
+                WriteDecision::reject(),
+                Some(crate::confirm::WhoAnswered::Mode("plan"))
+            )
         );
     }
 

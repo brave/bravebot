@@ -139,7 +139,8 @@ so the output of other running commands keeps its label.
 
 **The approval of a write that is asked about.** The approval is bound to the path's stamp (its
 revision and the number of `run` lines started), taken in the same capture that drew the preview
-and compared whole when the write enters, as [TRUST-4](../trust-map.md#TRUST-4) says. It applies
+and compared when the write enters, as [TRUST-4](../trust-map.md#TRUST-4) says. Where a person was
+asked, the whole stamp is compared. It applies
 to a write of `contents`, to a write through a reference, to a picture or a PDF
 ([WRITE-9](#WRITE-9)), and to the write steps of a manifest run; `edit_file`
 ([EDIT-1](edit-file.md#EDIT-1)) and `download_url` ([DOWNLOAD-2](download-url.md#DOWNLOAD-2)) do
@@ -147,8 +148,23 @@ the same through the same comparison. If the file was written, or a `run` line s
 preview was drawn, a yes writes nothing and leaves the file as it was. The planner is told that the
 path may have changed while the user was being asked, so nothing was written, and to read it again
 if its contents matter and repeat the call. The cost is one more question or one refused write after
-any `run` line that started while the question was open, even one that wrote nothing, as for the
-exception above. No byte of the file is read for the comparison.
+any `run` line that started while a person's question was open, even one that wrote nothing, as for
+the exception above.
+
+A write nobody was asked about, because the permission mode answered it or a rule or the trust map
+allowed it without a question, shows a preview to nobody. Its stamp is taken the same way and only
+the revision is compared, so a `run` line another delegate started between the stamp and the write
+voids nothing, and a write over a file whose revision moved is refused all the same. A write that
+the mode leaves to a person, such as one that creates a credential or lands on a protected path, is
+asked about and compares the whole stamp. Whether a person was asked is the word of the confirmer
+that put the question, taken from one look at the mode with the answer, so a mode changed while the
+question was put does not change how the write is compared. A new file in the session's own
+directory ([TRUST-14](../trust-map.md#TRUST-14)) is compared as any other write: by revision alone
+where nobody was asked, whole where a person was, and a file that appears at the path after the
+stamp refuses the write. The refusal of a write nobody was asked about tells the
+planner that the file may have been written, or a command started, since the write was prepared,
+that no approval question was put, and to repeat the call; it does not say the user was asked. No
+byte of the file is read for either comparison.
 
 `verified-by: bravebot_agent::turn::a_run_that_started_while_a_write_was_being_asked_voids_the_yes`
 `verified-by: bravebot_agent::turn::a_write_is_made_when_no_run_started_while_it_was_being_asked`
@@ -159,6 +175,18 @@ exception above. No byte of the file is read for the comparison.
 `verified-by: bravebot_agent::workspace::an_endorsed_write_is_refused_when_a_program_started_after_the_read`
 `verified-by: bravebot_agent::workspace::an_endorsed_write_proceeds_when_no_program_started_after_the_read`
 `verified-by: bravebot_agent::workspace::a_program_started_before_the_read_does_not_void_the_write`
+`verified-by: bravebot_core::file_authority::a_stamp_holds_by_revision_and_by_run_lines_only_where_a_person_was_asked`
+`verified-by: bravebot_agent::workspace::a_run_line_voids_only_a_write_a_person_was_asked_about_and_the_revision_voids_both`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_a_write_does_not_void_it`
+`verified-by: bravebot_agent::turn::a_run_line_a_sibling_starts_does_not_void_a_delegates_unasked_write`
+`verified-by: bravebot_agent::turn::a_run_line_a_sibling_starts_does_not_void_a_new_file_in_the_sessions_own_directory`
+`verified-by: bravebot_agent::turn::a_file_that_appears_in_the_sessions_own_directory_after_the_stamp_is_not_overwritten`
+`verified-by: bravebot_agent::turn::a_mode_moved_to_asking_before_the_confirmer_looks_leaves_the_write_compared_as_asked`
+`verified-by: bravebot_agent::turn::a_mode_moved_to_bypass_before_the_confirmer_looks_leaves_the_write_compared_by_revision`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_a_protected_write_was_being_asked_voids_the_yes_in_accept_edits`
+`verified-by: bravebot_agent::turn::an_unasked_write_over_a_file_whose_revision_moved_is_refused_without_saying_a_person_was_asked`
+`verified-by: bravebot_agent::workspace::a_refusal_of_a_write_nobody_was_asked_about_does_not_say_the_user_was_asked`
+`verified-by: bravebot_agent::manifest::a_run_that_started_while_the_mode_answered_a_planned_write_does_not_void_it`
 
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_the_file_it_was_read_from_asks_nobody_and_changes_nothing`
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_the_file_was_rewritten_is_asked_about_and_restores_it`
@@ -340,6 +368,7 @@ a PNG is not saved under a name such as `run.sh`.
 `verified-by: bravebot_agent::turn::a_picture_slot_is_written_as_the_file_it_encodes_after_the_person_approves`
 `verified-by: bravebot_agent::turn::a_picture_from_a_vouched_for_file_is_written_at_the_label_its_file_had`
 `verified-by: bravebot_agent::turn::a_picture_write_the_person_refuses_writes_nothing`
+`verified-by: bravebot_agent::turn::a_run_that_started_while_the_mode_answered_a_picture_write_does_not_void_it`
 `verified-by: bravebot_agent::turn::a_picture_is_written_only_to_a_path_with_the_extension_its_type_has`
 `verified-by: bravebot_agent::turn::a_picture_is_not_written_to_a_name_the_planner_was_never_shown`
 `verified-by: bravebot_agent::mcp::a_picture_a_server_returns_can_be_written_to_a_file_the_person_approves`

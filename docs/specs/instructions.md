@@ -286,16 +286,20 @@ clock, so it differs on every start. A path in the prompt would make the first r
 process write the whole prompt to the cache again and read none of it, which is every one-shot run
 and every resumed session. Two sessions that differ only in their directory compose the same prompt.
 
+The sentence about the directory depends on who reads the prompt. A session's prompt says the session has a directory of its own. A delegate's prompt says the delegate has a directory to itself, that no other delegate writes there, and that it is removed when the delegate ends. The prompt of a delegate that keeps the session's directory says other delegates write there as well and that every file name is to carry a unique id. None of the three holds a path, so the delegates of one session compose one prompt, and the session's sentence is the same in every session.
+
 The message is a notice, so it is not drawn as something the person said and no cut falls in front
 of it. It is not part of a snapshot, so a session restored in another process says its new
 directory after the one in its record, and the message says it replaces any path an earlier one
-gave. A delegate is told as well, in its own conversation. A compaction that takes the message out
+gave. A delegate is told as well, in its own conversation, and what it is told is the directory it was given: one of its own inside the session's, and not the session's ([trust-map.md](trust-map.md)). Its message says the directory is the delegate's alone and is removed when the delegate ends, and the path in it is built from the delegate's number, which the driver assigns. A delegate that could not be given one of its own is told the session's, and its message says the other delegates of the session write there as well and that every file name is to carry a unique id. A delegate that starts delegates, and a delegate in a checkout, are told the same way. A compaction that takes the message out
 of the request puts its words at the end of the summary, as it does a delegate's task
 ([COMPACT-19](compaction.md#COMPACT-19)), so the request names the directory after every cut.
 
 One of them carries an imperative, and those are the terms on which one is admitted here: gated on
 what the probe found, and naming the one case rather than stating a preference. The session's own
-directory is stated with what to put in it. The rest are facts alone and nothing is asked of the
+directory is stated with what to put in it, and the instruction to put a unique id in every file
+name is stated only to a delegate that keeps the session's directory, which is the one case where
+another delegate may write the same name. The rest are facts alone and nothing is asked of the
 planner on their account.
 
 What an installed GitHub CLI is for is said on the same terms, and to the turn a person is watching
@@ -354,6 +358,15 @@ part of the project and writes one into the project instead, which is the file a
 a reviewer each have to deal with. Saying nothing where there is no such directory is the same
 argument the other way: a path to a directory that is not there costs a turn the run that finds out.
 
+A delegate is told a directory of its own because the delegates of one call run at the same time. Told
+the session's, two of them can write the same file name, and a delegate that read its file back could
+print the text another delegate wrote under that name. A directory for each
+removes the shared names without relying on a model to follow an instruction. The instruction to put
+a unique id in every file name is kept for the case where a directory of its own could not be made,
+because there the names are shared again. The directory's name comes from the delegate's number and
+the path is placed in the delegate's own conversation, so no word a planner or a delegate wrote
+reaches it and nothing the delegate wrote reaches the planner by this route.
+
 The GitHub CLI is the one whose fact would change nothing on its own, which is why the imperative
 goes with it. A URL arrives, there is a tool for URLs, and taking it fetches a whole page to read a
 fraction of it. The saving is the bytes and not the round: unvouched `run` output is `(U,priv)` just
@@ -397,6 +410,12 @@ it is the planner's.
 `verified-by: bravebot_agent::preamble::two_sessions_that_differ_only_in_their_own_directory_compose_one_prompt`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_has_nothing_to_name`
 `verified-by: bravebot_agent::turn::the_sessions_directory_is_named_once_in_the_conversation_and_not_in_the_system_prompt`
+`verified-by: bravebot_agent::turn::each_delegate_of_one_call_is_given_its_own_scratch_directory`
+`verified-by: bravebot_agent::turn::eight_delegates_of_one_call_each_read_back_the_text_they_wrote_to_body_md`
+`verified-by: bravebot_agent::turn::a_delegates_own_directory_is_named_once_in_every_request_across_compactions`
+`verified-by: bravebot_agent::turn::a_delegate_whose_directory_cannot_be_made_is_given_the_sessions_and_told_it_is_shared`
+`verified-by: bravebot_agent::turn::a_delegate_of_a_session_with_no_scratch_directory_is_told_nothing_of_one_and_still_starts`
+`verified-by: bravebot_agent::preamble::the_system_prompt_says_whose_scratch_directory_it_is_for_a_session_and_each_kind_of_delegate`
 `verified-by: bravebot_agent::conversation::the_scratch_note_survives_compaction_once`
 `verified-by: bravebot_agent::conversation::a_scratch_note_the_cut_leaves_in_place_is_not_sent_again`
 `verified-by: bravebot_agent::preamble::a_session_with_no_directory_of_its_own_is_told_of_none`

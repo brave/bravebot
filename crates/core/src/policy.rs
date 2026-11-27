@@ -9133,6 +9133,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// `answered_by` is the name of the mode that answered, or `None` for a person. The rule
     /// written is the same either way. The trail credits the user with naming the file only for
     /// the second (TRACE-7).
+    ///
+    /// The count of `run` lines is compared only for a person's answer, as it is for a write
+    /// (TRUST-4): only a person read the preview, and a mode that vouches for a path does so
+    /// whatever the file holds, so a line a sibling delegate started meanwhile changes nothing it
+    /// answered about. The revision is compared for both.
     pub fn vouch_if_unchanged(
         &mut self,
         path: &str,
@@ -9140,7 +9145,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         answered_by: Option<&'static str>,
     ) -> bool {
         let vouched = self.capture_files(|policy, capture| {
-            if capture.stamp_of(path) != shown_at {
+            if !shown_at.still_holds(capture.stamp_of(path), answered_by.is_none()) {
                 return false;
             }
             match answered_by {
@@ -10763,6 +10768,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// is fixed text and names nothing the call carried (TRACE-2).
     pub fn refuse_unapproved_write(&mut self, call: &str) {
         self.refuse_unapproved(call, "write", "nothing was written");
+    }
+
+    /// Record that a write was refused because the file may have been written, or a `run` line
+    /// started, after the write was prepared, so nothing was written (TRACE-1, TRUST-4).
+    ///
+    /// `person_asked` is whether a person was put the question in between. The two sentences differ
+    /// only there, so a write nobody was asked about is never recorded as a person's no or as an
+    /// answer a person gave. `call` is the tool, or a plan's step and its tool. The sentence is
+    /// fixed text and names nothing the call carried (TRACE-2).
+    pub fn refuse_stale_write(&mut self, call: &str, person_asked: bool) {
+        let asked = match person_asked {
+            true => "the file may have changed while a person was being asked",
+            false => "the file may have changed since the write was prepared and nobody was asked",
+        };
+        let _ = self.deny(
+            "stale_write",
+            Principle::Capability,
+            format!("{call}: {asked}, so nothing was written"),
+        );
     }
 
     /// Record that a fetch was put to the person and not approved, so nothing was fetched
@@ -26601,6 +26625,48 @@ five
             );
         }
 
+        /// TRACE-1, TRUST-4: a write refused because the file may have changed since it was
+        /// prepared is a refusal under `stale_write`, in fixed words that say whether a person was
+        /// asked, and the turn does not end as clean. The regression it rejects is a stale refusal
+        /// that leaves no entry, and one that says a person was asked of a write nobody was asked
+        /// about.
+        #[test]
+        fn a_write_refused_as_stale_is_a_refusal_that_says_whether_a_person_was_asked() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_stale_write("write_file", false);
+            turn.refuse_stale_write("step 2: write_file", true);
+            assert!(!turn.finish(), "a turn with a stale write ended clean");
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [
+                    (
+                        "stale_write",
+                        Principle::Capability,
+                        "write_file: the file may have changed since the write was prepared and nobody was asked, so nothing was written"
+                    ),
+                    (
+                        "stale_write",
+                        Principle::Capability,
+                        "step 2: write_file: the file may have changed while a person was being asked, so nothing was written"
+                    ),
+                ]
+            );
+        }
+
         /// TRACE-1, WEBSEARCH-2: a web search put to the person and not approved is a refusal under
         /// `approval`, naming the tool, in fixed words that carry nothing the query held (TRACE-2),
         /// and the turn does not end as clean. The regression it rejects is a no that leaves the
@@ -27654,6 +27720,35 @@ five
             assert!(
                 trail.contains("changed while the question was being answered"),
                 "nothing says why a file the person trusted came back quarantined: {trail}"
+            );
+        }
+
+        /// A `run` line that starts while the mode's answer is being given does not void it: nobody
+        /// was shown a preview, so the line cannot have made one untrue, and the rule the mode
+        /// writes is the same whatever the file holds. The trail credits the mode. Rejects comparing
+        /// the whole stamp for a mode's answer, which refuses a vouch under bypass because a
+        /// sibling delegate started a line.
+        #[test]
+        fn a_vouch_a_mode_answered_is_spent_after_a_program_started_beside_it() {
+            let mut sink = RecordingSink::new();
+            let (spent, trusted) = {
+                let mut policy = open_policy(&mut sink);
+                let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+                policy.file_authority().note_program_started();
+                (
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at, Some("bypass")),
+                    policy.trust().is_trusted("vendor/lib.js"),
+                )
+            };
+            assert!(
+                spent,
+                "a mode's answer was voided by a line started beside it"
+            );
+            assert!(trusted, "the mode's vouch was not written");
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains("bypass mode answered the offer to vouch"),
+                "the mode was not credited: {trail}"
             );
         }
     }

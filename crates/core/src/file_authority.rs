@@ -19,6 +19,9 @@ use crate::trust::TrustStore;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 #[derive(Debug)]
 struct State {
     trust: TrustStore,
@@ -88,9 +91,45 @@ impl State {
 /// What the authority knew of one path at one moment: its revision, and how many `run` lines had
 /// started. Numbers only; two stamps are compared for equality and nothing else is read from them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub struct Stamp {
     revision: u64,
     programs: u64,
+}
+
+// What a contract may say about a stamp: its two numbers. Spec functions exist only for Verus, so a
+// build has neither, and neither is a function of `Stamp`'s own.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub closed spec fn spec_revision_of(s: &Stamp) -> u64 {
+    s.revision
+}
+
+pub closed spec fn spec_programs_of(s: &Stamp) -> u64 {
+    s.programs
+}
+}
+
+#[cfg_attr(verus_keep_ghost, verus_verify)]
+impl Stamp {
+    /// Whether a write prepared at `self` may go ahead where the path is stamped `now`.
+    ///
+    /// The revision must be as it was in every case: a write over a file the authority was told
+    /// of a change to is refused. The count of `run` lines is compared only where `person_asked`,
+    /// since only then did somebody see a preview that a program starting meanwhile may have made
+    /// untrue (TRUST-4). Where nobody was asked, a `run` line another delegate started between the
+    /// stamp and the write voids nothing. Numbers are compared and nothing else is read.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r ==> spec_revision_of(&self) == spec_revision_of(&now),
+            (r && person_asked) ==> spec_programs_of(&self) == spec_programs_of(&now),
+            (spec_revision_of(&self) == spec_revision_of(&now) && !person_asked) ==> r,
+            (spec_revision_of(&self) == spec_revision_of(&now)
+                && spec_programs_of(&self) == spec_programs_of(&now)) ==> r,
+    ))]
+    pub fn still_holds(self, now: Stamp, person_asked: bool) -> bool {
+        self.revision == now.revision && (!person_asked || self.programs == now.programs)
+    }
 }
 
 #[derive(Debug)]
@@ -613,6 +652,38 @@ impl Drop for FileEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TRUST-4: the revision is compared for every write, and the count of `run` lines only where a
+    /// person was asked. The four cases are told apart by moving the revision and the count
+    /// separately, so a comparison of either alone, of both for everyone, or of neither for the
+    /// unasked case each fails one row.
+    #[test]
+    fn a_stamp_holds_by_revision_and_by_run_lines_only_where_a_person_was_asked() {
+        let authority = FileAuthority::new(TrustStore::new("/work"));
+        let stamped = authority.stamp_of("a.txt");
+        assert!(stamped.still_holds(authority.stamp_of("a.txt"), true));
+        assert!(stamped.still_holds(authority.stamp_of("a.txt"), false));
+
+        authority.note_program_started();
+        let after_a_line = authority.stamp_of("a.txt");
+        assert!(
+            !stamped.still_holds(after_a_line, true),
+            "a line started while a person was asked did not void the answer"
+        );
+        assert!(
+            stamped.still_holds(after_a_line, false),
+            "a line started voided a write nobody was asked about"
+        );
+
+        authority.publish("a.txt", Integrity::Untrusted);
+        let after_a_write = authority.stamp_of("a.txt");
+        for person_asked in [true, false] {
+            assert!(
+                !stamped.still_holds(after_a_write, person_asked),
+                "a moved revision did not void the write, person_asked {person_asked}"
+            );
+        }
+    }
 
     /// A capture that had to wait for another guard records how long, and one that did not records
     /// nothing. Rejects an implementation that times every capture (a figure for a free boundary
