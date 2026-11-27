@@ -567,7 +567,10 @@ for the changes:
    commit of its own.
 3. Run the checks the fix reaches (`... check <pr>`, and a gate from step 6 the fix voids, such as a
    test demonstration it touches), not the whole suite. A test that fails under load is run alone
-   before anything is decided.
+   before anything is decided. `check` prints `review feedback arrived while checking` when a
+   reviewer writes while it runs, and exits 3 when nothing failed. When it is run in the background,
+   read its output at each look and not only its end: on that line, run `... comments <pr>` and add
+   the new comments to this round before pushing.
 4. `... push <pr>`, then post each reply with `... reply <pr> --thread <id> --body-file <file>`, naming
    a commit the pull request holds. Never resolve a thread. Update the body (the item list, the
    decisions and the test plan) when the state is open.

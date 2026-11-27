@@ -215,7 +215,11 @@ of its commits unsigned than it has now.
    `check-locales`, `check-security` or `check-versions` where a spec, catalog, workflow or
    manifest changed. A file no rule names (`ui/`, website, prose) runs nothing and leaves the
    checks to CI. Pass make targets as `--target check-spec` to run those instead; do not widen it to `check-all-local`,
-   which CI repeats.
+   which CI repeats. While the checks run, `check` looks at the review comments every 30 seconds and prints
+   `review feedback arrived while checking` as soon as a thread comment or a review appears that was not
+   there when it began. It exits 3 when that happened and no check failed, and 1 when a check failed. On
+   either, run `... comments <pr>` and answer what it prints (step 4) before pushing. A session that runs
+   `check` in the background reads its output while it waits, so it sees that line before the checks end.
 7. `... push <pr>`. When GitHub refuses the push because ssh offered a key without access, it
    retries once with each other key `ssh-add -L` lists and reports the one that worked. With no
    usable key it prints GitHub's refusal. Once it has pushed, or printed `nothing to push`, post

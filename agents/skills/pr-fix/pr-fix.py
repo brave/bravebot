@@ -15,7 +15,10 @@
                                         post the text of F under review thread ID, or as a comment on
                                         the pull request without --thread
     pr-fix.py check <pr> [--target T]   run the checks the changed files call for, or the make
-                                        targets named, printing only a failure
+                                        targets named, printing only a failure; while they run it
+                                        prints a line as soon as a review thread, comment or review
+                                        appears that was not there when it began (exit 3 when nothing
+                                        failed; `comments` prints it)
     pr-fix.py push <pr>                 push over the head `start` fetched, and nothing newer; refuses to
                                         make a signed pull request unsigned
     pr-fix.py review <pr>               ask netzenbot-reviewer to review the pull request again
@@ -63,6 +66,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -266,6 +270,12 @@ def resume(pr):
 
 
 def check(pr, targets):
+    """Run the local checks, and say as soon as a reviewer writes while they run.
+
+    A check can take minutes, and a session that waits on it reads nothing else until it ends. Review
+    feedback that arrives meanwhile needs an answer whether or not the check passes, so a line naming it
+    is printed when it appears, and the exit code is 3 when nothing failed.
+    """
     tree = pr.tree
     if rebase_dir(tree):
         die(f"finish the rebase first: `{SCRIPT} continue {pr.number}`")
@@ -273,7 +283,15 @@ def check(pr, targets):
     if not commands:
         print("nothing changed needs a local check; CI runs the rest")
         return 0
-    return pr_worktree.run_commands(tree, commands, "pr-fix-check.log")
+    stop, arrived = threading.Event(), threading.Event()
+    watcher = threading.Thread(target=watch_feedback, args=(pr.number, stop, arrived), daemon=True)
+    watcher.start()
+    try:
+        failed = pr_worktree.run_commands(tree, commands, "pr-fix-check.log")
+    finally:
+        stop.set()
+        watcher.join(timeout=POLL_SECONDS)
+    return failed or (3 if arrived.is_set() else 0)
 
 
 def push(pr):
@@ -361,13 +379,13 @@ def failure_log(link):
     return tail(done.stdout or done.stderr)
 
 
-def review_data(number, timeout=None):
+def review_data(number, timeout=None, check=True):
     """The review threads and reviews of a pull request, as GitHub's GraphQL API answers."""
     owner, name = BASE_REPO.split("/")
     return json.loads(
         run(
             "gh", "api", "graphql", "-f", f"query={THREADS}", "-F", f"owner={owner}", "-F", f"name={name}",
-            "-F", f"number={number}", timeout=timeout,
+            "-F", f"number={number}", timeout=timeout, check=check,
         ).stdout
     )
 
@@ -395,6 +413,31 @@ def waiting_feedback(number, until):
         return feedback_ids(review_data(number, timeout=max(until - time.monotonic(), 1)))
     except subprocess.TimeoutExpired:
         return None
+
+
+def look_for_feedback(number):
+    """`feedback_ids` for the pull request now, or None when GitHub does not answer in time or at all."""
+    try:
+        # A failed look prints nothing, since the check's own output is what the session reads.
+        return feedback_ids(review_data(number, timeout=POLL_SECONDS, check=False))
+    except (subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return None
+
+
+def watch_feedback(number, stop, arrived):
+    """Until `stop` is set, look for review feedback every POLL_SECONDS, and print one line and set `arrived` when
+    some appears that was not there at the first look. A look GitHub does not answer is skipped."""
+    seen = look_for_feedback(number)
+    while seen is None and not stop.wait(POLL_SECONDS):
+        seen = look_for_feedback(number)
+    while not stop.wait(POLL_SECONDS):
+        now = look_for_feedback(number)
+        fresh = set() if now is None else now - seen
+        if fresh:
+            print(f"review feedback arrived while checking: {len(fresh)} new comment(s) or review(s); "
+                  f"`{SCRIPT} comments {number}` prints them", flush=True)
+            arrived.set()
+            return
 
 
 def ci(pr, until):
