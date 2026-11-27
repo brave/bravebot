@@ -565,12 +565,14 @@ impl Served {
                 info["inspection"] = json!(self.inspection);
                 Ok(info)
             }
-            _ => match (self.names.get(&connection), self.ceiling_of(connection)) {
+            _ => match (self.ceiling_of(connection), self.names.get(&connection)) {
                 // A connection held to a ceiling is a device's, which may not answer a question a
-                // device is not offered.
-                (Some(name), Some(_)) => self.bridge.dispatch_as_device(name, request),
-                (Some(name), None) => self.bridge.dispatch_as(name, request),
-                (None, _) => self.bridge.dispatch(request),
+                // device is not offered, whether or not it has a name.
+                (Some(_), name) => self
+                    .bridge
+                    .dispatch_as_device(name.map_or("a device", String::as_str), request),
+                (None, Some(name)) => self.bridge.dispatch_as(name, request),
+                (None, None) => self.bridge.dispatch(request),
             },
         }
     }
@@ -2600,14 +2602,20 @@ mod tests {
         host.answers.clear();
     }
 
-    /// A held connection's reply to a question it is not offered is refused even when the host has
-    /// recorded nothing withheld, as when the reply arrives before the view that withholds the
-    /// question is sent. The question stays waiting, and a connection held to no ceiling answers it.
-    #[test]
-    fn a_held_connections_reply_to_a_question_it_is_not_offered_is_refused_unrecorded() {
-        use crate::running::Running;
-        use crate::turn::{Question, Reply};
-        use bravebot_agent::confirm::Decision;
+    /// A host whose session `handle` has a turn waiting on question 3, a write only a connection
+    /// held to no ceiling may answer, with the turn's end of the answers and its pending question.
+    /// Connection 1 is held to a ceiling and connection 2 is not; both are attached with every
+    /// answer, and the session's view has started.
+    struct Waiting {
+        host: Served,
+        handle: String,
+        receiver: std::sync::mpsc::Receiver<crate::turn::Reply>,
+        pending: crate::turn::Pending,
+        _clients: Vec<BufReader<UnixStream>>,
+        _directory: tempfile::TempDir,
+    }
+
+    fn a_host_waiting_on_a_local_only_write() -> Waiting {
         let (ceiling, _) = a_ceiling_and_a_wider_scope();
         let directory = tempfile::tempdir().unwrap();
         let mut host = Served::new(Setup {
@@ -2616,19 +2624,19 @@ mod tests {
             inspection: "refused",
         });
         let (answers, receiver) = std::sync::mpsc::channel();
-        let pending = Arc::new(Mutex::new(Some(Question {
+        let pending: crate::turn::Pending = Arc::new(Mutex::new(Some(crate::turn::Question {
             id: 3,
             kind: Kind::Write,
             local_only: true,
         })));
         let handle = host.bridge.open_running_for_test(
             directory.path(),
-            Running {
+            crate::running::Running {
                 cancel: bravebot_core::cancel::Cancel::new(),
                 answers,
                 pending: Arc::clone(&pending),
                 target: 7,
-                finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                finished: Arc::new(AtomicBool::new(false)),
                 interjections: None,
                 actors: Default::default(),
             },
@@ -2638,26 +2646,103 @@ mod tests {
             .lock()
             .unwrap()
             .insert(handle.clone(), BTreeSet::from([1, 2]));
-        let _held = a_reading_client(&host.output, 1, &Answer::ALL, Some(ceiling));
-        let _free = a_reading_client(&host.output, 2, &Answer::ALL, None);
+        let mut clients = Vec::new();
+        for (connection, ceiling) in [(1, Some(ceiling)), (2, None)] {
+            clients.push(a_reading_client(
+                &host.output,
+                connection,
+                &Answer::ALL,
+                ceiling,
+            ));
+            host.answers.insert(connection, Answer::ALL.to_vec());
+        }
+        host.viewed.lock().unwrap().insert(handle.clone());
+        let kinds = host.answerable_by(&handle, &BTreeSet::from([1, 2]));
+        host.bridge.set_answerable(&handle, &kinds).unwrap();
+        Waiting {
+            host,
+            handle,
+            receiver,
+            pending,
+            _clients: clients,
+            _directory: directory,
+        }
+    }
+
+    /// A held connection's reply to a question it is not offered is refused even when the host has
+    /// recorded nothing withheld, as when the reply arrives before the view that withholds the
+    /// question is sent, and even when the connection has no name. The question stays waiting, and
+    /// a connection held to no ceiling answers it.
+    #[test]
+    fn a_held_connections_reply_to_a_question_it_is_not_offered_is_refused_unrecorded() {
+        use crate::turn::Reply;
+        use bravebot_agent::confirm::Decision;
+        let mut waiting = a_host_waiting_on_a_local_only_write();
+        let host = &mut waiting.host;
         host.names.insert(1, "phone".into());
         host.names.insert(2, "window".into());
         let reply = Request {
             id: 1,
             method: "confirm.reply".into(),
-            params: json!({"session": handle, "request": 3, "decision": "approve"}),
+            params: json!({"session": waiting.handle, "request": 3, "decision": "approve"}),
         };
 
         let refused = host.dispatch(1, &Answer::ALL, &reply).unwrap_err();
         assert_eq!(refused.code, ErrorCode::NotAllowed);
-        assert!(receiver.try_recv().is_err(), "the answer reached the turn");
-        assert!(pending.lock().unwrap().is_some());
+        assert!(
+            waiting.receiver.try_recv().is_err(),
+            "the answer reached the turn"
+        );
+        assert!(waiting.pending.lock().unwrap().is_some());
+
+        host.names.remove(&1);
+        let refused = host.dispatch(1, &Answer::ALL, &reply).unwrap_err();
+        assert_eq!(
+            refused.code,
+            ErrorCode::NotAllowed,
+            "an unnamed device answered"
+        );
+        assert!(waiting.pending.lock().unwrap().is_some());
 
         host.dispatch(2, &Answer::ALL, &reply).unwrap();
         assert!(matches!(
-            receiver.try_recv(),
+            waiting.receiver.try_recv(),
             Ok(Reply::Write(Decision::Approve))
         ));
+        host.responded();
+    }
+
+    /// When the last connection held to no ceiling that could answer a question a device is not
+    /// offered goes, the host refuses the question, so the turn does not wait on the device left,
+    /// which holds every answer. While another such connection stays, the question waits.
+    #[test]
+    fn the_host_refuses_a_local_only_question_when_the_last_local_connection_goes() {
+        use crate::turn::Reply;
+        use bravebot_agent::confirm::Decision;
+        let mut waiting = a_host_waiting_on_a_local_only_write();
+        let host = &mut waiting.host;
+        let _other = a_reading_client(&host.output, 3, &[Answer::Confirm], None);
+        host.owners
+            .lock()
+            .unwrap()
+            .get_mut(&waiting.handle)
+            .unwrap()
+            .insert(3);
+        host.answers.insert(3, vec![Answer::Confirm]);
+
+        host.lose(2);
+        assert!(
+            waiting.receiver.try_recv().is_err(),
+            "refused while a local connection stayed"
+        );
+        assert!(waiting.pending.lock().unwrap().is_some());
+
+        host.lose(3);
+        assert!(matches!(
+            waiting.receiver.try_recv(),
+            Ok(Reply::Write(Decision::Reject))
+        ));
+        assert!(waiting.pending.lock().unwrap().is_none());
         host.responded();
     }
 

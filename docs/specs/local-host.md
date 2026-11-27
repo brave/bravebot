@@ -368,5 +368,6 @@ A file name is not withheld for what it is. Where a tool's activity or a write q
 `verified-by: bravebot_ui_bridge::device_view::each_question_a_device_is_not_offered_is_withheld`
 `verified-by: bravebot_ui_bridge::host::a_closed_session_leaves_nothing_withheld_stopped_or_approved`
 `verified-by: bravebot_ui_bridge::host::a_held_connections_reply_to_a_question_it_is_not_offered_is_refused_unrecorded`
+`verified-by: bravebot_ui_bridge::host::the_host_refuses_a_local_only_question_when_the_last_local_connection_goes`
 `verified-by: bravebot_ui_bridge::control_tests::a_devices_reply_to_a_question_it_is_not_offered_is_refused_by_the_bridge`
 `verified-by: bravebot_ui_bridge::answering_tests::a_device_cannot_answer_a_question_it_is_not_offered_however_soon_it_replies`
