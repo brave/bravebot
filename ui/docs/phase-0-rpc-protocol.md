@@ -1546,6 +1546,8 @@ a client that reloads on receipt sees the same thing on disk.
 { "event": "turn.error", "session": "s1", "data": {
   "turn": 5, "kind": "cancelled"|"precommit"|"workspace"|"chat", "message": "…",
   "category": "too-long", "account": null, "accountMessage": null, "accountCommand": null,
+  "failureMessage": "The model reached its output limit of 32000 tokens, which BRAVEBOT_OUTPUT_BUDGET raises, part way through a call to write_file, so the call was not made; the limit is on one reply and not on the context window, so compaction does not change it; ask for the work in smaller parts, or raise the limit in the env block of ~/.bravebot/settings.json.",
+  "failureCodes": ["BRAVEBOT_OUTPUT_BUDGET"],
   "cutOff": { "ceiling": 32000, "call": { "tool": "write_file" }, "thought": false },
   "notices": ["hook turn-finished: /usr/bin/fmt could not be started"],
   "prompt": 4, "id": "saved-session-id-or-null" } }
@@ -1573,11 +1575,14 @@ is the service refusing the model of the turn because the account does not offer
 so and that another model can be chosen, `accountCommand` and `status` are `null`, and the sign-in is
 untouched.
 
-`failureMessage` is the agent's own line for a request that did not get through, and for a reply that went
-quiet past the gap, and `null` for every other failure and for a failure of an account: the line the
-terminal shows, made by the same function, joined into one sentence in sentence case with no backticks. It
-says the cause, the gap in force, the setting that changes it and that a new message continues. `failureCodes` is the setting names it holds, in order, and
-`null` where it is. A client draws the line as the description under the category's title, with each
+`failureMessage` is the agent's own line for a request that did not get through, for a reply that went
+quiet past the gap, and for a reply that reached its output limit, and `null` for every other failure and
+for a failure of an account: the line the terminal shows, made by the same function, joined into one
+sentence in sentence case with no backticks. It says the cause, the gap in force, the setting that changes
+it and that a new message continues, or the limit, the call it stopped in, `BRAVEBOT_OUTPUT_BUDGET`,
+that the limit is not on the context window, and to ask for the work in smaller parts or raise the
+limit in the `env` block of `~/.bravebot/settings.json`. `failureCodes` is the setting names it holds, in order, and
+`null` where `failureMessage` is. A client draws the line as the description under the card's title, which `failureCause` or else the category chooses, with each
 code in a code element, and words the failure from its category only where no line arrived. Neither holds
 text from a reply. `manifest.error` carries both, as it carries `accountMessage`.
 

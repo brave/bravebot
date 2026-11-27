@@ -783,6 +783,13 @@ pub enum Destination {
 pub enum AfterCeilingStop {
     /// Told the planner why and asked it once more.
     AskedAgain,
+    /// Told the planner why and asked it once more, that one request at the effort level `to` in
+    /// place of `from`, after a reply that thought until the ceiling. The words a level is sent
+    /// as, which a person chose off a list and are not content.
+    AskedAgainAtLowerEffort {
+        from: &'static str,
+        to: &'static str,
+    },
     /// Kept what the reply wrote as the turn's answer, which stops where the reply did.
     KeptTheText,
     /// Ended the turn on the stop, the reply having written nothing to keep.
@@ -5071,9 +5078,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "no reasoning arrived"
         };
         let then = match then {
-            AfterCeilingStop::AskedAgain => "the planner was told why and asked again",
-            AfterCeilingStop::KeptTheText => "what it wrote is the answer, and the turn ends there",
-            AfterCeilingStop::Ended => "the turn ends on it, with nothing written",
+            AfterCeilingStop::AskedAgain => "the planner was told why and asked again".to_string(),
+            AfterCeilingStop::AskedAgainAtLowerEffort { from, to } => format!(
+                "the planner was told why and asked again at effort {to} in place of {from}, \
+                 for that one request"
+            ),
+            AfterCeilingStop::KeptTheText => {
+                "what it wrote is the answer, and the turn ends there".to_string()
+            }
+            AfterCeilingStop::Ended => "the turn ends on it, with nothing written".to_string(),
         };
         self.allow(
             "ceiling",

@@ -4045,12 +4045,20 @@ where
         reporter.phase(round);
 
         let model = state.turn_model.as_deref().unwrap_or(&config.default_model);
+        // The level lowered for this one request after a reply that thought until the ceiling,
+        // and the turn's own otherwise (TURN-7). Taken, so the request after it is sent the
+        // turn's level; `state.effort` is never changed by it.
+        let effort = state
+            .retries
+            .effort_for_the_next_request
+            .take()
+            .or(state.effort);
         let request = round_steps::build_request(
             model,
             conversation,
             system,
             system_text,
-            state.effort,
+            effort,
             task,
             state.may_call_tools,
             &state.offered,
@@ -8193,6 +8201,52 @@ mod tests {
             assert_eq!(effort, Some(Effort::Low));
         }
 
+        /// TURN-7 lowers the level for the one request after a reply that thought until the
+        /// ceiling, except on the account, which is sent the level its session began with for the
+        /// whole session (CHATGPT-10). There every request asks for the turn's level, and the person
+        /// is told the reply is asked again with no level named. The regression it rejects is a
+        /// lowering that does not ask which service answers, which would ask the account for a
+        /// level its session did not begin with.
+        #[test]
+        fn a_thinking_stop_on_the_account_asks_again_at_the_sessions_level() {
+            use super::ceiling::{CEILING, failed};
+            let taken = take(
+                "account-ceiling-not-lowered",
+                &configured(None),
+                on_the_account(
+                    Task::new("write the game in one file")
+                        .with_effort(Some(Effort::High))
+                        .in_account_session(AccountSession::begin_with(Some(Effort::High))),
+                ),
+                vec![
+                    failed(bravebot_aichat::CutOff {
+                        ceiling: CEILING,
+                        call: None,
+                        thought: true,
+                    }),
+                    said("", &[("list_files", r#"{"directory":"."}"#)], None),
+                    said("done", &[], None),
+                ],
+            );
+            assert_eq!(taken.outcome.unwrap().reply_for_display(), "done");
+            let asked: Vec<_> = taken
+                .sent
+                .iter()
+                .map(|body| {
+                    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+                    body["reasoning_effort"].as_str().map(str::to_owned)
+                })
+                .collect();
+            assert_eq!(asked, vec![Some("high".to_string()); 3]);
+            assert_eq!(scripted::levels(), vec![Some(Some(Effort::High)); 3]);
+            assert!(
+                taken.reporter.narration.iter().any(|line| line
+                    .ends_with("while thinking, before it wrote anything; asking it again")),
+                "{:?}",
+                taken.reporter.narration
+            );
+        }
+
         /// One turn of `task`, on the account, with the stand-in host installed on this thread.
         fn take_a_turn_at_the_host(name: &str, task: Task) {
             let scratch = crate::testutil::scratch_dir(name);
@@ -10581,6 +10635,371 @@ mod tests {
         assert_eq!(error.cut_off(), Some(&in_a_call_to("write_file")));
     }
 
+    /// The failure in #4725: one reply spends the ceiling thinking and the next spends it writing
+    /// one write_file call. The second stop is of another kind from the first, so it is asked
+    /// about too, and the file is written without the person typing again. The regression it
+    /// rejects is one flag for every kind of stop, which ends the turn on the second.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_thinking_stop_then_a_stop_in_a_call_is_asked_again_and_the_file_is_written() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let (outcome, _, bodies, scratch) = turn(
+            "ceiling-stop-thinking-then-call",
+            vec![
+                failed(CutOff {
+                    ceiling: CEILING,
+                    call: None,
+                    thought: true,
+                }),
+                failed(in_a_call_to("write_file")),
+                said(
+                    "",
+                    &[("write_file", r#"{"path":"game.py","contents":"x\n"}"#)],
+                    None,
+                ),
+                said("done", &[], None),
+            ],
+        );
+        assert_eq!(
+            outcome
+                .expect("a stop of another kind is asked about")
+                .reply_for_display(),
+            "done"
+        );
+        assert_eq!(told(&bodies), [0, 1, 2, 2], "{bodies:#?}");
+        assert_eq!(
+            std::fs::read_to_string(scratch.join("game.py")).unwrap(),
+            "x\n"
+        );
+    }
+
+    /// Each kind of stop is asked about once in a run of them, so stops that alternate between
+    /// thinking and a call end the turn at the third. The regression it rejects is asking about
+    /// any stop whose kind differs from the one before, which never ends.
+    #[test]
+    fn alternating_stops_end_the_turn_at_the_third() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let thinking = || {
+            failed(CutOff {
+                ceiling: CEILING,
+                call: None,
+                thought: true,
+            })
+        };
+        let (outcome, _, bodies, _) = turn(
+            "ceiling-stop-alternating",
+            vec![
+                thinking(),
+                failed(in_a_call_to("write_file")),
+                thinking(),
+                said("never asked for", &[], None),
+            ],
+        );
+        let error = outcome.unwrap_err();
+        assert!(
+            matches!(
+                error.ending(),
+                crate::outcome::Ending::Failed(diagnosis)
+                    if diagnosis.category == crate::outcome::Category::TooLong
+            ),
+            "{error:?}"
+        );
+        assert_eq!(told(&bodies), [0, 1, 2], "{bodies:#?}");
+    }
+
+    /// The request after a thinking stop goes out one effort level lower, and the request after
+    /// that at the turn's own level again. A stop in a call changes no level, and a turn with no
+    /// level or the lowest is sent what it would have been. The regressions it rejects: lowering
+    /// the turn's level for the rest of the turn, lowering after a stop in a call, and sending a
+    /// level the turn never asked for.
+    #[test]
+    fn the_request_after_a_thinking_stop_carries_a_lower_level_and_the_next_one_the_turns_level() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let thinking = || {
+            failed(CutOff {
+                ceiling: CEILING,
+                call: None,
+                thought: true,
+            })
+        };
+        let levels = |name: &str, effort: Option<Effort>, first| {
+            let task = Task::new("write the game in one file").with_effort(effort);
+            let (outcome, _, bodies, _, _) = traced_with(
+                name,
+                &task,
+                vec![
+                    first,
+                    said("", &[("list_files", r#"{"directory":"."}"#)], None),
+                    said("done", &[], None),
+                ],
+            );
+            assert_eq!(outcome.unwrap().reply_for_display(), "done");
+            bodies
+                .iter()
+                .map(|body| {
+                    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+                    body["reasoning_effort"].as_str().map(str::to_owned)
+                })
+                .collect::<Vec<_>>()
+        };
+        let high = Some("high".to_string());
+        assert_eq!(
+            levels("ceiling-effort-high", Some(Effort::High), thinking()),
+            [high.clone(), Some("medium".into()), high.clone()]
+        );
+        // `max` steps to `high`, a level every model that takes `max` is known to take, and not
+        // to `xhigh`, which a model may refuse and BACKEND-22 would then remember.
+        let max = Some("max".to_string());
+        assert_eq!(
+            levels("ceiling-effort-max", Some(Effort::Max), thinking()),
+            [max.clone(), high.clone(), max]
+        );
+        assert_eq!(
+            levels(
+                "ceiling-effort-call",
+                Some(Effort::High),
+                failed(in_a_call_to("write_file"))
+            ),
+            [high.clone(), high.clone(), high]
+        );
+        let low = Some("low".to_string());
+        assert_eq!(
+            levels("ceiling-effort-low", Some(Effort::Low), thinking()),
+            [low.clone(), low.clone(), low]
+        );
+        assert_eq!(
+            levels("ceiling-effort-unset", None, thinking()),
+            [None, None, None]
+        );
+    }
+
+    /// A model that is sent no level whatever the request asks, here the xAI account (XAI-16), is
+    /// not said to be asked again at a lower level: the request asking again carries the turn's
+    /// level as every other request does, the person is told it is asked again with no level
+    /// named, and the trail records the plain outcome. The regression it rejects is a lowering
+    /// that does not ask whether the model is sent a level, which tells the person and the trail
+    /// of a change no service was sent.
+    #[test]
+    fn a_thinking_stop_on_a_model_sent_no_level_names_no_lower_level() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let task = Task::new("write the game in one file")
+            .with_model(Some("xai/grok-4.5".into()))
+            .with_effort(Some(Effort::High));
+        let (outcome, reporter, bodies, _, stops) = traced_with(
+            "ceiling-effort-sent-none",
+            &task,
+            vec![
+                failed(CutOff {
+                    ceiling: CEILING,
+                    call: None,
+                    thought: true,
+                }),
+                said("done", &[], None),
+            ],
+        );
+        assert_eq!(outcome.unwrap().reply_for_display(), "done");
+        let asked: Vec<_> = bodies
+            .iter()
+            .map(|body| {
+                let body: serde_json::Value = serde_json::from_str(body).unwrap();
+                body["reasoning_effort"].as_str().map(str::to_owned)
+            })
+            .collect();
+        assert_eq!(asked, [Some("high".into()), Some("high".into())]);
+        assert!(
+            reporter
+                .narration
+                .iter()
+                .any(|line| line
+                    .ends_with("while thinking, before it wrote anything; asking it again")),
+            "{:?}",
+            reporter.narration
+        );
+        assert!(
+            !reporter
+                .narration
+                .iter()
+                .any(|line| line.contains("effort")),
+            "{:?}",
+            reporter.narration
+        );
+        assert_eq!(stops.len(), 1, "{stops:#?}");
+        assert!(
+            stops[0].ends_with("the planner was told why and asked again"),
+            "{}",
+            stops[0]
+        );
+    }
+
+    /// After a thinking stop at a level, the person and the trail are told the request asking again
+    /// goes out one level lower, naming both levels, for that one request. The regressions it
+    /// rejects: a lowering only the planner's request shows, a trail that records the old "asked
+    /// again" outcome, and levels named the wrong way round.
+    #[test]
+    fn a_thinking_stop_at_a_level_tells_the_person_and_the_trail_both_levels() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let task = Task::new("write the game in one file").with_effort(Some(Effort::High));
+        let (outcome, reporter, _, _, stops) = traced_with(
+            "ceiling-effort-told",
+            &task,
+            vec![
+                failed(CutOff {
+                    ceiling: CEILING,
+                    call: None,
+                    thought: true,
+                }),
+                said("done", &[], None),
+            ],
+        );
+        assert_eq!(outcome.unwrap().reply_for_display(), "done");
+        assert!(
+            reporter.narration.iter().any(|line| line.ends_with(
+                "while thinking, before it wrote anything; asking it again at effort medium in \
+                 place of high, for one request"
+            )),
+            "{:?}",
+            reporter.narration
+        );
+        assert_eq!(stops.len(), 1, "{stops:#?}");
+        assert!(
+            stops[0].contains("; no call was open; reasoning arrived; ")
+                && stops[0].ends_with(
+                    "the planner was told why and asked again at effort medium in place of high, \
+                     for that one request"
+                ),
+            "{}",
+            stops[0]
+        );
+    }
+
+    /// The lowered level is the turn's own choice for one request, not a level the service
+    /// refused, so it is not remembered as refused (BACKEND-22). Checked through a real client: a
+    /// turn on an Anthropic model, answered by a stand-in for
+    /// the Messages endpoint, whose first reply thinks until the ceiling. The request asking again
+    /// carries the level below the turn's in the body the client builds, the request after it the
+    /// turn's, and the client's memory of refused levels (BACKEND-22) is not written. The
+    /// regression it rejects is a client that answers a thinking stop by giving the level up,
+    /// which the memory then keeps for every later request to the model.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the directory may not be there"
+    )]
+    #[test]
+    fn a_lowered_request_reaches_the_service_and_the_client_remembers_no_refusal() {
+        use crate::testutil::{MessagesAnswer, messages_host};
+        const MODEL: &str = "anthropic/claude-test";
+        let host = messages_host(vec![
+            MessagesAnswer::ThoughtToTheCeiling,
+            MessagesAnswer::Calls("list_files", r#"{"directory":"."}"#),
+            MessagesAnswer::Words("done"),
+        ]);
+        let mut config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+            _ => None,
+        })
+        .unwrap();
+        let root = serde_json::json!({"provider": {"anthropic": {
+            "options": {"baseURL": host.endpoint, "apiKey": "a-key"},
+            "models": {"claude-test": {}}
+        }}});
+        config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+        assert!(
+            !crate::backend::refused_a_level(&config, MODEL),
+            "refused before the turn"
+        );
+        let scratch = crate::testutil::scratch_dir("ceiling-effort-on-the-wire");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let workspace = Workspace::new(&scratch).unwrap();
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        let task = Task::new("write the game in one file")
+            .with_model(Some(MODEL.into()))
+            .with_effort(Some(Effort::High));
+
+        let outcome = resume(
+            &config,
+            &Egress::new(),
+            &workspace,
+            &task,
+            &mut Conversation::new(),
+            &mut crate::confirm::ApproveWrites,
+            &mut crate::report::RecordingReporter::default(),
+            &mut bravebot_core::event::RecordingSink::new(),
+            trust,
+            TrustedPrograms::new(),
+            None,
+            &Cancel::new(),
+        )
+        .outcome;
+
+        assert_eq!(outcome.unwrap().reply_for_display(), "done");
+        let sent: Vec<_> = host
+            .bodies()
+            .iter()
+            .map(|body| body["output_config"]["effort"].as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                Some("high".into()),
+                Some("medium".into()),
+                Some("high".into())
+            ]
+        );
+        assert!(
+            !crate::backend::refused_a_level(&config, MODEL),
+            "the lowered level was remembered as refused"
+        );
+    }
+
+    /// A run of stops counts kinds alike whichever path a stop takes: a thinking stop that wrote
+    /// nothing is settled where the request failed, and a stop in a call after text is settled
+    /// after the reply. The second is of another kind, so it is asked about too and the file is
+    /// written. The regression it rejects is the path after a reply keeping a count of its own
+    /// kind, or the old single flag, which ends the turn on the text.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_thinking_stop_then_a_stop_in_a_call_after_text_is_asked_again() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let (outcome, _, bodies, scratch) = turn(
+            "ceiling-stop-thinking-then-text-and-call",
+            vec![
+                failed(CutOff {
+                    ceiling: CEILING,
+                    call: None,
+                    thought: true,
+                }),
+                said("Writing it.", &[], Some(in_a_call_to("write_file"))),
+                said(
+                    "",
+                    &[("write_file", r#"{"path":"game.py","contents":"x\n"}"#)],
+                    None,
+                ),
+                said("done", &[], None),
+            ],
+        );
+        assert_eq!(
+            outcome
+                .expect("a stop of another kind after text is asked about")
+                .reply_for_display(),
+            "done"
+        );
+        assert_eq!(told(&bodies), [0, 1, 2, 2], "{bodies:#?}");
+        assert_eq!(
+            std::fs::read_to_string(scratch.join("game.py")).unwrap(),
+            "x\n"
+        );
+    }
+
     /// A round answered in between starts the count again, so a long turn that writes several big
     /// files can come back from a stop at each of them.
     #[test]
@@ -10764,10 +11183,11 @@ mod tests {
                 said("", &[("list_files", r#"{"directory":"."}"#)], None),
                 failed(thinking),
                 failed(in_a_call_to("write_file")),
+                failed(in_a_call_to("write_file")),
             ],
         );
         assert!(outcome.is_err(), "{outcome:?}");
-        assert_eq!(stops.len(), 3, "{stops:#?}");
+        assert_eq!(stops.len(), 4, "{stops:#?}");
         assert_eq!(
             stops[0],
             "round 0: stopped at the output limit of 32000 tokens; a call to write_file was open \
@@ -10781,12 +11201,20 @@ mod tests {
             "{}",
             stops[1]
         );
+        // A stop in a call after a thinking stop is of another kind, so it is asked about too.
         assert!(
             stops[2].starts_with("round 1: ")
                 && stops[2].contains("a call to write_file was open")
-                && stops[2].ends_with("the turn ends on it, with nothing written"),
+                && stops[2].ends_with("asked again"),
             "{}",
             stops[2]
+        );
+        assert!(
+            stops[3].starts_with("round 1: ")
+                && stops[3].contains("a call to write_file was open")
+                && stops[3].ends_with("the turn ends on it, with nothing written"),
+            "{}",
+            stops[3]
         );
 
         let (outcome, _, _, _, stops) = traced(
@@ -10871,7 +11299,25 @@ mod tests {
 
         let line = after_a_ceiling_stop(&stop(None, true), &both, true);
         assert!(
-            line.contains("while thinking") && line.contains("make the next call now"),
+            line.contains("while thinking")
+                && line.contains("make the next call now")
+                && line.contains("Write a large file in smaller calls")
+                && line.contains("add the rest with edit_file"),
+            "{line}"
+        );
+        // A reply that thought until the ceiling is told of the write tools it was offered and of
+        // no other.
+        let line = after_a_ceiling_stop(&stop(None, true), &offering(&["write_file"]), true);
+        assert!(
+            line.contains("split it across several files") && !line.contains("edit_file"),
+            "{line}"
+        );
+        let line = after_a_ceiling_stop(&stop(None, true), &offering(&["run"]), true);
+        assert!(
+            line.ends_with("make the next call now.")
+                && !line.contains("large file")
+                && !line.contains("write_file")
+                && !line.contains("edit_file"),
             "{line}"
         );
 
@@ -10914,14 +11360,38 @@ mod tests {
             }),
             thought: false,
         };
-        let said = ceiling_stop_narration(&stop, true);
+        let said = ceiling_stop_narration(&stop, true, None);
         assert!(
             said.contains("write_file") && said.contains("smaller parts"),
             "{said}"
         );
-        let said = ceiling_stop_narration(&stop, false);
+        let said = ceiling_stop_narration(&stop, false, None);
         assert!(
             said.contains("a shorter answer") && !said.contains("smaller parts"),
+            "{said}"
+        );
+
+        // After a thinking stop the person is told of the lower level the next request goes out
+        // at, and of the level it replaces, for that one request; with no level lowered, of none.
+        let thinking = CutOff {
+            ceiling: 32_000,
+            call: None,
+            thought: true,
+        };
+        let lowered = super::round_steps::Lowered {
+            from: Effort::Xhigh,
+            to: Effort::High,
+        };
+        let said = ceiling_stop_narration(&thinking, true, Some(lowered));
+        assert!(
+            said.contains("while thinking")
+                && said
+                    .ends_with("asking it again at effort high in place of xhigh, for one request"),
+            "{said}"
+        );
+        let said = ceiling_stop_narration(&thinking, true, None);
+        assert!(
+            said.ends_with("asking it again") && !said.contains("effort"),
             "{said}"
         );
     }

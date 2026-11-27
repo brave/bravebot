@@ -2971,7 +2971,16 @@ afterwards, so it never depends on the type the service wrote.
 
 A reply stopped at its output ceiling reports that ceiling alongside the category. It is this
 program's own configured figure rather than anything a service said, so it is not a detail taken
-from a reply, and without it the report names a limit and no way to change it.
+from a reply, and without it the report names a limit and no way to change it. The line names
+`BRAVEBOT_OUTPUT_BUDGET` as what raises the limit, whether or not the ceiling is known, and says the
+limit is on one reply and not on the context window, so compaction does not change it. A person who
+reads a too-long failure as the context filling up otherwise asks why compaction did not prevent it.
+It ends with what to do: ask for the work in smaller parts, or raise the limit in the `env` block of
+`~/.bravebot/settings.json`. The setting name is written as code, so the desktop window draws it as
+one. The desktop window is sent the same line for it, in the same field and joined the same way as a
+transport failure's, and its card draws that line in place of its own words for the ceiling. Where
+no line arrives, the card's words for the category name `BRAVEBOT_OUTPUT_BUDGET` and say the limit is
+on one reply and not on the context window, whether or not the ceiling is known.
 
 A failure of a ChatGPT account reports which one it was beside its category
 ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)): the step of the sign-in that failed, the refusal that
@@ -3043,6 +3052,7 @@ planner.
 `verified-by: bravebot_agent::backend::what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
 `verified-by: bravebot_session::sessions::a_reply_stopped_at_a_ceiling_says_which_ceiling`
+`verified-by: bravebot_session::sessions::a_too_long_failure_says_the_limit_is_one_replys_and_not_the_context_window`
 `verified-by: bravebot_agent::backend::a_diagnosis_carries_which_failure_of_the_account_it_was`
 `verified-by: bravebot_agent::backend::a_failure_with_no_account_in_it_carries_no_account_value`
 `verified-by: bravebot_agent::chatgpt_compaction::a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence`
@@ -3067,7 +3077,8 @@ planner.
 `verified-by: bravebot_session::sessions::a_transport_failure_says_last_that_a_new_message_continues_the_turn`
 `verified-by: bravebot_ui_bridge::failure_tests::a_transport_failure_is_stored_with_the_terminals_line_naming_its_cause`
 `verified-by: bravebot_ui_bridge::failure_tests::the_window_is_sent_the_agents_line_for_a_transport_failure`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs folds a turn.error carrying the agent's line through the window's own reducer and draws the real row, holding that the card's description is the line with each setting it names in a code element, that the window's own words for the category are not said beside it, that markup in the line or a setting name is drawn as characters, and that without a line the card says its category's words; ui/scripts/marking.test.mjs draws the card of a plan run that stopped with the line; make check-ui runs both)`
+`verified-by: bravebot_ui_bridge::failure_tests::the_window_is_sent_the_agents_line_for_a_reply_that_reached_its_output_limit`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs folds a turn.error carrying the agent's line through the window's own reducer and draws the real row, holding that the card's description is the line with each setting it names in a code element, that the window's own words for the category are not said beside it, that markup in the line or a setting name is drawn as characters, and that without a line the card says its category's words, which for a reply that reached its output limit name BRAVEBOT_OUTPUT_BUDGET and say the limit is not on the context window; ui/scripts/marking.test.mjs draws the card of a plan run that stopped with the line; make check-ui runs both)`
 `verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_which_part_of_a_request_a_delegate_s_transport_failure_ended`
 `verified-by: bravebot_agent::turn::delegate_end::how_a_delegate_ended_carries_the_cause_of_a_transport_failure`
 `verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
@@ -3571,8 +3582,8 @@ the ones a `provider` block already named.
 A reply that reaches its ceiling having written something is returned as a reply, marked as having
 stopped short, with its reported usage. Its tool calls are not returned: a reply cut off carries
 none, whatever the service sent, so no call from it is made; the turn tells the planner why and
-asks once for less ([TURN-7](turns.md#TURN-7)). A reply that reaches the ceiling having written
-nothing is a failure, and the failure names the ceiling.
+asks again once for each kind of stop ([TURN-7](turns.md#TURN-7)). A reply that reaches the
+ceiling having written nothing is a failure, and the failure names the ceiling.
 
 Either way what the reply was doing when it stopped travels with it: the call it was part way
 through, where its last block was one, with how many bytes of its arguments had arrived, and

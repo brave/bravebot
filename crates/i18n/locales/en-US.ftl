@@ -1187,6 +1187,10 @@ ceiling-stop-in-call = the model reached its output limit of { $tokens } tokens 
 ceiling-stop-in-a-call = the model reached its output limit of { $tokens } tokens while writing a tool call, so the call was not made; asking it to do the work in smaller parts
 ceiling-stop-thinking = the model reached its output limit of { $tokens } tokens while thinking, before it wrote anything; asking it again
 ceiling-stop-silent = the model reached its output limit of { $tokens } tokens before it wrote anything; asking it again
+# Said instead of ceiling-stop-thinking where the request asking again goes out at a lower effort
+# level than the turn's, for that one request. $level and $lower are the words a level is chosen
+# by (low, medium, high, xhigh, max), as /effort takes them.
+ceiling-stop-thinking-lower = the model reached its output limit of { $tokens } tokens while thinking, before it wrote anything; asking it again at effort { $lower } in place of { $level }, for one request
 # What a limit counts, as the noun the sentences below fill in.
 limit-unit-tokens = tokens
 limit-unit-credits = credits
@@ -4683,11 +4687,17 @@ failure-undecodable = the reply could not be read
 # A failure the service reported that this build has no name for (BACKEND-37). Said with the next
 # step of failure-refused-next, and holds nothing the service wrote.
 failure-unrecognised = the service answered with a failure this build does not recognise
-failure-too-long = the model reached its output limit
-failure-too-long-at = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises
-failure-too-long-in-call = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, part way through a call to { $tool }, so the call was not made
-failure-too-long-in-a-call = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, part way through a tool call, so the call was not made
-failure-too-long-thinking = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, while it was still thinking
+# A reply that spent its output ceiling (BACKEND-37, BACKEND-42). Each line says the limit is on one
+# reply and not on the context window, since a person who reads it as the context filling up expects
+# compaction to have prevented it.
+failure-too-long = the model reached its output limit, which `BRAVEBOT_OUTPUT_BUDGET` raises; the limit is on one reply and not on the context window, so compaction does not change it
+failure-too-long-at = the model reached its output limit of { $tokens } tokens, which `BRAVEBOT_OUTPUT_BUDGET` raises; the limit is on one reply and not on the context window, so compaction does not change it
+failure-too-long-in-call = the model reached its output limit of { $tokens } tokens, which `BRAVEBOT_OUTPUT_BUDGET` raises, part way through a call to { $tool }, so the call was not made; the limit is on one reply and not on the context window, so compaction does not change it
+failure-too-long-in-a-call = the model reached its output limit of { $tokens } tokens, which `BRAVEBOT_OUTPUT_BUDGET` raises, part way through a tool call, so the call was not made; the limit is on one reply and not on the context window, so compaction does not change it
+failure-too-long-thinking = the model reached its output limit of { $tokens } tokens, which `BRAVEBOT_OUTPUT_BUDGET` raises, while it was still thinking; the limit is on one reply and not on the context window, so compaction does not change it
+# Said last after a too-long failure, in the terminal and in the desktop window. The setting name
+# in the lines above is not a translator's to reword.
+failure-too-long-next = Ask for the work in smaller parts, or raise the limit in the env block of ~/.bravebot/settings.json
 failure-unconfigured = nothing here was configured to send the request
 failure-blocked = a gate here would not let the request out
 failure-workspace = the workspace could not be used

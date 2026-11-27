@@ -469,6 +469,94 @@ fn the_window_is_sent_the_agents_line_for_a_transport_failure() {
     assert_eq!(other["failureCodes"], Value::Null, "{other}");
 }
 
+/// BACKEND-37, BACKEND-42: a window is sent the agent's own line for a reply that reached its output
+/// limit, so the desktop card names the limit, the call the reply was part way through,
+/// `BRAVEBOT_OUTPUT_BUDGET` as what raises it, that the limit is on one reply and not on the
+/// context window, so compaction does not change it, and what to do next, as the terminal does. The
+/// setting name arrives in `failureCodes`, so the card draws it as code. The tool's name is the
+/// request's own spelling of a tool it offered.
+///
+/// The faults this rejects: the bridge sending the category alone, which leaves the window to word
+/// the limit from a table that says less; the setting named only where the ceiling is known, or
+/// written without backticks, so it is not sent as a code; a variant of the line that leaves out
+/// the context window; and a line with no next step.
+#[test]
+fn the_window_is_sent_the_agents_line_for_a_reply_that_reached_its_output_limit() {
+    use bravebot_aichat::{CutOff, OpenCall};
+    let stopped = |call: Option<&str>, thought| {
+        failed_with(ChatError::TooLong(CutOff {
+            ceiling: 32_000,
+            call: call.map(|tool| OpenCall {
+                tool: Some(tool.to_string()),
+                arguments: 0,
+            }),
+            thought,
+        }))
+    };
+    let call = stopped(Some("write_file"), true);
+    assert_eq!(call["category"], "too-long", "{call}");
+    assert_eq!(
+        call["failureMessage"],
+        "The model reached its output limit of 32000 tokens, which BRAVEBOT_OUTPUT_BUDGET raises, \
+         part way through a call to write_file, so the call was not made; the limit is on one reply \
+         and not on the context window, so compaction does not change it; ask for the work in \
+         smaller parts, or raise the limit in the env block of ~/.bravebot/settings.json.",
+        "{call}"
+    );
+    assert_eq!(
+        call["failureCodes"],
+        json!(["BRAVEBOT_OUTPUT_BUDGET"]),
+        "{call}"
+    );
+
+    let thinking = stopped(None, true);
+    // A reply that stopped in no call and with no thinking says the same.
+    let neither = failure_fields(
+        &TurnError::from(BackendError::from(ChatError::TooLong(CutOff {
+            ceiling: 8_192,
+            call: None,
+            thought: false,
+        }))),
+        &configured(),
+        "stub-model",
+    );
+    for sent in [&call, &thinking, &neither] {
+        let said = sent["failureMessage"].as_str().unwrap_or_default();
+        assert!(said.contains("BRAVEBOT_OUTPUT_BUDGET"), "{sent}");
+        assert!(!said.contains('`'), "{sent}");
+        assert_eq!(
+            sent["failureCodes"],
+            json!(["BRAVEBOT_OUTPUT_BUDGET"]),
+            "{sent}"
+        );
+        assert!(
+            said.contains(
+                "the limit is on one reply and not on the context window, so compaction does not \
+                 change it"
+            ),
+            "{sent}"
+        );
+        assert!(
+            said.ends_with(
+                "; ask for the work in smaller parts, or raise the limit in the env block of \
+                 ~/.bravebot/settings.json."
+            ),
+            "{sent}"
+        );
+        assert!(
+            said.starts_with("The model reached its output limit"),
+            "{sent}"
+        );
+    }
+    assert!(
+        thinking["failureMessage"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("while it was still thinking"),
+        "{thinking}"
+    );
+}
+
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a
 /// reply, a request or a settings file held. The keys are `kind`, `message`, `category`, `attempts` and
 /// `status`, the name, the sentence and the command of the account's failure, and the agent's line

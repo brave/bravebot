@@ -629,8 +629,10 @@ test('a turn the output limit ended says the limit and what the reply was writin
     const entry = session.live.entries.at(-1)
     return renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
   }
-  // The agent asked for smaller parts once before the turn failed, so the card names the setting.
+  // The agent asked again once for each kind of stop before the turn failed, so the card names the
+  // setting, and says the limit is one reply's and not the context window's.
   const raise = /raise the limit with BRAVEBOT_OUTPUT_BUDGET in the env block of ~\/\.bravebot\/settings\.json\./
+  const window = /The limit is on one reply and not on the context window, so compaction does not change it\./
 
   const call = failed('too-long', { ceiling: 32000, call: { tool: 'write_file' }, thought: true })
   assert.match(call, /<span slot="title">The reply reached its output limit<\/span>/)
@@ -644,24 +646,27 @@ test('a turn the output limit ended says the limit and what the reply was writin
   const thinking = failed('too-long', { ceiling: 8192, call: null, thought: true })
   assert.match(thinking, /reached its limit of 8,192 tokens while it was still thinking\. Choose another model, or /)
   assert.match(thinking, raise)
+  assert.match(thinking, window)
   assert.doesNotMatch(thinking, /smaller/, 'a reply that spent the limit thinking was asked for less work')
 
   const neither = failed('too-long', { ceiling: 8192, call: null, thought: false })
   assert.match(neither, /reached its limit of 8,192 tokens\. Ask for a smaller next step, or /)
   assert.match(neither, raise)
+  assert.match(neither, window)
   assert.doesNotMatch(neither, /thinking|tool call|call to/)
 
-  // Without the fields there is no figure to give, and the card says what it said before.
+  // Without the fields there is no figure to give, and the card names the setting and says the limit
+  // is one reply's and not the context window's.
   const bare = failed('too-long', null)
-  assert.match(bare, /<p>Ask for a smaller next step or choose another model\.<\/p>/)
+  assert.match(bare, /<p>Ask for a smaller next step, or raise the output limit with BRAVEBOT_OUTPUT_BUDGET; the limit is on one reply and not on the context window, so compaction does not change it\.<\/p>/)
   assert.doesNotMatch(bare, /tokens/)
 
   // The fields describe a stop at the limit and nothing else, so they move no other card.
   assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
 })
 
-// BACKEND-37: a turn that failed in transport arrives with the agent's own line beside the category,
-// the one the terminal shows, and the setting names in it beside that.
+// BACKEND-37: a turn that failed in transport, or at its output limit, arrives with the agent's own
+// line beside the category, the one the terminal shows, and the setting names in it beside that.
 // Folded by the window's reducer and drawn through the real row, because the line arriving on
 // `turn.error` and going undrawn is the fault: the card would then say the window's own table,
 // which names no cause, no gap and no setting. Without the line the table is what the card says.
@@ -693,6 +698,14 @@ test('a failed turn draws the line the agent sent, with its settings as code, an
   const silent = failed('transport', 'The reply did not begin within the time it was given; a new message continues from what was already done.', [])
   assert.match(silent, /<p>The reply did not begin within the time it was given; a new message continues from what was already done\.<\/p>/, silent)
 
+  // The line is the description of a stop at the limit, ahead of the window's words for `cutOff`.
+  const limit = 'The model reached its output limit of 32000 tokens, which BRAVEBOT_OUTPUT_BUDGET raises, part way through a call to write_file, so the call was not made; the limit is on one reply and not on the context window, so compaction does not change it; ask for the work in smaller parts, or raise the limit in the env block of ~/.bravebot/settings.json.'
+  const long = failed('too-long', limit, ['BRAVEBOT_OUTPUT_BUDGET'], { ceiling: 32000, call: { tool: 'write_file' }, thought: false })
+  assert.match(long, /<span slot="title">The reply reached its output limit<\/span>/, long)
+  assert.match(long, /which <code>BRAVEBOT_OUTPUT_BUDGET<\/code> raises/, long)
+  assert.match(long, /so compaction does not change it; ask for the work in smaller parts, or raise the limit in the env block of ~\/\.bravebot\/settings\.json\.<\/p>/, long)
+  assert.doesNotMatch(long, /32,000|Ask for the work in smaller parts/, 'the window worded the limit beside the line')
+
   // Both are text: markup in the line or a code is drawn as the characters it is made of.
   const hostile = failed('transport', 'Raise <b>x</b> now <img src=x>.', ['<b>x</b>'])
   assert.doesNotMatch(hostile, /<img|<b>/, hostile)
@@ -702,6 +715,7 @@ test('a failed turn draws the line the agent sent, with its settings as code, an
   for (const none of [null, undefined, '']) {
     assert.match(failed('transport', none, null), /Check the connection, proxy and certificate settings in Agent settings\./)
   }
+  assert.match(failed('too-long', null, null), /raise the output limit with BRAVEBOT_OUTPUT_BUDGET; the limit is on one reply and not on the context window/)
 })
 
 // CHATGPT-8: a turn the ChatGPT account failed arrives with the bridge's sentence for it beside the

@@ -574,3 +574,227 @@ fn a_default_model_the_roster_says_reads_no_level_is_withheld_one_when_nothing_i
         "the default was looked up where a model was picked"
     );
 }
+
+/// TURN-7, PANEL-9, BACKEND-22. A real turn on an Anthropic model, answered by a stand-in for
+/// the Messages endpoint whose first reply thinks until the ceiling and whose second is words.
+/// The request asking again goes out one level lower, and after the terminal's own end-of-turn
+/// step the session still holds the level it chose: the panel's Effort row says `high` and the
+/// record keeps `high`. The regression it rejects is the lowered level reaching the session as a
+/// level the client remembers as refused (BACKEND-22), which the end-of-turn step then reports as
+/// a level the model reads none of.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the stand-in ignores write errors"
+)]
+#[test]
+fn a_thinking_stop_leaves_the_panel_and_the_record_at_the_sessions_level() {
+    use bravebot_aichat::protocol::Effort;
+    use bravebot_session::sessions;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::sync::{Arc, Mutex};
+    const MODEL: &str = "anthropic/claude-test";
+
+    if !crate::test_profile::in_isolated_profile() {
+        return;
+    }
+
+    // `None` thinks until the ceiling and writes nothing else; `Some` is a reply of those words.
+    let replies: Vec<Option<&'static str>> = vec![None, Some("done")];
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let endpoint = format!(
+        "http://127.0.0.1:{}/v1",
+        listener.local_addr().expect("an address").port()
+    );
+    let bodies = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+    let kept = Arc::clone(&bodies);
+    std::thread::spawn(move || {
+        let mut replies = replies.into_iter();
+        for stream in listener.incoming().flatten() {
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+            let mut reader = BufReader::new(stream);
+            let mut request = String::new();
+            if reader.read_line(&mut request).is_err() {
+                continue;
+            }
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) <= 2 {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0; length];
+            if reader.read_exact(&mut body).is_err() {
+                continue;
+            }
+            let path = request.split(' ').nth(1).unwrap_or_default().to_string();
+            let mut stream = reader.into_inner();
+            if !path.ends_with("/messages") {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                continue;
+            }
+            let Some(reply) = replies.next() else {
+                return;
+            };
+            kept.lock()
+                .expect("the bodies")
+                .push(serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null));
+            let (block, delta, stop, output) = match reply {
+                None => (
+                    serde_json::json!({"type": "thinking", "thinking": "", "signature": ""}),
+                    serde_json::json!({"type": "thinking_delta", "thinking": "planning"}),
+                    "max_tokens",
+                    32_000,
+                ),
+                Some(words) => (
+                    serde_json::json!({"type": "text", "text": ""}),
+                    serde_json::json!({"type": "text_delta", "text": words}),
+                    "end_turn",
+                    5,
+                ),
+            };
+            let event = |name: &str, payload: serde_json::Value| {
+                format!("event: {name}\ndata: {payload}\n\n")
+            };
+            let events = [
+                event(
+                    "message_start",
+                    serde_json::json!({"type": "message_start", "message": {
+                        "id": "msg_1", "type": "message", "role": "assistant", "content": [],
+                        "model": "claude-test", "stop_reason": null,
+                        "usage": {"input_tokens": 10, "output_tokens": 1}}}),
+                ),
+                event(
+                    "content_block_start",
+                    serde_json::json!({"type": "content_block_start", "index": 0,
+                        "content_block": block}),
+                ),
+                event(
+                    "content_block_delta",
+                    serde_json::json!({"type": "content_block_delta", "index": 0,
+                        "delta": delta}),
+                ),
+                event(
+                    "content_block_stop",
+                    serde_json::json!({"type": "content_block_stop", "index": 0}),
+                ),
+                event(
+                    "message_delta",
+                    serde_json::json!({"type": "message_delta",
+                        "delta": {"stop_reason": stop, "stop_sequence": null},
+                        "usage": {"output_tokens": output}}),
+                ),
+                event("message_stop", serde_json::json!({"type": "message_stop"})),
+            ]
+            .concat();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{events}",
+                events.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let mut config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+        _ => None,
+    })
+    .expect("a configuration");
+    let providers = serde_json::json!({"provider": {"anthropic": {
+        "options": {"baseURL": endpoint, "apiKey": "a-key"},
+        "models": {"claude-test": {}}
+    }}});
+    config.providers =
+        bravebot_config::provider::Provider::all(providers.as_object().expect("an object"));
+
+    let root = crate::test_profile::project("bravebot-app-effort-after-a-thinking-stop");
+    std::fs::create_dir_all(&root).expect("create");
+    let workspace = Workspace::new(&root).expect("a workspace");
+    let mut session = Session::new("none");
+    session.name_model(MODEL.to_string());
+    session.note_model_reads_effort(true);
+    session.name_effort(Effort::High);
+    assert_eq!(session.effort_in_force(), Some(Effort::High));
+
+    let mut trust = TrustStore::new(&root);
+    trust.trust(".");
+    let task = Task::new("write the game in one file")
+        .with_model(Some(MODEL.into()))
+        .with_effort(session.effort_in_force());
+    let outcome = turn::resume(
+        &config,
+        &Egress::new(),
+        &workspace,
+        &task,
+        &mut Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut bravebot_core::event::RecordingSink::new(),
+        trust,
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome;
+    assert_eq!(
+        outcome.expect("the turn ends on words").reply_for_display(),
+        "done"
+    );
+    let sent: Vec<_> = bodies
+        .lock()
+        .expect("the bodies")
+        .iter()
+        .map(|body| body["output_config"]["effort"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        sent,
+        [Some("high".to_string()), Some("medium".to_string())],
+        "the request after the thinking stop was not sent one level lower"
+    );
+
+    // The terminal's own end-of-turn step, as `finish_turn` takes it.
+    let refused =
+        refused_level_in_force(&session, &config, bravebot_agent::backend::refused_a_level);
+    note_a_refused_level(&mut session, refused);
+
+    assert_eq!(
+        session.effort_in_force(),
+        Some(Effort::High),
+        "the lowered request changed the session's level"
+    );
+    let effort_row = t!(panel_effort, level = "high").to_string();
+    assert!(
+        crate::panel::lines(&session, crate::panel::WIDTH, 40)
+            .iter()
+            .any(|line| line.to_string().trim() == effort_row),
+        "the panel does not show the session's level"
+    );
+    let mut stored =
+        sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+    keep_the_effort_of(&mut stored, &session);
+    with_standing(
+        &session,
+        &Conversation::new(),
+        &TrustStore::new(&root),
+        &TrustedPrograms::new(),
+        &workspace,
+        |standing| stored.save("a session", standing),
+    );
+    let record = sessions::load(&root, stored.id()).expect("the record");
+    assert_eq!(
+        record.effort.as_deref(),
+        Some("high"),
+        "the record does not keep the session's level"
+    );
+}

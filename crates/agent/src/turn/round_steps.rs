@@ -37,10 +37,12 @@ use crate::workspace::Workspace;
 use bravebot_aichat::{Completion, Subscription};
 
 /// What the person is told when a reply reached the output ceiling and the planner is asked again
-/// (TURN-7). A turn with no tools left is asked for a shorter answer rather than for the work.
+/// (TURN-7). A turn with no tools left is asked for a shorter answer rather than for the work, and
+/// a request sent at a lower effort level after a thinking stop names both levels.
 pub(super) fn ceiling_stop_narration(
     cut_off: &bravebot_aichat::CutOff,
     may_call_tools: bool,
+    lowered: Option<Lowered>,
 ) -> String {
     use bravebot_aichat::OpenCall;
     let tokens = cut_off.ceiling;
@@ -57,7 +59,15 @@ pub(super) fn ceiling_stop_narration(
             t!(ceiling_stop_in_call, tokens = tokens, tool = tool.as_str())
         }
         (Some(OpenCall { tool: None, .. }), _) => t!(ceiling_stop_in_a_call, tokens = tokens),
-        (None, true) => t!(ceiling_stop_thinking, tokens = tokens),
+        (None, true) => match lowered {
+            Some(Lowered { from, to }) => t!(
+                ceiling_stop_thinking_lower,
+                tokens = tokens,
+                level = from.as_str(),
+                lower = to.as_str()
+            ),
+            None => t!(ceiling_stop_thinking, tokens = tokens),
+        },
         (None, false) => t!(ceiling_stop_silent, tokens = tokens),
     }
 }
@@ -130,34 +140,143 @@ pub(super) fn after_a_ceiling_stop(
         (None, false) => "before it said or did anything".to_string(),
     };
     let next = match &cut_off.call {
-        _ if !may_call_tools => "Answer now, in fewer words.",
+        _ if !may_call_tools => "Answer now, in fewer words.".to_string(),
         Some(OpenCall {
             tool: Some(tool), ..
-        }) if tools::writes_a_file(tool) => match (
-            request.offered("write_file").is_some(),
-            request.offered("edit_file").is_some(),
-        ) {
-            (true, true) => {
-                "Nothing was written. Make the same change in smaller calls, each well under the \
-                 limit: split it across several files, or write the first part and add the rest \
-                 with edit_file."
-            }
-            (true, false) => {
-                "Nothing was written. Make the same change in smaller calls, each well under the \
-                 limit: split it across several files."
-            }
-            _ => {
-                "Nothing was written. Make the same change in smaller calls, each well under the limit."
-            }
-        },
-        Some(_) => "Make it again with less in it, in smaller calls each well under the limit.",
-        None if cut_off.thought => "Think less before you act: make the next call now.",
-        None => "Make the next call now, or give a shorter answer.",
+        }) if tools::writes_a_file(tool) => format!(
+            "Nothing was written. Make the same change {}",
+            in_smaller_calls(request)
+        ),
+        Some(_) => {
+            "Make it again with less in it, in smaller calls each well under the limit.".to_string()
+        }
+        // A reply that thought until the ceiling may have been planning a file too big for one
+        // reply, so it is told how to write one, where the request offered a tool that writes.
+        None if cut_off.thought
+            && (request.offered("write_file").is_some()
+                || request.offered("edit_file").is_some()) =>
+        {
+            format!(
+                "Think less before you act: make the next call now. Write a large file {}",
+                in_smaller_calls(request)
+            )
+        }
+        None if cut_off.thought => "Think less before you act: make the next call now.".to_string(),
+        None => "Make the next call now, or give a shorter answer.".to_string(),
     };
     format!(
         "{TOOL_BUDGET_SPENT} Your last reply reached the output limit of {ceiling} tokens \
          {stopped}. {next}"
     )
+}
+
+/// How a file too big for one reply is written instead, naming only the write tools `request`
+/// offered, so a planner is never told of a tool it does not have.
+fn in_smaller_calls(request: &ChatRequest) -> &'static str {
+    match (
+        request.offered("write_file").is_some(),
+        request.offered("edit_file").is_some(),
+    ) {
+        (true, true) => {
+            "in smaller calls, each well under the limit: split it across several files, or write \
+             the first part and add the rest with edit_file."
+        }
+        (true, false) => {
+            "in smaller calls, each well under the limit: split it across several files."
+        }
+        _ => "in smaller calls, each well under the limit.",
+    }
+}
+
+/// The effort level a request was going to be sent at and the one below it that the next request
+/// is sent at instead, after a reply that thought until the ceiling (TURN-7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Lowered {
+    pub(super) from: Effort,
+    pub(super) to: Effort,
+}
+
+/// The level the request after this stop goes out at in place of `effort`, where it is lowered:
+/// after a reply that thought until the ceiling with no call open, one level below `effort`.
+/// Nothing where no level was asked for, where it is already the lowest, or where the level the
+/// model is sent does not follow the request's ([`level_is_fixed`]), since the person and the
+/// trail would then be told of a lower level no service was sent.
+///
+/// One level lower rather than no level: on Anthropic and Bedrock a request with no level turns
+/// thinking off or to the model's default, which is a larger change than the stop asks for. Not
+/// the way BACKEND-22 gives a level up, so nothing is remembered as refused.
+///
+/// Decided from the stop's structure and the turn's own level, so nothing the reply wrote is read.
+pub(super) fn lowered_after(
+    cut_off: &bravebot_aichat::CutOff,
+    effort: Option<Effort>,
+    level_is_fixed: bool,
+) -> Option<Lowered> {
+    if cut_off.call.is_some() || !cut_off.thought || level_is_fixed {
+        return None;
+    }
+    let from = effort?;
+    Some(Lowered {
+        from,
+        to: one_level_lower(Some(from))?,
+    })
+}
+
+/// Whether the level `model` is sent stays what it is whatever a request asks for: the ChatGPT
+/// account, which is sent the level its session began with (CHATGPT-10), and a model sent no level
+/// at all, one that refused the field or the xAI account, which is never sent one (BACKEND-22,
+/// XAI-16). Both are the configuration's and the transport's own state, not content.
+pub(super) fn level_is_fixed(config: &Config, model: &str) -> bool {
+    config.chatgpt_model(model).is_some() || crate::backend::refused_a_level(config, model)
+}
+
+/// What the trail records the turn did about a stop it asks about again.
+pub(super) fn asked_again(lowered: Option<Lowered>) -> AfterCeilingStop {
+    match lowered {
+        Some(Lowered { from, to }) => AfterCeilingStop::AskedAgainAtLowerEffort {
+            from: from.as_str(),
+            to: to.as_str(),
+        },
+        None => AfterCeilingStop::AskedAgain,
+    }
+}
+
+/// Tell the person and the planner of a ceiling stop the turn asks about again (TURN-7), and set
+/// the level the next request goes out at where `lowered_after` lowered it.
+///
+/// The one implementation for a stop that wrote nothing and a stop after text, so both ask alike.
+pub(super) fn ask_after_a_ceiling_stop<R: Reporter>(
+    conversation: &mut Conversation,
+    reporter: &mut R,
+    retries: &mut Retries,
+    cut_off: &bravebot_aichat::CutOff,
+    request: &ChatRequest,
+    may_call_tools: bool,
+    lowered: Option<Lowered>,
+) {
+    reporter.narration(ceiling_stop_narration(cut_off, may_call_tools, lowered));
+    conversation.push_composed_from(
+        Message::user(after_a_ceiling_stop(cut_off, request, may_call_tools)),
+        Composed::Notice,
+        Provenance::Driver,
+    );
+    retries.effort_for_the_next_request = lowered.map(|lowered| lowered.to);
+}
+
+/// The level below `effort`, or none where no level was asked for or it is already the lowest.
+///
+/// `max` steps to `high`, not to `xhigh`. Nothing in the clients or the specs shows that a model
+/// taking `max` takes `xhigh`: the Anthropic and Bedrock clients send the word as it is, and the
+/// levels BACKEND-22 records OpenAI's models taking differ by model. A model that refused the
+/// lowered level would be remembered as refusing every level for the process (BACKEND-22), which
+/// TURN-7 rules out. `high` is a level each reasoning model BACKEND-22 records took.
+fn one_level_lower(effort: Option<Effort>) -> Option<Effort> {
+    match effort? {
+        Effort::Max | Effort::Xhigh => Some(Effort::High),
+        Effort::High => Some(Effort::Medium),
+        Effort::Medium => Some(Effort::Low),
+        Effort::Low => None,
+    }
 }
 
 /// What a round does before its request goes out: stop if the turn was stopped, say a change of
@@ -541,22 +660,27 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
         .as_ref()
         .filter(|cut_off| cut_off.call.is_some())
         && state.may_call_tools
-        && !state.retries.asked_after_a_ceiling_stop
+        && state.retries.asked_after_a_ceiling_stop.ask_about(cut_off)
     {
-        state.retries.asked_after_a_ceiling_stop = true;
-        record_ceiling_stop(policy, state.steps, cut_off, AfterCeilingStop::AskedAgain);
+        // Only a stop with a call open arrives here, and a level is lowered only after a stop
+        // with none, so this ask lowers nothing.
+        let lowered = None;
+        record_ceiling_stop(policy, state.steps, cut_off, asked_again(lowered));
         record_answer(policy, conversation, &completion.content)?;
         narrate_between_calls(policy, reporter, &completion.content);
-        reporter.narration(ceiling_stop_narration(cut_off, state.may_call_tools));
-        conversation.push_composed_from(
-            Message::user(after_a_ceiling_stop(cut_off, request, state.may_call_tools)),
-            Composed::Notice,
-            Provenance::Driver,
+        ask_after_a_ceiling_stop(
+            conversation,
+            reporter,
+            &mut state.retries,
+            cut_off,
+            request,
+            state.may_call_tools,
+            lowered,
         );
         return Ok(AfterReply::Continue);
     }
     if completion.cut_off.is_none() {
-        state.retries.asked_after_a_ceiling_stop = false;
+        state.retries.asked_after_a_ceiling_stop.answered();
     }
     // A reply the ceiling stopped is kept for what it says, so the person has to be
     // told that it stops short: the text arrives looking like an answer, and an answer
@@ -1339,8 +1463,38 @@ pub(super) struct Retries {
     pub(super) refused: Option<BackendError>,
     /// Whether the last request went out because the one before it came back empty (TURN-6).
     pub(super) asked_after_an_empty_reply: bool,
-    /// Whether it went out because the one before it reached the output ceiling (TURN-7).
-    pub(super) asked_after_a_ceiling_stop: bool,
+    /// Which kinds of ceiling stop the run of stops this request belongs to has asked about
+    /// (TURN-7). Each kind is asked about once, so a run of stops costs at most two more requests.
+    pub(super) asked_after_a_ceiling_stop: AskedAfterCeilingStops,
+    /// The level the next request goes out at in place of the turn's, after a reply that thought
+    /// until the ceiling (TURN-7). Taken by the request it is for, so the one after it is sent the
+    /// turn's own level.
+    pub(super) effort_for_the_next_request: Option<Effort>,
+}
+
+/// The kinds of ceiling stop a run of them has asked about: one with no call open, which thought
+/// or wrote nothing, and one part way through a call (TURN-7).
+#[derive(Default)]
+pub(super) struct AskedAfterCeilingStops {
+    with_no_call_open: bool,
+    in_a_call: bool,
+}
+
+impl AskedAfterCeilingStops {
+    /// Whether a stop of this kind may be asked about, noting that it has been where it may.
+    /// Decided from whether a call was open, which is the stop's structure and not its content.
+    pub(super) fn ask_about(&mut self, cut_off: &bravebot_aichat::CutOff) -> bool {
+        let asked = match cut_off.call {
+            Some(_) => &mut self.in_a_call,
+            None => &mut self.with_no_call_open,
+        };
+        !std::mem::replace(asked, true)
+    }
+
+    /// An answered request ends the run of stops, so the next one is asked about again.
+    pub(super) fn answered(&mut self) {
+        *self = Self::default();
+    }
 }
 
 /// Settle a request's result: retry it after a failure the turn may answer for, fail the turn, or
@@ -1413,24 +1567,40 @@ pub(super) fn recover_from_failed_request<S: Sink, R: Reporter>(
         }
         // A reply that reached the ceiling having written nothing: part way through
         // a call, thinking, or neither. Decided from the stop's structure, which says
-        // nothing the reply wrote, and asked once for the same reason TURN-6 asks
-        // once.
-        Err(error) if error.cut_off().is_some() && !retries.asked_after_a_ceiling_stop => {
-            retries.asked_after_a_ceiling_stop = true;
+        // nothing the reply wrote, and asked once for each kind of stop for the same
+        // reason TURN-6 asks once. `ask_about` notes the kind as asked about only where it
+        // returns true, which is where this arm is taken, so a guard that fails changes nothing.
+        Err(error)
+            if error
+                .cut_off()
+                .is_some_and(|cut_off| retries.asked_after_a_ceiling_stop.ask_about(cut_off)) =>
+        {
             // A reply that ran out wrote something, so it was not empty.
             retries.asked_after_an_empty_reply = false;
             if let Some(cut_off) = error.cut_off() {
-                record_ceiling_stop(policy, steps, cut_off, AfterCeilingStop::AskedAgain);
-                reporter.narration(ceiling_stop_narration(cut_off, may_call_tools));
-                conversation.push_composed_from(
-                    Message::user(after_a_ceiling_stop(cut_off, request, may_call_tools)),
-                    Composed::Notice,
-                    Provenance::Driver,
+                let lowered = lowered_after(
+                    cut_off,
+                    // The level the stopped request carried, which is the turn's own: a
+                    // lowered request that stops thinking again is the second stop of that
+                    // kind, which ends the turn rather than lowering further.
+                    request.effort,
+                    level_is_fixed(config, model),
+                );
+                record_ceiling_stop(policy, steps, cut_off, asked_again(lowered));
+                ask_after_a_ceiling_stop(
+                    conversation,
+                    reporter,
+                    retries,
+                    cut_off,
+                    request,
+                    may_call_tools,
+                    lowered,
                 );
             }
             return Ok(Recovery::Retry);
         }
-        // The second in a row, and it wrote nothing: the stop is the turn's failure.
+        // A second stop of a kind already asked about in this run, and it wrote nothing:
+        // the stop is the turn's failure.
         Err(error) if error.cut_off().is_some() => {
             if let Some(cut_off) = error.cut_off() {
                 record_ceiling_stop(policy, steps, cut_off, AfterCeilingStop::Ended);

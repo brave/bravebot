@@ -354,19 +354,24 @@ on ordinary endings; file authority remains shared and child advice remains loca
 `verified-by: bravebot_agent::turn::the_person_is_told_nothing_when_an_empty_reply_is_asked_about`
 
 <a id="TURN-7"></a>
-### TURN-7: a reply the output ceiling stopped is told why and asked once for less
+### TURN-7: a reply the output ceiling stopped is told why and asked again once for each kind of stop
 
 When a reply reaches its output ceiling part way through a tool call, or before it wrote anything,
 the driver adds a line to the conversation naming the ceiling and what the reply was doing, and asks
 again. Text the reply wrote before the call is kept as its answer so far. The line says what to do
 instead: a file too big for one reply is written in smaller calls with the write tools the request
 offered; any other call is made again with less in it; a reply that thought until the ceiling is
-asked to act; and a turn with no tools left is asked for a shorter answer. The person is told the
-reply stopped and what it is being asked for. A second stop in a row ends the turn: as the failure
-naming the ceiling when nothing was written, and with its text when something was, the person told
-of any call it was writing that was not made. An answered request in between starts the count
-again. A stop wrote something, so it is not an empty reply ([TURN-6](#TURN-6)) and breaks a run of
-them.
+asked to act; and a turn with no tools left is asked for a shorter answer. A reply that thought
+until the ceiling is also told to write a large file in smaller calls, with the write tools the
+request offered, and where the turn asked for an effort level the request asking again goes out one
+level lower, the request after it at the turn's level again. The person is told the reply stopped
+and what it is being asked for, and of a lower level, both levels by name. Each kind of stop is
+asked about once in a run of them: a stop with no call open, which thought or wrote nothing, and a
+stop part way through a call. A second stop of a kind already asked about in the run ends the turn:
+as the failure naming the ceiling when nothing was written, and with its text when something was,
+the person told of any call it was writing that was not made. An answered request in between starts
+the count again. A stop wrote something, so it is not an empty reply ([TURN-6](#TURN-6)) and breaks
+a run of them.
 
 **The call it was writing is never made.** Its arguments stopped where the ceiling did, so running
 it would write half a file or run half a command. The backend returns no call from a reply the
@@ -381,8 +386,28 @@ file can be written in parts, it has a way through.
 with no call open, ends the turn with what it wrote, and the person is told it stopped short. Asked
 to carry on, a model tends to start the answer again from the top.
 
-**Once, for the reason an empty reply is asked about once** ([TURN-6](#TURN-6)): a model that runs
-out again after being told how to do the work in parts cannot do it in parts here.
+**Once for each kind, for the reason an empty reply is asked about once** ([TURN-6](#TURN-6)): a
+model that runs out again after being told how to do the work in parts cannot do it in parts here.
+The two kinds are counted apart because a reply told to think less tends to spend the next ceiling
+on the call it was planning, and that stop is the one the line about parts answers. Counting by kind,
+rather than asking whenever the kind differs from the stop before, keeps the run bounded: stops that
+alternate end the turn at the third, so a run costs at most two more requests.
+
+**One level lower, for one request.** A model that spends the ceiling thinking at a level tends to
+do it again at the same level, so the request asking again goes out at the level below the turn's:
+`medium` for `high`, `low` for `medium`, and `high` for both `xhigh` and `max`. `max` goes to `high`
+rather than to `xhigh` because nothing shows that a model taking `max` takes `xhigh`, and a refused
+level would be remembered for the process. The level is lowered and not dropped: on Anthropic and
+Bedrock a request with no level turns thinking off or leaves it to the model's default, which is a
+larger change than the stop asks for. A turn that asked for no level, or for the lowest, is sent
+what it would have been. So is a turn on the ChatGPT account, which is sent the level its session
+began with for the whole session ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)), and a turn on a
+model that is sent no level, because it refused the field or is the xAI account
+([BACKEND-22](backends.md#BACKEND-22), [XAI-16](xai-sign-in.md#XAI-16)). There the person is told
+the reply is asked again, with no level named. The lowered level is not one the service refused, so it is not
+remembered as refused ([BACKEND-22](backends.md#BACKEND-22)), and the level the turn and the
+session hold does not change. A lowered request that stops thinking again is the second stop of
+that kind, which ends the turn rather than lowering further.
 
 **Deciding on it reads nothing untrusted.** Where the reply stopped is the planner's own output
 ([LABEL-8](labels.md#LABEL-8)). The tool the line names is the request's own copy of the name,
@@ -391,8 +416,9 @@ reply made up is never repeated back to it.
 
 **Every stop is recorded.** The trail gets a line for each: the ceiling, the tool-calling round it
 landed on, the offered tool of the call that was open and how many bytes of its arguments had
-arrived, whether any reasoning arrived, and whether the turn asked again, kept the text as its
-answer, or ended. Counts and the request's own tool name, so the line carries no content
+arrived, whether any reasoning arrived, and whether the turn asked again, asked again at a lower
+effort level (naming both levels), kept the text as its answer, or ended. Counts, the request's own
+tool name and the words a level is chosen by, so the line carries no content
 ([TRACE-2](trace.md#TRACE-2)). A turn that went on past a stop leaves nothing else saying it
 happened, and one that ended on a stop is read back to ask what the ceiling was spent on, which is
 what says whether the work wanted splitting.
@@ -407,6 +433,15 @@ what says whether the work wanted splitting.
 `verified-by: bravebot_agent::turn::the_person_is_told_what_a_ceiling_stop_asked_for`
 `verified-by: bravebot_agent::turn::a_ceiling_stop_between_two_empty_replies_is_not_two_empty_replies_in_a_row`
 `verified-by: bravebot_agent::turn::the_trail_says_what_each_ceiling_stop_was_writing_and_what_the_turn_did`
+`verified-by: bravebot_agent::turn::a_thinking_stop_then_a_stop_in_a_call_is_asked_again_and_the_file_is_written`
+`verified-by: bravebot_agent::turn::alternating_stops_end_the_turn_at_the_third`
+`verified-by: bravebot_agent::turn::the_request_after_a_thinking_stop_carries_a_lower_level_and_the_next_one_the_turns_level`
+`verified-by: bravebot_agent::turn::a_thinking_stop_at_a_level_tells_the_person_and_the_trail_both_levels`
+`verified-by: bravebot_agent::turn::a_thinking_stop_on_a_model_sent_no_level_names_no_lower_level`
+`verified-by: bravebot_agent::turn::a_lowered_request_reaches_the_service_and_the_client_remembers_no_refusal`
+`verified-by: bravebot_agent::turn::a_thinking_stop_on_the_account_asks_again_at_the_sessions_level`
+`verified-by: bravebot_agent::turn::a_thinking_stop_then_a_stop_in_a_call_after_text_is_asked_again`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_thinking_stop_leaves_the_panel_and_the_record_at_the_sessions_level`
 
 <a id="TURN-8"></a>
 ### TURN-8: a session that has spent its limit asks before the next request

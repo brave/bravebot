@@ -6401,15 +6401,16 @@ fn start_mcp(
 /// keeps no table of them, and draws the command as code without reading the sentence for it. Both
 /// are `null` otherwise. `chosen` is the model that was asked for, which decides one category below.
 ///
-/// `failureMessage` is the agent's own failure line for a request that did not get through, and for
-/// a reply that went quiet past the gap, from the one function the terminal's line is made by
-/// ([`bravebot_session::sessions::failure_words`]), so the window says the cause, the gap, the
-/// setting and the next step in the same words and keeps no table of them (BACKEND-37). It is
-/// joined into one sentence, as the card says a failure, and is composed from the closed category,
-/// cause, gap and setting names, and holds nothing a service sent. The names the line writes between
-/// backticks are sent as `failureCodes`, and the backticks are left out of the line, so the window
-/// draws those words as code without reading the line for them. Both are `null` for every other
-/// failure, which the window words from its category.
+/// `failureMessage` is the agent's own failure line for a request that did not get through, for a
+/// reply that went quiet past the gap, and for a reply that reached its output limit, from the one
+/// function the terminal's line is made by ([`bravebot_session::sessions::failure_words`]), so the
+/// window says the cause, the figure, the setting and the next step in the same words and keeps no
+/// table of them (BACKEND-37). It is joined into one sentence, as the card says a failure, and is
+/// composed from the closed category, cause, gap, ceiling, the request's own tool name and setting
+/// names, and holds nothing a service sent. The names the line writes between backticks are sent as
+/// `failureCodes`, and the backticks are left out of the line, so the window draws those words as
+/// code without reading the line for them. Both are `null` for every other failure, which the window
+/// words from its category.
 pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -> Value {
     let ending = error.ending();
     let diagnosis = ending.diagnosis();
@@ -6475,10 +6476,13 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
 }
 
 /// Whether the window is sent the agent's line for a failure, chosen by its closed category and
-/// cause: a request that did not get through, and a reply that went quiet past the gap.
+/// cause: a request that did not get through, a reply that went quiet past the gap, and a reply
+/// that reached its output limit.
 fn says_the_agents_line(diagnosis: bravebot_agent::Diagnosis) -> bool {
-    diagnosis.category == bravebot_agent::Category::Transport
-        || bravebot_session::sessions::went_quiet_past_the_gap(diagnosis)
+    matches!(
+        diagnosis.category,
+        bravebot_agent::Category::Transport | bravebot_agent::Category::TooLong
+    ) || bravebot_session::sessions::went_quiet_past_the_gap(diagnosis)
 }
 
 /// The terminal's words as the window draws them, and the words they write between backticks. The

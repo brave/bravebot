@@ -1082,6 +1082,11 @@ pub fn failure_words(
     if diagnosis.category == Category::Transport {
         said = joined.next(said, t!(failure_transport_continue));
     }
+    // A reply that reached its output limit ends with what to do about it: ask for less in one
+    // reply, or raise the limit where the setting is kept (BACKEND-37). Chosen by the category.
+    if diagnosis.category == Category::TooLong {
+        said = joined.next(said, t!(failure_too_long_next));
+    }
     // After the status and the count, so a refused credential says what was refused first and
     // what to do about it last. The commands are this program's own words, chosen by the category
     // and by whether the request carried the premium key, and nothing the service wrote is in them
@@ -4735,6 +4740,11 @@ mod tests {
             !vague.contains("8192") && !vague.contains("8,192"),
             "a ceiling nobody measured was named anyway: {vague}"
         );
+        // With no figure known the setting is still the remedy, so it is named all the same.
+        assert!(
+            vague.contains(bravebot_config::env_var::OUTPUT_BUDGET),
+            "the setting that raises the limit is not in {vague}"
+        );
 
         // Two different ceilings, because a sentence that hard-coded one would pass with either.
         for ceiling in [8_192_u64, 64_000] {
@@ -4746,6 +4756,51 @@ mod tests {
             assert!(
                 said.contains(bravebot_config::env_var::OUTPUT_BUDGET),
                 "the setting that raises it is not in {said}"
+            );
+        }
+    }
+
+    /// A person who read a too-long failure as the context window filling up asked why compaction
+    /// had not prevented it. Every line of the category, with or without a ceiling and whatever the
+    /// reply was writing, says the limit is on one reply and not on the context window, so
+    /// compaction does not change it. The fault this rejects is a line that names only the output
+    /// limit, or one variant left saying less than the others.
+    #[test]
+    fn a_too_long_failure_says_the_limit_is_one_replys_and_not_the_context_window() {
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::{CutOff, OpenCall};
+
+        let stopped = |call: Option<Option<&str>>, thought: bool| CutOff {
+            ceiling: 64_000,
+            call: call.map(|tool| OpenCall {
+                tool: tool.map(str::to_owned),
+                arguments: 0,
+            }),
+            thought,
+        };
+        let at = Diagnosis::of(Category::TooLong).at_ceiling(64_000);
+        let lines = [
+            failure_reason(Diagnosis::of(Category::TooLong), None),
+            failure_reason(at, None),
+            failure_reason(at, Some(&stopped(Some(Some("write_file")), false))),
+            failure_reason(at, Some(&stopped(Some(None), false))),
+            failure_reason(at, Some(&stopped(None, true))),
+        ];
+        for said in lines {
+            assert!(said.contains("one reply"), "{said}");
+            assert!(said.contains("not on the context window"), "{said}");
+            assert!(said.contains("compaction does not change it"), "{said}");
+            // The terminal ends the line with the next step the desktop window shows.
+            assert!(
+                said.ends_with(
+                    ". Ask for the work in smaller parts, or raise the limit in the env block of \
+                     ~/.bravebot/settings.json"
+                ),
+                "{said}"
+            );
+            assert!(
+                said.contains(bravebot_config::env_var::OUTPUT_BUDGET),
+                "{said}"
             );
         }
     }
