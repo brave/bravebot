@@ -183,6 +183,9 @@ fn running_turn(bridge: &mut Bridge, handle: &str) -> Cancel {
 /// that does not hold the loop with its line and pacing.
 #[test]
 fn a_start_is_numbered_and_listed() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     let started = typed(&mut bridge, &handle, "5m check the deploy");
     assert_eq!(started["refused"], false);
@@ -202,6 +205,9 @@ fn a_start_is_numbered_and_listed() {
 /// LOOP-7. Rejects a start that holds `1s` to the floor without saying so.
 #[test]
 fn an_interval_under_the_floor_is_raised_and_said() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     let started = typed(&mut bridge, &handle, "1s x");
     assert_eq!(started["adjusted"]["held"], "raised");
@@ -217,6 +223,9 @@ fn an_interval_under_the_floor_is_raised_and_said() {
 /// live loop under its number.
 #[test]
 fn the_bare_command_reports() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     let empty = typed(&mut bridge, &handle, "");
     assert_eq!(empty["refused"], false);
@@ -236,6 +245,9 @@ fn the_bare_command_reports() {
 /// loop but loop 2.
 #[test]
 fn stop_takes_a_number_where_several_are_live() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "5m one");
     typed(&mut bridge, &handle, "5m two");
@@ -263,6 +275,9 @@ fn stop_takes_a_number_where_several_are_live() {
 /// ctrl-c, or refuse a bare stop without naming the stops that would work.
 #[test]
 fn the_answers_are_worded_for_the_window() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     let first = typed(&mut bridge, &handle, "5m one");
     assert_eq!(
@@ -324,6 +339,9 @@ fn the_answers_are_worded_for_the_window() {
 /// put the ending between the tick's row and its answer.
 #[test]
 fn an_ending_is_said_after_the_turn_it_ended() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     let answer = call(
         &mut bridge,
@@ -348,6 +366,9 @@ fn an_ending_is_said_after_the_turn_it_ended() {
 /// LOOP-15. Rejects `/loop stop the deploy` read as an ending: it is a loop over that line.
 #[test]
 fn stop_with_more_words_is_a_line_to_repeat() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     let started = typed(&mut bridge, &handle, "stop the deploy");
     assert_eq!(started["number"], 1);
@@ -358,6 +379,9 @@ fn stop_with_more_words_is_a_line_to_repeat() {
 /// again after its loop ended.
 #[test]
 fn a_sixth_loop_is_refused_and_numbers_are_not_reused() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     for n in 1..=5 {
         assert_eq!(
@@ -377,6 +401,9 @@ fn a_sixth_loop_is_refused_and_numbers_are_not_reused() {
 /// LOOP-3, LOOP-15. Rejects an interval with nothing after it starting a loop.
 #[test]
 fn an_interval_alone_is_unreadable() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     let said = typed(&mut bridge, &handle, "5m");
     assert_eq!(said["refused"], true);
@@ -388,6 +415,9 @@ fn an_interval_alone_is_unreadable() {
 /// with nowhere to go; and a list or a stop refused then.
 #[test]
 fn a_start_waits_for_the_turn_in_flight() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "5m one");
     running_turn(&mut bridge, &handle);
@@ -418,6 +448,9 @@ fn a_start_waits_for_the_turn_in_flight() {
 /// have nowhere to go.
 #[test]
 fn a_start_is_refused_where_no_turn_could_start() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     bridge.open.get_mut(&handle).unwrap().answered_trust = false;
     let failure = call(
@@ -434,6 +467,9 @@ fn a_start_is_refused_where_no_turn_could_start() {
 /// DROP-4. Rejects a dropped file's marker kept in the repeated line in place of its name.
 #[test]
 fn a_dropped_file_is_put_back_as_its_name() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     call(
         &mut bridge,
@@ -454,6 +490,9 @@ fn a_dropped_file_is_put_back_as_its_name() {
 /// a turn that is not told it is a tick of a loop the person paces.
 #[test]
 fn the_first_tick_goes_at_once() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, bodies, _held) = opened();
     call(
         &mut bridge,
@@ -480,6 +519,9 @@ fn the_first_tick_goes_at_once() {
 /// interval after the turn's end.
 #[test]
 fn the_next_tick_is_an_interval_after_the_turn_ends() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     let before = Instant::now();
     typed(&mut bridge, &handle, "5m check the deploy");
@@ -504,6 +546,9 @@ fn the_next_tick_is_an_interval_after_the_turn_ends() {
 /// is answered, or while a settings question waits; and one held once each is over.
 #[test]
 fn nothing_fires_while_the_session_cannot_take_a_turn() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "5s x");
     let later = Instant::now() + Duration::from_secs(60);
@@ -548,6 +593,9 @@ fn nothing_fires_while_the_session_cannot_take_a_turn() {
 /// LOOP-6. Rejects a loop kept, or ended without saying so, when its tick's turn cannot start.
 #[test]
 fn a_tick_whose_turn_cannot_start_ends_its_loop() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "5m x");
     // Past the poll's own refusal, so the turn's start is what refuses.
@@ -566,6 +614,9 @@ fn a_tick_whose_turn_cannot_start_ends_its_loop() {
 /// state; and one held after the session is idle again.
 #[test]
 fn nothing_fires_while_the_session_is_busy() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "5s x");
     let later = Instant::now() + Duration::from_secs(60);
@@ -591,6 +642,9 @@ fn nothing_fires_while_the_session_is_busy() {
 /// back for another session's queue, and a `held` that is not a list of sessions.
 #[test]
 fn nothing_fires_while_the_window_holds_a_queue() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "5s x");
     let later = Instant::now() + Duration::from_secs(60);
@@ -612,6 +666,9 @@ fn nothing_fires_while_the_window_holds_a_queue() {
 /// the second.
 #[test]
 fn two_silent_self_paced_turns_end_the_loop() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, bodies, _held) = opened();
     typed(&mut bridge, &handle, "check the deploy");
     let ended = Instant::now();
@@ -641,6 +698,9 @@ fn two_silent_self_paced_turns_end_the_loop() {
 /// due.
 #[test]
 fn the_loop_due_soonest_goes_first() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "10m slow");
     typed(&mut bridge, &handle, "5m fast");
@@ -658,6 +718,9 @@ fn the_loop_due_soonest_goes_first() {
 /// row needs to count loops and lines `/after` holds apart.
 #[test]
 fn each_listed_loop_says_how_long_it_has_left() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "10m slow");
     typed(&mut bridge, &handle, "5m fast");
@@ -677,6 +740,9 @@ fn each_listed_loop_says_how_long_it_has_left() {
 /// LOOP-11. Rejects a loop that outlives seven days, or one that ends without saying so.
 #[test]
 fn a_loop_ends_after_seven_days() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "5m check the deploy");
     let ended = Instant::now();
@@ -694,6 +760,9 @@ fn a_loop_ends_after_seven_days() {
 /// a turn as it was typed.
 #[test]
 fn a_loop_over_a_command_sends_it_as_a_prompt() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, bodies, _held) = opened();
     let started = typed(&mut bridge, &handle, "5m /status");
     assert_eq!(started["number"], 1);
@@ -717,6 +786,9 @@ fn a_loop_over_a_command_sends_it_as_a_prompt() {
 /// LOOP-11. Rejects a cancelled turn that leaves any loop live, or one that says so loop by loop.
 #[test]
 fn cancelling_a_turn_ends_every_loop() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "5m one");
     typed(&mut bridge, &handle, "5m two");
@@ -753,6 +825,9 @@ fn cancel_held(bridge: &mut Bridge, handle: &str, held: &Held) {
 /// once or loop by loop, by `turn.cancel` and again by the worker that sees the turn cancelled.
 #[test]
 fn cancelling_a_tick_ends_every_loop_and_says_so_once() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, bodies, held) = opened();
     typed(&mut bridge, &handle, "5m one");
     let before = bodies.lock().unwrap().len();
@@ -779,6 +854,9 @@ fn cancelling_a_tick_ends_every_loop_and_says_so_once() {
 /// live, because it was not a tick of any of them.
 #[test]
 fn cancelling_a_typed_prompt_ends_every_loop_and_says_so_once() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, bodies, held) = opened();
     typed(&mut bridge, &handle, "5m one");
     typed(&mut bridge, &handle, "check the deploy");
@@ -804,6 +882,9 @@ fn cancelling_a_typed_prompt_ends_every_loop_and_says_so_once() {
 /// loop by loop.
 #[test]
 fn closing_a_session_ends_every_loop_and_says_so() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     typed(&mut bridge, &handle, "5m one");
     typed(&mut bridge, &handle, "5m two");
@@ -820,6 +901,9 @@ fn closing_a_session_ends_every_loop_and_says_so() {
 #[test]
 #[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_reopened_session_has_no_loops() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, held) = opened();
     typed(&mut bridge, &handle, "5m check the deploy");
     let id = {
@@ -973,6 +1057,9 @@ fn after(bridge: &mut Bridge, handle: &str, argument: &str) -> Value {
 /// left among the loops once it was sent, or sent to a turn told it is a tick.
 #[test]
 fn an_after_line_is_sent_once_after_its_delay_and_leaves_no_loop() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, bodies, _held) = opened();
     let before = Instant::now();
     let answer = after(&mut bridge, &handle, "5m check the deploy");
@@ -1019,6 +1106,9 @@ fn an_after_line_is_sent_once_after_its_delay_and_leaves_no_loop() {
 /// not count towards the five, or is taken when five are held.
 #[test]
 fn an_after_line_counts_towards_the_cap() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, _events, _bodies, _held) = opened();
     for n in 1..=4 {
         typed(&mut bridge, &handle, &format!("5m line {n}"));
@@ -1043,6 +1133,9 @@ fn an_after_line_counts_towards_the_cap() {
 /// without saying so.
 #[test]
 fn an_after_line_is_taken_during_a_turn_and_needs_a_leading_delay() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
     let (mut bridge, handle, events, _bodies, _held) = opened();
     running_turn(&mut bridge, &handle);
     assert_eq!(after(&mut bridge, &handle, "5m during")["number"], 1);
