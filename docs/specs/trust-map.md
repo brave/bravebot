@@ -550,7 +550,11 @@ again if its contents matter and repeats the call. A write nobody was asked abou
 moved writes nothing, leaves the file as it was and tells the planner that the file may have been
 written, or a command started, since the write was prepared, that no approval question was put, and
 to repeat the call. Both refusals are recorded as refusals, saying whether a person was being asked
-([trace.md](trace.md)). An edit is refused before its endorsement is used. A path whose vouch was thrown away is offered again by the next read of it, about the file
+([trace.md](trace.md)). An edit is refused before its endorsement is used.
+Where a mode answered and the vouch is thrown away because the path's revision moved, the read is
+told that the permission mode answered the offer and nobody was asked, that the path was written or
+a decision about it or a directory above it was made since the read began, that nothing was trusted, and to read it again
+if it is still needed. A path whose vouch was thrown away is offered again by the next read of it, about the file
 as it is then, so the read's own advice to read again is true. An answer that was spent, and a no,
 keep the path asked about for the rest of the turn. A change to another path invalidates no
 approval and no vouch, but any `run` line that started since the preview was drawn voids a vouch,
@@ -703,6 +707,8 @@ enters. A program that something other than the turn started is not tracked or c
 `verified-by: bravebot_core::policy::a_vouch_is_not_spent_after_a_program_started_while_the_question_was_open`
 `verified-by: bravebot_agent::tools::tests::vouching_after_a_preview::a_yes_is_not_spent_when_a_program_started_while_the_person_was_asked`
 `verified-by: bravebot_agent::tools::tests::vouching_after_a_preview::a_read_after_a_thrown_away_answer_asks_the_person_again`
+`verified-by: bravebot_agent::tools::tests::vouching_after_a_preview::a_yes_the_mode_gave_is_spent_when_a_program_started_while_the_question_was_open`
+`verified-by: bravebot_agent::tools::tests::vouching_after_a_preview::a_yes_the_mode_gave_is_not_spent_on_a_file_whose_revision_moved_while_the_question_was_open`
 `verified-by: bravebot_agent::workspace::an_endorsed_write_is_refused_when_a_program_started_after_the_read`
 `verified-by: bravebot_agent::workspace::an_endorsed_write_proceeds_when_no_program_started_after_the_read`
 `verified-by: bravebot_agent::workspace::a_program_started_before_the_read_does_not_void_the_write`

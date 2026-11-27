@@ -203,7 +203,7 @@ same way, and so do the line a call about a file draws in the transcript, the li
 wrote, read or changed, and the startup notes about an allow rule a checkout proposed. A search for a
 pattern is drawn as written. The question is
 asked once per path per turn, and only where the read is quarantined, except that a yes given after the
-file changed while you were answering is thrown away and the next read of it asks again. Declining leaves the file as it
+file may have changed while you were answering is thrown away and the next read of it asks again. Declining leaves the file as it
 was and the turn carries on with a reference.
 
 The startup trust question an editor, the desktop window or the mobile app shows draws the directory and
@@ -243,7 +243,8 @@ over a string the planner chose rather than one you typed.
 and the read says so. A program can rewrite files its line does not name, so the text you read in the
 preview may no longer be what the file holds. Where the permission mode vouches in your place, nobody
 read a preview, so only a change to the file throws the vouch away, and a `run` line that started
-meanwhile does not.
+meanwhile does not. Where a change does throw it away, the read says that the mode answered and
+nobody was asked.
 
 ### `/add-dir`
 
