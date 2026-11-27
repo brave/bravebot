@@ -63,7 +63,10 @@ question for the other sources.
 asked what it has pulled, and `/model` lists what came back without the models that cannot call
 tools. To pin a short list instead, see [Which models are
 offered](openai-compatible.md#which-models-are-offered). A model is named with `ollama/` in front,
-as in the block above.
+as in the block above. A model named `ollama/...` while no `provider` block named `ollama` states an
+endpoint (an `ollama: {}` entry counts as none) is refused before any request is sent, and the
+message says that no provider block named `ollama` is configured. Add the block above, or run
+`bravebot doctor` to see the configuration.
 
 ## The context window
 

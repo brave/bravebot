@@ -545,7 +545,8 @@ turn after `--agent` does ([CLI-17](cli.md#CLI-17), which addresses every turn o
 definition). That includes typed lines, `/loop` ticks, `/goal` rounds and the turns the terminal
 composes. The name comes from the row the person chose, never from the line typed and never from a
 reply. A row whose definition does not resolve runs nothing and says so, naming the definition. A
-definition whose model needs a sign-in the machine has not made is refused
+definition whose model needs a sign-in the machine has not made, or is written for a service that
+has no `provider` block, is refused
 ([ADDRESS-11](addressing-a-definition.md#ADDRESS-11), which refuses such a model).
 
 A reply is drawn under the name the row gives, as the GUI draws it. A `/agent` line naming

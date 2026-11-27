@@ -243,18 +243,28 @@ pub(super) fn checkout_account(
 }
 
 /// What the delegate did, for the person's note and the planner's message: how many calls ran a
-/// program and how many changed a file, and where (GROUND-2, GROUND-3).
+/// program and how many changed a file, and where (GROUND-2, GROUND-3). The writes are said to be
+/// in the project, or in its own checkout where it worked in one, and a count of the writes that
+/// landed in the session's own directory follows where there were any.
 ///
-/// Fixed words and two counts the driver holds. No path, no command and no word of a report, so
+/// Fixed words and three counts the driver holds. No path, no command and no word of a report, so
 /// a delegate cannot speak to the planner through them (GROUND-6).
-pub(super) fn work_sentences(work: crate::outcome::Work, in_checkout: bool) -> (String, String) {
+pub(super) fn work_sentences(
+    work: crate::outcome::Work,
+    session_writes: usize,
+    in_checkout: bool,
+) -> (String, String) {
     let did = format!(
-        "ran {} and made {}{}",
+        "ran {} and made {} {}{}",
         tools::tally(work.commands, "command", "commands"),
         tools::tally(work.writes, "write", "writes"),
         match in_checkout {
-            true => " in its own checkout",
-            false => "",
+            true => "in its own checkout",
+            false => "in the project",
+        },
+        match session_writes {
+            0 => String::new(),
+            count => format!(" and {count} in the session directory"),
         }
     );
     (format!("it {did}"), format!(" It {did}."))
@@ -298,8 +308,9 @@ pub(super) struct Joined {
     pub finish: Finish,
     /// What its own backend reported it spent.
     pub tokens: u64,
-    /// What it did, and whether it did it in a checkout of its own, where it came back at all.
-    pub work: Option<(crate::outcome::Work, bool)>,
+    /// What it did, how many of its writes landed in the session's own directory, and whether it
+    /// did it in a checkout of its own, where it came back at all.
+    pub work: Option<(crate::outcome::Work, usize, bool)>,
     /// The checkout it worked in, and what retiring it did.
     pub retired: Option<(
         crate::workspace::Retired,
@@ -372,7 +383,11 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
                 Some(_) => {}
             }
             let ran = Some((ended.took, ended.rounds));
-            let work = Some((ended.worked.work, working.checkout.is_some()));
+            let work = Some((
+                ended.worked.work,
+                ended.worked.session_writes,
+                working.checkout.is_some(),
+            ));
             (ended.delegated, ran, partial, requests, blocked, work)
         }
         // A thread that panicked is a delegate that stopped, which is all anybody can be
@@ -649,16 +664,46 @@ mod tests {
             last_command_failed: false,
         };
         assert_eq!(
-            work_sentences(work, true),
+            work_sentences(work, 0, true),
             (
                 "it ran 1 command and made 3 writes in its own checkout".to_string(),
                 " It ran 1 command and made 3 writes in its own checkout.".to_string()
             )
         );
         assert_eq!(
-            work_sentences(work, false).1,
-            " It ran 1 command and made 3 writes."
+            work_sentences(work, 0, false).1,
+            " It ran 1 command and made 3 writes in the project."
         );
+    }
+
+    /// GROUND-2. Writes in the session's own directory are said after the project's, as a number
+    /// and nothing else, and said in a checkout as well. Nothing is added where there were none.
+    ///
+    /// Rejects a figure folded into the project's writes (the first number would be 4), a clause
+    /// that is always present (the zero case would carry it), and one dropped in a checkout.
+    #[test]
+    fn writes_in_the_session_directory_are_said_apart_from_the_projects() {
+        let work = crate::outcome::Work {
+            writes: 0,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        };
+        assert_eq!(
+            work_sentences(work, 1, false),
+            (
+                "it ran 1 command and made 0 writes in the project and 1 in the session directory"
+                    .to_string(),
+                " It ran 1 command and made 0 writes in the project and 1 in the session directory."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            work_sentences(work, 3, true).1,
+            " It ran 1 command and made 0 writes in its own checkout and 3 in the session \
+             directory."
+        );
+        assert!(!work_sentences(work, 0, false).1.contains("session"));
     }
 
     /// CHECKOUT-18. A checkout that could not be removed is reported with its number, the commit it

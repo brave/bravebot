@@ -153,6 +153,45 @@ fn a_home_agents_file_inside_the_working_directory_is_not_read_as_the_persons_ow
     );
 }
 
+/// INSTR-1, SKILL-3. A session whose working directory is the home directory is told the cause and
+/// the remedy for the unread `~/.bravebot/AGENTS.md`, in the words the memory notice uses.
+#[test]
+fn an_unread_home_agents_file_in_the_home_directory_says_why_and_what_to_do() {
+    let scratch = Scratch::new("home-agents-in-home");
+    let project = scratch.directory("project");
+    let state = project.join(".bravebot");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("AGENTS.md"), "PLANTED-CONVENTION").unwrap();
+    let workspace = Workspace::new(&project).unwrap();
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            Some(&state),
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    let told: Vec<&str> = preamble
+        .notices
+        .iter()
+        .map(|n| n.message.as_str())
+        .collect();
+    assert_eq!(
+        told,
+        [
+            "~/.bravebot/AGENTS.md was not read because this session's working directory is your \
+             home directory. Start bravebot in a project directory to have it read"
+        ]
+    );
+}
+
 /// A directory opened with `/add-dir` is somewhere to read files from, not a second project. Its
 /// conventions are not the ones this work is being done under, and treating them as standing
 /// instructions would let opening a directory silently change how every later turn behaves.

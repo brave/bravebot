@@ -235,6 +235,11 @@ trained with rather than leaving it at the server's small default. No `models` k
 asked what it has pulled, and `/model` lists what came back.
 `bravebot doctor` says a credential is not needed rather than missing.
 
+A model written `ollama/<name>` with no `provider` block named `ollama` is refused before any request
+is sent. The message says that no provider block named `ollama` is configured, and `bravebot doctor`
+shows the configuration. The same holds for a model written for any other service id bravebot
+recognises when no block has that id.
+
 You need not write it by hand. With Ollama running and nothing else configured, a first run in a
 terminal shows this block, with the newest of your models that can call tools as `model`, and asks
 whether to write it. A running LM Studio or llama-server is offered the same way, as a block of its

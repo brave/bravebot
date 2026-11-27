@@ -2023,6 +2023,11 @@ servers-prompts-refused = { $count ->
 # person reading it cannot write the file that refused, so the file is the only actionable thing in
 # it, and a refusal at the moment of the request says nothing about where to look.
 managed-model-refused = no request is made for { $model }: { $reason }
+# The model in force, or a model a flag names, is written for a service bravebot knows and no
+# `provider` block has that id, so Brave's endpoint is not asked for it (BACKEND-3). The model is
+# from the person's own settings or command line.
+model-service-unconfigured =
+    no request is made for { $model }: no provider block named { $id } is configured. Add one under "provider" in ~/.bravebot/settings.json (https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service), or run `bravebot doctor` to see the configuration.
 managed-model-not-allowed =
     { $path }, which this machine's administrator manages, allows only the models its models.allow
     names
@@ -4395,6 +4400,8 @@ session-advisor-none = no advisor; try /advisor followed by a model name
 session-advisor-dropped = advisor dropped
 session-advisor-dropped-setting-remains = advisor dropped; the advisorModel setting still names { $model }
 session-advisor-nothing-serves = nothing is configured to answer { $model }, so it cannot advise
+# The advisor named for a service bravebot knows, where no `provider` block has that id.
+session-advisor-unconfigured = no provider block named { $id } is configured, so { $model } cannot advise. Add one under "provider" in ~/.bravebot/settings.json, or run `bravebot doctor` to see the configuration.
 session-advisor-needs-sign-in = { $model } needs a sign-in first, so it cannot advise
 session-style-set = answering in the { $style } style from the next turn
 session-style-in-force = style: { $style }; available: { $styles }
@@ -4986,6 +4993,10 @@ checkouts-kept = checkout { $id } is kept
 ## The memory each definition keeps
 
 memory-none = no definition loaded here keeps a memory
+# The definitions that keep no memory because the working directory is the home directory or
+# inside it, for the terminal client's /memory. The names are the definitions' own, joined with a
+# comma.
+memory-left-in-home = Definitions that keep no memory because this session's working directory is your home directory, or is ~/.bravebot or inside it: { $names }. Start bravebot in a project directory to give them one
 # The path is where the memory is kept, and is left as it is.
 memory-withheld = { $name }: { $path }, withheld, since the map does not trust that path
 memory-withheld-recorded =
@@ -5361,6 +5372,11 @@ delegate-more-calls = { $count } calls so far
 # The definition's name and the model as its file wrote it, both from a vouched-for file.
 delegate-model-needs-sign-in =
     { $definition } asked for { $model }, which needs a sign-in first, so it did not run
+# A definition naming a model qualified with the id of a service bravebot knows, where no `provider`
+# block has that id. The definition's name, the model as its file wrote it and the id are from the
+# person's own files. Refused before any request, since no configured service serves the name.
+delegate-model-unconfigured =
+    { $definition } asked for { $model }, but no provider block named { $id } is configured, so nothing was sent. Add one under "provider" in ~/.bravebot/settings.json (https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service), or run `bravebot doctor` to see the configuration.
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words.
 delegate-model-substituted = { $definition } asked for { $model } and was answered by a different model
@@ -5381,6 +5397,10 @@ summary-model-refused =
 # a judge or a summariser answering without the exchange reads as a verdict rather than a failure.
 summary-model-not-served =
     { $model } is set as the summary model and no configured service answers for it, so nothing was sent
+# The same setting naming a model written for a service bravebot knows, where no `provider` block
+# has that id. The model and the id are from the person's own settings.
+summary-model-unconfigured =
+    { $model } is set as the summary model, but no provider block named { $id } is configured, so nothing was sent. Add one under "provider" in ~/.bravebot/settings.json, or run `bravebot doctor` to see the configuration.
 # The model `processorModel` or `--processor-model` named, both the person's own. A processor call is
 # refused rather than sent to the turn's model, since the name is a cost boundary.
 processor-model-needs-sign-in =
@@ -5391,6 +5411,9 @@ processor-model-refused =
 # The same name for a model no configured service answers for.
 processor-model-not-served =
     { $model } is set as the processor model and no configured service answers for it, so nothing was sent
+# The same name written for a service bravebot knows, where no `provider` block has that id.
+processor-model-unconfigured =
+    { $model } is set as the processor model, but no provider block named { $id } is configured, so nothing was sent. Add one under "provider" in ~/.bravebot/settings.json, or run `bravebot doctor` to see the configuration.
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words. The model is the one the person named.
 processor-model-substituted = A processor asked for { $model } and was answered by a different model
@@ -5487,10 +5510,16 @@ delegate-memory-not-kept = { $definition } keeps no memory: its memory line says
 # A definition asked to keep a memory and its name is not one its memory file can be named after.
 # The definition is its file's path.
 delegate-memory-not-a-slug = { $definition } keeps no memory: a definition keeping one needs a name of lowercase letters and digits in runs joined by single hyphens, 64 characters at most
-# A definition asked to keep a memory in a working directory where the memory would fall inside the
-# person's own ~/.bravebot, as it does for a session in the home directory. The definition is its
-# file's path, and ~/.bravebot stays as it is.
-delegate-memory-in-home = { $definition } keeps no memory here: in this directory its memory would be inside ~/.bravebot, which no write can leave untrusted
+# Definitions asked to keep a memory in a working directory where the memory would fall inside the
+# person's own ~/.bravebot, as it does for a session in the home directory or in ~/.bravebot
+# itself. One message for all of them, and $count is how many. The cause is said as the working
+# directory being the home directory or ~/.bravebot or inside it, and the remedy as starting in a
+# project directory.
+delegate-memory-in-home =
+    { $count ->
+        [one] 1 agent definition keeps no memory because this session's working directory is your home directory, or is ~/.bravebot or inside it. Start bravebot in a project directory to give it one
+       *[other] { $count } agent definitions keep no memory because this session's working directory is your home directory, or is ~/.bravebot or inside it. Start bravebot in a project directory to give them one
+    }
 # A definition's isolation line named a value other than checkout or worktree, so the definition
 # loads and its delegate works in the working directory. The definition is its file's path and the
 # value is that file's own words, both from a vouched-for file. "isolation", "checkout" and
@@ -5562,6 +5591,10 @@ skill-model-needs-sign-in = { $skill } asks for { $model }, which needs a sign-i
 # The layer refuses the model, so the skill loads and the turn goes on as it was, for the reason the
 # sign-in line above does.
 skill-model-refused = { $skill } asks for { $model }, which this machine does not request, so its rounds keep this session's model: { $reason }
+# The skill names a model written for a service bravebot knows, where no `provider` block has that
+# id, so Brave's endpoint is not asked for it (BACKEND-3). The skill loads and the turn goes on as it
+# was, for the reason the sign-in line above does. The skill and the model are its file's own words.
+skill-model-unconfigured = { $skill } asks for { $model }, but no provider block named { $id } is configured, so its rounds keep this session's model. Add one under "provider" in ~/.bravebot/settings.json, or run `bravebot doctor` to see the configuration.
 # The turn runs on a model an addressed or delegate definition named, which a skill does not
 # replace. The definition is its name as the person or the planner wrote it.
 skill-model-kept-for-definition = { $skill } asks for { $model }, but this turn stays on the model { $definition } named
@@ -5594,6 +5627,10 @@ doctor-skills-shared-not-read = { $directory } exists and is not read: name it i
 # The person's own ~/.bravebot/AGENTS.md when it was not read, because the way to the file goes
 # through the working directory or a directory opened beside it, where a turn can write.
 home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md was not read: the way to it goes through a directory this session can write to
+# The same file when the working directory is the person's home directory, so the way to the file
+# goes through a directory a turn can write. The cause and the remedy are those of
+# delegate-memory-in-home.
+home-agents-file-in-working-directory = ~/.bravebot/AGENTS.md was not read because this session's working directory is your home directory. Start bravebot in a project directory to have it read
 # The person's rules for this project when they were not read, for the same reason.
 project-rules-reached-through-the-workspace = The rules kept in ~/.bravebot for this project were not read: the way to them goes through a directory this session can write to
 # The person's rules for this project when the file exists and could not be read.

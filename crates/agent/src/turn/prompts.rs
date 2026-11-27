@@ -328,9 +328,80 @@ While a delegate is working you have your round back. Spend it on work, or answe
 and wait. A round spent reporting that delegates are running costs a whole request, says what the \
 person can already see on the screen, and stays in the conversation being re-sent afterwards.";
 
+/// What the turn a person is watching is told when the session kept no memory for `definitions`
+/// agent definitions, which happens where the working directory is the home directory, is
+/// `~/.bravebot` or is inside it, or when `~/.bravebot/AGENTS.md` was left unread because the
+/// working directory is the home directory. The planner can then say what the notices the person
+/// was shown mean (MEMORY-2, SKILL-3).
+///
+/// Written from a count and a flag. A definition's name or a file's words are in none of it, and no
+/// command is named, since every front end draws this prompt and only the terminal client has
+/// `/memory`.
+pub(super) fn left_in_home(definitions: usize, agents_file: bool) -> String {
+    let mut said = String::new();
+    match definitions {
+        0 => {}
+        1 => said.push_str(
+            " 1 agent definition that asks for a memory keeps none, because the working directory \
+             is the user's home directory, or is ~/.bravebot or inside it.",
+        ),
+        many => said.push_str(&format!(
+            " {many} agent definitions that ask for a memory keep none, because the working \
+             directory is the user's home directory, or is ~/.bravebot or inside it."
+        )),
+    }
+    if agents_file {
+        said.push_str(
+            " ~/.bravebot/AGENTS.md was not read, because the working directory is the user's \
+             home directory.",
+        );
+    }
+    if said.is_empty() {
+        return said;
+    }
+    format!(
+        "\n\nThe user was shown a notice about each of these:{said} The notices say that starting \
+         bravebot in a project directory fixes it. If they ask what a notice means, tell them \
+         that."
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PLANNING, reading_a_reference};
+    use super::{PLANNING, left_in_home, reading_a_reference};
+
+    /// MEMORY-2. The planner is told the count, the cause and the remedy of a notice the person was
+    /// shown, and nothing where there was none.
+    ///
+    /// Rejects: a planner told in every session, one told no cause or no remedy, one told only of
+    /// the definitions or only of the file, and one told to point at `/memory`, which only the
+    /// terminal client has.
+    #[test]
+    fn the_planner_is_told_what_the_home_directory_notices_mean_only_where_they_were_shown() {
+        assert_eq!(left_in_home(0, false), "");
+        let one = left_in_home(1, false);
+        assert!(
+            one.contains("1 agent definition that asks for a memory keeps none"),
+            "{one}"
+        );
+        let many = left_in_home(3, true);
+        assert!(
+            many.contains("3 agent definitions that ask for a memory keep none"),
+            "{many}"
+        );
+        assert!(
+            many.contains("~/.bravebot/AGENTS.md was not read"),
+            "{many}"
+        );
+        for said in [&one, &many] {
+            assert!(said.contains("the working directory is the user's home directory"));
+            assert!(said.contains("starting bravebot in a project directory"));
+            assert!(!said.contains("/memory"), "{said}");
+        }
+        let file_only = left_in_home(0, true);
+        assert!(!file_only.contains("agent definition"), "{file_only}");
+        assert!(file_only.contains("AGENTS.md was not read"), "{file_only}");
+    }
 
     /// WRITE-3. The planner is not told every write is shown for approval: a write to a trusted
     /// path with trusted data is applied unasked (TRUST-4). A regression that restores the claim

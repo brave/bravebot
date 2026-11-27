@@ -636,6 +636,20 @@ pub fn discover<S: Sink>(
     workspace: &Workspace,
     home: Option<&Path>,
 ) -> (Definitions, Vec<Notice>) {
+    let (definitions, notices, _) = discover_naming_memories_left(policy, workspace, home);
+    (definitions, notices)
+}
+
+/// [`discover`], and the name of each definition that would keep a memory in a working directory
+/// where none can be kept ([MEMORY-2]), which the turn counts and `/memory` lists ([MEMORY-12]).
+///
+/// [MEMORY-2]: ../../../docs/specs/definition-memory.md
+/// [MEMORY-12]: ../../../docs/specs/definition-memory.md
+pub(crate) fn discover_naming_memories_left<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    home: Option<&Path>,
+) -> (Definitions, Vec<Notice>, Vec<String>) {
     // The three kinds, which are always here. There is no gate to pass and nothing to vouch for:
     // this is the program's own text rather than a source somebody supplied, so it can neither be
     // refused nor be missing.
@@ -644,7 +658,7 @@ pub fn discover<S: Sink>(
 
     // Only the three kinds the program wrote remain: every other definition is a file somebody wrote.
     if bravebot_core::safe::engaged() {
-        return (definitions, notices);
+        return (definitions, notices, Vec::new());
     }
 
     if let Some(home) = home {
@@ -689,18 +703,19 @@ pub fn discover<S: Sink>(
     // Asked once every file is in, since a later definition of a name takes its key over. A
     // memory inside the person's own directory is one the map does not govern, so no write and no
     // record could leave it untrusted.
+    let mut left = Vec::new();
     if crate::memory::kept_in_home(workspace.root(), home) {
-        for definition in definitions.iter().filter(|d| d.keeps_memory()) {
+        left = definitions.keep_no_memory();
+        if !left.is_empty() {
             notices.push(Notice::from_message(t!(
                 delegate_memory_in_home,
-                definition = definition.origin()
+                count = left.len()
             )));
         }
-        definitions.keep_no_memory();
     }
     notices.extend(memories_kept_only_when_addressed(&definitions));
 
-    (definitions, notices)
+    (definitions, notices, left)
 }
 
 /// The set a turn starting now would resolve, for an interface about to start one.
@@ -737,17 +752,36 @@ pub fn memories<S: Sink>(
     permissions: bravebot_core::permissions::Permissions,
     sink: &mut S,
 ) -> Vec<crate::memory::Listed> {
+    memories_with_left(workspace, home, trust, permissions, sink).0
+}
+
+/// [`memories`], and the name of each definition that asks for a memory and keeps none because
+/// the working directory is the home directory or inside the state directory ([MEMORY-2]), from the
+/// one discovery, for `/memory` ([MEMORY-12]).
+///
+/// The names are those of definitions that loaded, so each is a name a vouched-for file carries.
+///
+/// [MEMORY-2]: ../../../docs/specs/definition-memory.md
+/// [MEMORY-12]: ../../../docs/specs/definition-memory.md
+pub fn memories_with_left<S: Sink>(
+    workspace: &Workspace,
+    home: Option<&Path>,
+    trust: &bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    sink: &mut S,
+) -> (Vec<crate::memory::Listed>, Vec<String>) {
     let trust = crate::memory::with_recorded(trust, workspace, home);
     let Some(mut policy) = discovery_policy(workspace, trust, permissions, sink) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    let (definitions, _) = discover(&mut policy, workspace, home);
+    let (definitions, _, left) = discover_naming_memories_left(&mut policy, workspace, home);
     let recorded = crate::memory::recorded(workspace, home);
-    definitions
+    let listed = definitions
         .iter()
         .filter(|definition| definition.keeps_memory())
         .map(|definition| crate::memory::listed(&policy, workspace, definition.name(), &recorded))
-        .collect()
+        .collect();
+    (listed, left)
 }
 
 /// The file of the project's own standing instructions a turn reads here, for `/memory`

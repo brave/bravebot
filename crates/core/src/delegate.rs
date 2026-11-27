@@ -1017,10 +1017,17 @@ impl Definitions {
 
     /// Keep no memory for any of them, where the directory a memory would be kept in is one no
     /// write could leave untrusted.
-    pub fn keep_no_memory(&mut self) {
+    ///
+    /// Returns the name of each definition that kept one until now.
+    pub fn keep_no_memory(&mut self) -> Vec<String> {
+        let mut cleared = Vec::new();
         for entry in &mut self.entries {
+            if entry.memory {
+                cleared.push(entry.name.clone());
+            }
             entry.memory = false;
         }
+        cleared
     }
 
     pub fn len(&self) -> usize {
@@ -3393,8 +3400,14 @@ mod tests {
                 .with_memory(),
         );
 
-        definitions.keep_no_memory();
+        let mut cleared = definitions.keep_no_memory();
+        cleared.sort();
 
+        assert_eq!(
+            cleared,
+            ["migrator", "reviewer"],
+            "every definition that kept one is named"
+        );
         assert!(definitions.iter().all(|d| !d.keeps_memory()));
         let migrator = definitions.get("migrator").expect("still selectable");
         assert_eq!(migrator.kind(), Kind::Worker);

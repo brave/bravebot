@@ -1202,6 +1202,16 @@ pub fn definition_named(
         )));
     }
     if let Some(written) = definition.model()
+        && let Some(id) = config.unconfigured_service(&config.model_named(written))
+    {
+        return Err(Unusable::Refused(t!(
+            delegate_model_unconfigured,
+            definition = name,
+            model = written,
+            id = id
+        )));
+    }
+    if let Some(written) = definition.model()
         && bravebot_agent::backend::Backend::needs_sign_in(config, &config.model_named(written))
     {
         return Err(Unusable::Refused(t!(

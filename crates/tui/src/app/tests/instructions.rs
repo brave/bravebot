@@ -723,6 +723,37 @@ fn an_advisor_nothing_is_configured_to_answer_is_refused_and_the_held_one_stays(
     );
 }
 
+/// BACKEND-3. An advisor written for a service bravebot knows, where no `provider` block has that
+/// id, is refused with the missing block named, and the advisor already held stays. Taken, every
+/// consult would be sent to Brave's endpoint, which holds no such model.
+#[test]
+fn an_advisor_written_for_a_service_with_no_block_is_refused_naming_it_and_the_held_one_stays() {
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some("http://unused.invalid".into()),
+        _ => None,
+    })
+    .unwrap();
+    let mut session = Session::new("none");
+    session.choose_advisor(Some("the-advisor-already-held".to_string()));
+
+    set_advisor(&mut session, &config, "ollama/some-model");
+
+    assert_eq!(
+        session.advisor(),
+        Some("the-advisor-already-held"),
+        "a model no block serves replaced the advisor in force"
+    );
+    let said = session.transcript.last().unwrap().text.clone();
+    assert!(
+        said.contains("ollama/some-model")
+            && said.contains("no provider block named ollama")
+            && said.contains("bravebot doctor"),
+        "the line did not say which block is missing: {said}"
+    );
+}
+
 /// A model whose account needs a sign-in first is not taken either, and the line says so rather
 /// than reporting a service that is not there. The advisor the session already held stays.
 #[test]
@@ -990,6 +1021,97 @@ fn the_memory_command_lists_and_takes_no_argument() {
         handle_key(&mut session, key(KeyCode::Enter)),
         Action::Submit(_)
     ));
+}
+
+/// MEMORY-12. The definitions a session in the home directory left without a memory are named
+/// in one note with the remedy, and nothing is said where there are none.
+///
+/// Rejects: a note drawn where no definition was left without a memory, and one that names
+/// fewer than all of them.
+#[test]
+fn the_memory_listing_names_the_definitions_left_without_one_in_one_note() {
+    let mut session = Session::new("none");
+    session.report_memories_left(&[]);
+    assert!(session.transcript.is_empty(), "a note was drawn for none");
+    session.report_memories_left(&["notes-keeper".to_string(), "scribe".to_string()]);
+    let said: Vec<&str> = session
+        .transcript
+        .iter()
+        .map(|entry| entry.text.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        [t!(memory_left_in_home, names = "notes-keeper, scribe").to_string()]
+    );
+}
+
+/// MEMORY-12. The `/memory` handler draws the note naming the definitions left without a memory
+/// in the home directory, from the same reading of the definitions that lists the memories, and
+/// draws none where the state directory is elsewhere.
+///
+/// Rejects: a handler that lists the memories and never asks for the names left, one that
+/// drops the note, and one that draws it where every definition keeps its memory.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_memory_command_names_the_definitions_left_without_a_memory_in_the_home_directory() {
+    let root = crate::testutil::scratch_dir("bravebot-memory-left-handler");
+    std::fs::remove_dir_all(&root).ok();
+    let project = root.join("project");
+    let agents = project.join(".bravebot/agents");
+    std::fs::create_dir_all(&agents).expect("scratch");
+    std::fs::write(
+        agents.join("notes-keeper.md"),
+        "---\nname: notes-keeper\ndescription: d\nkind: worker\nmemory: project\n---\n\nbody\n",
+    )
+    .expect("definition");
+    let elsewhere = root.join("state");
+    std::fs::create_dir_all(&elsewhere).expect("scratch");
+    let inside = project.join(".bravebot");
+
+    let said_for = |home: &std::path::Path| {
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut session = Session::new("none");
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let rules = starting_rules(&mut session, &elsewhere, workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            workspace.root(),
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let mut conversation = Conversation::new();
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        }
+        .list_memories_in(Some(home));
+        session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let note = t!(memory_left_in_home, names = "notes-keeper").to_string();
+    assert!(
+        said_for(&inside).contains(&note),
+        "the listing did not name the definition left without a memory"
+    );
+    assert!(
+        !said_for(&elsewhere).contains(&note),
+        "the listing named a definition that keeps its memory"
+    );
+    std::fs::remove_dir_all(&root).ok();
 }
 
 /// MEMORY-12. Each standing is a different sentence naming the definition and the path, a

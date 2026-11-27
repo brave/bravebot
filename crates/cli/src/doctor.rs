@@ -1222,6 +1222,11 @@ fn report_serving(config: &Config, ending: &mut Ending) {
             println!();
             println!("{}", managed_refusal(&model, file.as_deref(), why));
         }
+        bravebot_agent::backend::Serving::Unconfigured { id } => {
+            *ending = ends_on(*ending, Ending::Configuration);
+            println!();
+            println!("{}", crate::model::unconfigured_service(&model, &id));
+        }
         bravebot_agent::backend::Serving::Configured => {}
     }
 }

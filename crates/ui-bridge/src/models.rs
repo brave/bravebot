@@ -297,13 +297,29 @@ pub fn refused(config: &Config, model: Option<&str>) -> Option<String> {
     ))
 }
 
+/// What a model written for a service bravebot recognises says, where no `provider` block has that
+/// id ([BACKEND-3](../../../docs/specs/backends.md#BACKEND-3)).
+///
+/// `None` for the model means the configured one, as for [`refused`]. The sentence is the catalog
+/// message the terminal gives for the same name, and the name is the person's own configuration.
+pub fn unconfigured(config: &Config, model: Option<&str>) -> Option<String> {
+    let asked = config.model_named(model.unwrap_or(&config.default_model));
+    let id = config.unconfigured_service(&asked)?;
+    Some(bravebot_i18n::t!(
+        model_service_unconfigured,
+        model = asked.as_str(),
+        id = id
+    ))
+}
+
 /// The model a turn, an enhancement or a manifest run is asked on, and the configuration it runs under,
 /// or the refusal of that model.
 ///
 /// The request's model wins over the one the session recorded. When neither names one, the configured model is the one checked.
 /// The configuration is loaded for the session's project and the settings file the window selected,
 /// and a failure to load it is `ErrorCode::Config`. The model is checked against that configuration
-/// after it loads, and a refused one is a `bad_request` carrying the sentence of [`refused`].
+/// after it loads, and a refused one is a `bad_request` carrying the sentence of [`refused`], or of
+/// [`unconfigured`] for a name written for a service that has no `provider` block.
 pub fn chosen(
     requested: Option<String>,
     session_model: Option<&str>,
@@ -327,6 +343,11 @@ fn choose(
     // reaching here means the name came from somewhere else (BACKEND-48).
     if let Some(refused) = refused(config, model.as_deref()) {
         return Err(crate::protocol::Failure::bad_request(refused));
+    }
+    // A name written for a service with no block would reach Brave's endpoint, though no configured
+    // service serves it, so no turn starts on it (BACKEND-3).
+    if let Some(said) = unconfigured(config, model.as_deref()) {
+        return Err(crate::protocol::Failure::bad_request(said));
     }
     Ok(model)
 }
@@ -991,6 +1012,50 @@ mod tests {
             assert_eq!(
                 failure.message,
                 refused(&config, Some("denied-model")).expect("refused")
+            );
+        }
+    }
+
+    /// BACKEND-3 in the window: a turn naming a model for a service bravebot recognises that has no
+    /// `provider` block is the `bad_request` of the catalog sentence that names the missing block,
+    /// whether the request, the session or the configured default gave the name, and no turn starts.
+    /// The same name with a block, a name with an unrecognised leading segment and a bare name are
+    /// chosen as before.
+    ///
+    /// A `choose` that checks only the machine-level refusal returns the name, and the turn is sent
+    /// to Brave's endpoint, which serves no model written that way.
+    #[test]
+    fn the_window_refuses_a_model_for_a_known_service_that_has_no_block() {
+        let open = configured("the-configured-model", None);
+        let sentence = unconfigured(&open, Some("ollama/x")).unwrap();
+        assert!(
+            sentence.contains("no provider block named ollama")
+                && sentence.contains("ollama/x")
+                && sentence.contains("bravebot doctor"),
+            "the refusal did not name the model and the missing block: {sentence}"
+        );
+
+        for (requested, session) in [(Some("ollama/x"), None), (None, Some("ollama/x"))] {
+            let failure = choose(&open, requested.map(str::to_string), session).unwrap_err();
+            assert_eq!(failure.code, crate::protocol::ErrorCode::BadRequest);
+            assert_eq!(failure.message, sentence);
+        }
+        // Neither names one: the configured default is the one checked.
+        let by_default = configured("ollama/x", None);
+        let failure = choose(&by_default, None, None).unwrap_err();
+        assert_eq!(failure.code, crate::protocol::ErrorCode::BadRequest);
+        assert_eq!(failure.message, sentence);
+
+        // A block with the id keeps the name, and a name no service recognises is not refused.
+        let with_block = a_config_with_a_gateway_stating_a_window(8_192);
+        assert_eq!(
+            choose(&with_block, Some("ollama/tiny".into()), None).unwrap(),
+            Some("ollama/tiny".to_string())
+        );
+        for name in ["z-ai/glm-4.6", "the-configured-model"] {
+            assert_eq!(
+                choose(&open, Some(name.into()), None).unwrap(),
+                Some(name.to_string())
             );
         }
     }

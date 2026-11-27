@@ -662,6 +662,12 @@ impl Notice {
         Self::new(t!(home_agents_file_reached_through_the_workspace))
     }
 
+    /// That `~/.bravebot/AGENTS.md` was not read, because the working directory is the home
+    /// directory, with the cause and remedy the memory notice gives (SKILL-3).
+    pub(crate) fn home_agents_file_in_working_directory() -> Self {
+        Self::new(t!(home_agents_file_in_working_directory))
+    }
+
     /// That the person's rules for the project were not read, for the same reason (RECALL-2).
     pub(crate) fn project_rules_reached_through_the_workspace() -> Self {
         Self::new(t!(project_rules_reached_through_the_workspace))

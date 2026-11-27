@@ -1032,6 +1032,50 @@ fn a_processor_model_nothing_serves_is_refused_before_the_run() {
     );
 }
 
+/// CLI-34, BACKEND-3. A processor model written for a service bravebot knows, with no `provider`
+/// block of that id, stops the run before the first round and names the missing block, on an
+/// endpoint that is a deployment of the person's own and answers for any name. Nothing listens at
+/// the endpoint, so a run that was not stopped would end on a connection failure, not row 3.
+///
+/// Rejects dropping the `Serving::Unconfigured` arm of `put_processor_model_in_force`, which puts
+/// the model in force and lets the run start, and an arm that words the refusal as the model
+/// having no service at all, which does not name the block to add.
+#[test]
+fn a_processor_model_for_a_service_with_no_block_is_refused_before_the_run() {
+    let scratch = Scratch::new("cli-running-processor-model-no-block");
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+    ];
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &[
+            "-p",
+            "say something",
+            "--processor-model",
+            "ollama/some-model",
+        ],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stdout.is_empty(),
+        "the reply stream carried the explanation instead: {stdout}"
+    );
+    assert!(
+        stderr.contains("ollama/some-model")
+            && stderr.contains("is set as the processor model")
+            && stderr.contains("no provider block named ollama"),
+        "the refusal did not say which block is missing: {stderr}"
+    );
+    assert!(
+        !stderr.contains("127.0.0.1:1"),
+        "the run went to the endpoint with a processor model for a service with no block: {stderr}"
+    );
+}
+
 /// One streamed reply that asks to call `tool`, from the model the request asked for.
 fn a_tool_call_from(model: &str, tool: &str, arguments: &str) -> String {
     a_streamed_frame(&serde_json::json!({"model": model, "choices": [{
@@ -4068,6 +4112,44 @@ fn doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn() {
     assert!(
         stderr.contains("BB1003: "),
         "the status was not given its identifier on stderr: {stderr}"
+    );
+}
+
+/// BACKEND-3, CLI-7: a model written for a service bravebot knows, with no `provider` block of that
+/// id, is refused by `--model` and reported by `doctor` with the id named, on an endpoint that is a
+/// deployment of the person's own. That is the endpoint that answers for any name, so the refusal
+/// is the check on the name and not a result of nothing being configured. Nothing listens at the
+/// endpoint, so a run that was not refused would end on a connection failure, not row 3.
+#[test]
+fn a_model_for_a_service_with_no_block_is_refused_by_a_run_and_reported_by_doctor() {
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+    ];
+    let scratch = Scratch::new("cli-running-unconfigured-service");
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &["-p", "say something", "--model", "ollama/some-model"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("ollama/some-model")
+            && stderr.contains("no provider block named ollama")
+            && stderr.contains("bravebot doctor"),
+        "the run did not say which block is missing: {stderr}"
+    );
+
+    let configured = Scratch::new("cli-running-unconfigured-service-doctor")
+        .with_settings(r#"{"model": "ollama/some-model"}"#);
+    let output = bravebot(&configured.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("ollama/some-model") && stdout.contains("no provider block named ollama"),
+        "the report did not say which block is missing: {stdout}"
     );
 }
 

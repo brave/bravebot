@@ -77,3 +77,13 @@ With an AWS account or a gateway configured the picker offers those models along
 than instead of it, each under its own heading. See
 [Reaching a model through AWS Bedrock](providers/bedrock.md) and
 [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md).
+
+**A model named for a service with no block is refused.** A model written `<id>/<name>`, such as
+`ollama/qwen3-coder:30b`, where `<id>` is a service bravebot recognises and no `provider` block has
+that id, is not sent to any service. The `model` key, `--model`, the advisor, the summary model and a
+definition that names it are refused before any request is sent, and a model recorded by an earlier
+pick gives way to a default that is served. A skill that names it is reported and ignored, and the
+turn keeps the model it was on. A `fallbackModel` written that way is not used. The message says that
+no provider block named `<id>` is configured. Add the block (see [Choosing a model
+service](https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service)),
+or run `bravebot doctor` to see the configuration.

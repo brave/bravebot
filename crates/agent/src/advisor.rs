@@ -139,6 +139,7 @@ pub fn consult<S: Sink>(
     if matches!(
         crate::backend::serving(chat.config, chat.egress, model),
         crate::backend::Serving::NothingConfigured { .. }
+            | crate::backend::Serving::Unconfigured { .. }
     ) {
         return Err(AdviceError::NotServed);
     }

@@ -108,7 +108,10 @@ itself one of the project skill directories read, whose own notices already acco
 The two are compared as directories, so no entry's name is held or compared.
 
 The same holds for the other files read from `~/.bravebot`. `~/.bravebot/AGENTS.md` whose path goes
-through the workspace is not put in the system prompt, and the person is told it was not read.
+through the workspace is not put in the system prompt, and the person is told it was not read. Where
+the working directory is the home directory, the notice says that is the cause and to start in a
+project directory, the cause and remedy the memory notice of
+[MEMORY-2](definition-memory.md#MEMORY-2) gives.
 A file in `~/.bravebot/agents` whose path goes through it is not a definition, and those passed
 over are counted as skills are ([DELEGATE-20](delegation.md#DELEGATE-20)). A file in
 `~/.bravebot/styles` whose path goes through it is not a style, is not offered by `/style` and is
@@ -124,6 +127,7 @@ not found by name.
 `verified-by: bravebot_agent::skills::a_home_directory_spelled_in_another_case_is_inside_the_workspace_it_is`
 `verified-by: bravebot_agent::skills::a_home_skill_passed_over_is_counted_beside_a_project_skill_of_the_same_name`
 `verified-by: bravebot_agent::preamble::a_home_agents_file_inside_the_working_directory_is_not_read_as_the_persons_own`
+`verified-by: bravebot_agent::preamble::an_unread_home_agents_file_in_the_home_directory_says_why_and_what_to_do`
 `verified-by: bravebot_agent::agents::a_definition_in_a_working_directory_that_holds_the_home_directory_is_not_loaded`
 `verified-by: bravebot_agent::styles::a_style_file_the_workspace_can_write_is_not_read_as_the_persons_own`
 
@@ -468,7 +472,9 @@ unless its own definition names one.
 ### SKILL-16: a value that cannot be used is reported and the skill still loads
 
 An `effort` naming none of the five levels, and a `model` needing a sign-in this machine has not
-made, are each said and the skill is offered anyway, on whatever the session was already running.
+made or written for a service with no `provider` block of its id
+([BACKEND-3](backends.md#BACKEND-3)), are each said and the skill is offered anyway, on whatever the
+session was already running.
 The same holds for a word [SKILL-20](#SKILL-20) cannot read, except that the skill is then kept from
 the planner rather than offered to it.
 The notice names the file and the value as the file wrote it, both of which are the words of a source
@@ -500,6 +506,7 @@ learn that this program found the directory and left it alone.
 `verified-by: bravebot_cli::running::doctor_names_a_shared_skill_directory_it_left_alone`
 `verified-by: bravebot_cli::running::doctor_reads_a_named_shared_skill_directory_and_names_an_unread_key_in_it`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so`
+`verified-by: bravebot_agent::turn::a_skill_whose_model_names_a_service_with_no_block_keeps_the_sessions_model_and_names_it`
 
 <a id="SKILL-18"></a>
 ### SKILL-18: a skill of the user's own is found with `search_skills`, not listed by default

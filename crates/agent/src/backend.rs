@@ -889,6 +889,16 @@ pub enum Serving {
         /// Which of the lists, or what, refused it.
         why: ModelRefusal,
     },
+    /// The model is written for a service bravebot recognises and no `provider` block has that id
+    /// ([`Config::unconfigured_service`]), so no request is made for it.
+    ///
+    /// Apart from [`Serving::NothingConfigured`] because the remedy is a block named for the id, and
+    /// because the name would otherwise reach Brave's endpoint, which holds a premium key or not,
+    /// whichever way `NothingConfigured` is decided.
+    Unconfigured {
+        /// The id the model is written with, which names the block to add.
+        id: String,
+    },
 }
 
 /// What the model in force would be served by, reading the sign-in files to find out.
@@ -930,6 +940,12 @@ fn serving_with(
             file: file.map(Path::to_path_buf),
             why,
         };
+    }
+
+    // Before the service is selected, which would turn the name into a request to Brave's endpoint
+    // whether or not a premium key is held (BACKEND-3). The name is the person's own configuration.
+    if let Some(id) = config.unconfigured_service(model) {
+        return Serving::Unconfigured { id: id.to_string() };
     }
 
     if !Backend::select(config, egress, model).spends_a_subscription() {
@@ -1105,7 +1121,9 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
     // Worded before the answer is spent, which is the only place the file that refused is in hand.
     let refused = match &answered {
         Serving::Refused { file, why } => Some(refusal_reason(file.as_deref(), *why)),
-        Serving::Configured | Serving::NothingConfigured { .. } => None,
+        Serving::Configured | Serving::NothingConfigured { .. } | Serving::Unconfigured { .. } => {
+            None
+        }
     };
     match sets_aside(answered, || serving(config, &egress, &config.default_model)) {
         // A refused pick with a refused model under it is not set aside, so this is reached only
@@ -1127,7 +1145,7 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
 fn sets_aside(pick: Serving, default: impl FnOnce() -> Serving) -> bool {
     let gives_way = matches!(
         pick,
-        Serving::NothingConfigured { .. } | Serving::Refused { .. }
+        Serving::NothingConfigured { .. } | Serving::Refused { .. } | Serving::Unconfigured { .. }
     );
     gives_way && default() == Serving::Configured
 }
@@ -2428,6 +2446,58 @@ mod tests {
         assert_eq!(
             serving(&braves_endpoint_with_a_gateway(), &egress, "z-ai/glm-4.6"),
             Serving::Configured
+        );
+    }
+
+    /// BACKEND-3: a model written for a service bravebot knows, where no `provider` block has that
+    /// id, has no service, and the answer names the id. Asked where the endpoint is Brave's and a
+    /// premium key is held, and where the endpoint is not Brave's, since each of those returns
+    /// `Configured` for a name nothing claims and a check placed after them would pass the name on
+    /// to the endpoint. A block with the id keeps the name, and a recorded pick of such a name gives
+    /// way to a served default as a pick nothing serves does.
+    #[test]
+    fn a_model_written_for_a_known_service_with_no_block_is_unconfigured_on_every_endpoint() {
+        let egress = Egress::new();
+        let unconfigured = Serving::Unconfigured {
+            id: "ollama".to_string(),
+        };
+
+        let mut premium = braves_endpoint_with_a_gateway();
+        premium.premium_key = Some(bravebot_config::Secret::new("a-key"));
+        assert_eq!(
+            serving(&premium, &egress, "ollama/some-model"),
+            unconfigured,
+            "a held premium key let the name through"
+        );
+
+        let mut own_deployment = braves_endpoint_with_a_gateway();
+        own_deployment.endpoint = "https://llm.example.invalid".to_string();
+        assert_eq!(
+            serving(&own_deployment, &egress, "ollama/some-model"),
+            unconfigured,
+            "an endpoint that is not Brave's let the name through"
+        );
+
+        assert_eq!(
+            serving(
+                &with_a_credential_free_gateway(),
+                &egress,
+                "ollama/qwen3-coder-oc:latest"
+            ),
+            Serving::Configured,
+            "a block with the id lost its name"
+        );
+        assert_eq!(
+            serving(&premium, &egress, "z-ai/glm-4.6"),
+            Serving::Configured,
+            "a name with an unrecognised leading segment was refused"
+        );
+
+        let mut served_default = braves_endpoint_with_a_gateway();
+        served_default.default_model = "z-ai/glm-4.6".to_string();
+        assert_eq!(
+            pick(&served_default, Some("ollama/some-model".to_string())),
+            Pick::SetAside("ollama/some-model".to_string())
         );
     }
 

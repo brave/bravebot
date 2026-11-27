@@ -2225,6 +2225,28 @@ impl Config {
         Serves::Aichat
     }
 
+    /// The id `model` is qualified with, where that id is one bravebot recognises
+    /// ([`provider::service_ids`]) and nothing configured serves the name
+    /// ([BACKEND-3](../../../docs/specs/backends.md#BACKEND-3)).
+    ///
+    /// Such a name would otherwise reach Brave's endpoint, though no configured service serves it, so
+    /// it is refused where it is chosen. A name with a bare or an unrecognised leading segment
+    /// (`z-ai/glm-4.6`) is not qualified by a service and is not flagged, and neither is a
+    /// `chatgpt/` or `xai/` name, which an account serves. A `provider` entry with the id keeps the
+    /// name whatever it lists, so a block that exists is never reported as missing here.
+    ///
+    /// The name is the person's own configuration, never content a service returned.
+    pub fn unconfigured_service<'name>(&self, model: &'name str) -> Option<&'name str> {
+        let (id, wire) = model.split_once('/')?;
+        if wire.is_empty()
+            || !provider::service_ids().any(|known| known == id)
+            || self.providers.iter().any(|provider| provider.id == id)
+        {
+            return None;
+        }
+        matches!(self.serves(model), Serves::Aichat).then_some(id)
+    }
+
     /// The services a roster asks for the sake of a turn on `model`, or on the configured default
     /// where `model` is `None`: the one that answers it, and no other
     /// ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
@@ -2422,11 +2444,14 @@ impl Config {
 
     /// The model a turn moves to when its own keeps failing, resolved like `--model` (BACKEND-53).
     ///
-    /// `None` where the settings name none, and where the machine-level layer refuses the one they
-    /// name: a model that layer excludes is requested by no route (BACKEND-48), and this is one.
+    /// `None` where the settings name none, where the machine-level layer refuses the one they
+    /// name (a model that layer excludes is requested by no route, BACKEND-48, and this is one), and
+    /// where it is written for a service bravebot knows that has no `provider` block
+    /// ([`Config::unconfigured_service`]), which would send the retry to Brave's endpoint.
     pub fn fallback(&self) -> Option<String> {
         let resolved = self.model_named(self.fallback_model.as_deref()?);
-        self.model_refused(&resolved).is_none().then_some(resolved)
+        (self.model_refused(&resolved).is_none() && self.unconfigured_service(&resolved).is_none())
+            .then_some(resolved)
     }
 
     /// The model compaction summaries and goal checks run on, resolved like `--model`.
@@ -4555,6 +4580,89 @@ mod tests {
         assert_eq!(asks(Gateways::Nothing), (false, false));
     }
 
+    /// BACKEND-3: a name qualified with an id bravebot recognises, where no `provider` block has
+    /// that id, is flagged. An id with a block, an account's id, an unrecognised leading segment and
+    /// a bare name are not.
+    #[test]
+    fn a_name_qualified_with_a_known_service_that_has_no_block_is_flagged() {
+        let mut config = Config::from_lookup(complete_env).unwrap();
+        config.providers = Settings::parse(
+            r#"{"provider": {
+                "lmstudio": {"options": {"baseURL": "http://127.0.0.1:1234/v1"}},
+                "amazon-bedrock": {"options": {"region": "us-west-2"}},
+                "ollama": {}
+            }}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 2, "a block with no endpoint stood");
+
+        assert_eq!(
+            config.unconfigured_service("ollama/some-model"),
+            Some("ollama")
+        );
+        assert_eq!(
+            config.unconfigured_service("openrouter/z-ai/glm-4.6"),
+            Some("openrouter")
+        );
+        assert_eq!(
+            config.unconfigured_service("cloudflare-workers-ai/x"),
+            Some("cloudflare-workers-ai")
+        );
+        // A block with the id keeps the name, whatever it lists, for a gateway and for Bedrock.
+        assert_eq!(config.unconfigured_service("lmstudio/anything"), None);
+        assert_eq!(config.unconfigured_service("amazon-bedrock/anything"), None);
+        // The accounts serve their own ids, and an unrecognised id is not a service.
+        assert_eq!(config.unconfigured_service("chatgpt/gpt-5"), None);
+        assert_eq!(config.unconfigured_service("xai/grok-4.5"), None);
+        assert_eq!(config.unconfigured_service("z-ai/glm-4.6"), None);
+        assert_eq!(config.unconfigured_service("moonshot/kimi-k2"), None);
+        assert_eq!(config.unconfigured_service("claude-sonnet"), None);
+        assert_eq!(config.unconfigured_service("ollama/"), None);
+    }
+
+    /// BACKEND-3, BACKEND-17. An AWS account reached through the tier variables is no `provider`
+    /// block, so a name written `amazon-bedrock/<name>` that no tier variable names is flagged, and
+    /// one a tier variable names is the account's and is not.
+    #[test]
+    fn a_name_for_amazon_bedrock_is_flagged_where_only_the_tier_variables_configure_the_account() {
+        let config = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("amazon-bedrock/named-by-a-tier".into()),
+            other => complete_env(other),
+        })
+        .unwrap();
+        assert!(config.bedrock.is_some() && config.providers.is_empty());
+
+        assert_eq!(
+            config.unconfigured_service("amazon-bedrock/anything"),
+            Some("amazon-bedrock")
+        );
+        assert_eq!(
+            config.unconfigured_service("amazon-bedrock/named-by-a-tier"),
+            None
+        );
+    }
+
+    /// BACKEND-3, Known costs. The names this repository holds for Brave's roster (the default
+    /// entry and the three tier names) carry no service id, so the refusal never reaches them on a
+    /// build with no `provider` block. The live roster is the service's and is not checked here.
+    #[test]
+    fn the_brave_roster_names_compiled_in_are_not_flagged_without_a_block() {
+        let config = Config::from_lookup(complete_env).unwrap();
+        assert!(config.providers.is_empty());
+        for tier in [
+            bedrock::Tier::Opus,
+            bedrock::Tier::Sonnet,
+            bedrock::Tier::Haiku,
+        ] {
+            assert_eq!(config.unconfigured_service(tier.brave_model()), None);
+        }
+        assert_eq!(config.unconfigured_service(DEFAULT_MODEL), None);
+        assert_eq!(config.unconfigured_service("llama-3-8b-instruct"), None);
+    }
+
     /// XAI-13: an entry that already has the id keeps it. Taking the id over would send a working
     /// gateway's requests, and the key that gateway holds, to another service.
     #[test]
@@ -5599,6 +5707,25 @@ mod tests {
         let nothing = resolved_under(&managed, &Settings::parse("{}"), |_| None, complete_env)
             .expect("configured");
         assert_eq!(nothing.fallback(), None);
+    }
+
+    /// BACKEND-3, BACKEND-53: a `fallbackModel` written for a service bravebot knows, with no
+    /// `provider` block of that id, names no model any route can request, so none is used. The same
+    /// name with a block, and a name with an unrecognised leading segment, are used as before.
+    #[test]
+    fn a_fallback_written_for_a_known_service_with_no_block_is_not_used() {
+        let managed = managed::scratch("fallback-unconfigured", r#"{}"#);
+        for (named, used) in [
+            ("ollama/x", None),
+            ("lmstudio/x", Some("lmstudio/x")),
+            ("z-ai/glm-4.6", Some("z-ai/glm-4.6")),
+        ] {
+            let settings = Settings::parse(&format!(
+                r#"{{"fallbackModel": "{named}", "provider": {{"lmstudio": {{"options": {{"baseURL": "http://127.0.0.1:1234/v1"}}}}}}}}"#
+            ));
+            let config = resolved_under(&managed, &settings, |_| None, complete_env).unwrap();
+            assert_eq!(config.fallback().as_deref(), used, "{named}");
+        }
     }
 
     #[test]

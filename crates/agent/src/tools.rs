@@ -238,6 +238,10 @@ pub struct Output {
     /// outcome rather than the request: a write the person declined changed nothing, so a turn
     /// driven by the call the planner asked for would report a diff that does not exist.
     pub changed_a_file: bool,
+    /// Whether this call wrote a file that landed in the session's own directory, decided on the
+    /// resolved destination. Never true together with `changed_a_file`, and read only for the
+    /// count a delegate's finished note gives apart from the project's writes (GROUND-2).
+    pub wrote_in_the_session_directory: bool,
     /// Whether this call ran a program.
     ///
     /// Read beside `changed_a_file` and the outcome for the same reason: a run the person
@@ -1923,6 +1927,9 @@ struct Produced {
     /// both answer the planner and change nothing, and a turn that counted either as a change
     /// would tell the person their untouched workspace had been edited.
     changed_a_file: bool,
+    /// Whether this call wrote a file that landed in the session's own directory. See
+    /// [`Output::wrote_in_the_session_directory`].
+    wrote_in_the_session_directory: bool,
     /// Whether this call ran a program.
     ///
     /// The outcome, for the reason above: a run the person declined is a command that did not
@@ -2068,6 +2075,7 @@ impl Produced {
             written: None,
             untrusted: false,
             changed_a_file: false,
+            wrote_in_the_session_directory: false,
             ran_a_program: false,
             command_failed: false,
             started_a_program: false,
@@ -2180,9 +2188,11 @@ impl Produced {
     /// What a turn writes there is for its own use, outside the project and gone when the session
     /// ends, so it leaves nothing to build and is not a change the work record counts. Decided on
     /// where the write landed and never on the name typed, so a link in the project into that
-    /// directory is not counted either. Nothing the file holds is read.
-    fn having_changed_a_file_at(self, workspace: &Workspace, landed: &std::path::Path) -> Self {
+    /// directory is not counted either. Nothing the file holds is read. The write is marked
+    /// apart, for the tally a delegate's finished note gives of it (GROUND-2).
+    fn having_changed_a_file_at(mut self, workspace: &Workspace, landed: &std::path::Path) -> Self {
         if workspace.reaches_scratch(landed) {
+            self.wrote_in_the_session_directory = true;
             self
         } else {
             self.having_changed_a_file()
@@ -3657,6 +3667,7 @@ fn output_of(
         waiting_tasks: produced.waiting_tasks,
         content: produced.content,
         changed_a_file: produced.changed_a_file,
+        wrote_in_the_session_directory: produced.wrote_in_the_session_directory,
         ran_a_program: produced.ran_a_program,
         command_failed: produced.command_failed,
         started_a_program: produced.started_a_program,
@@ -25164,13 +25175,24 @@ mod tests {
                     &call,
                 )
             });
-            produced.changed_a_file
+            (
+                produced.changed_a_file,
+                produced.wrote_in_the_session_directory,
+            )
         };
-        let changed = |path: String| changed_in(&workspace, path);
+        let changed = |path: String| changed_in(&workspace, path).0;
         let in_session = session_path.join("note.txt");
-        assert!(!changed(in_session.to_string_lossy().into_owned()));
+        assert_eq!(
+            changed_in(&workspace, in_session.to_string_lossy().into_owned()),
+            (false, true),
+            "a write in the session directory is marked apart and not as a change"
+        );
         assert!(in_session.exists(), "the write did not land");
-        assert!(changed("kept.txt".to_string()), "a project write");
+        assert_eq!(
+            changed_in(&workspace, "kept.txt".to_string()),
+            (true, false),
+            "a project write is a change and is not marked as one in the session directory"
+        );
 
         // A link in an added directory that lands in the session's directory: the name typed is
         // under the added directory, the write lands in the session's, and only the landing counts.
@@ -25199,7 +25221,186 @@ mod tests {
 
         // A session with no directory of its own counts every write.
         let bare = Workspace::new(&project.path).expect("workspace");
-        assert!(changed_in(&bare, "plain.txt".to_string()));
+        assert!(changed_in(&bare, "plain.txt".to_string()).0);
+    }
+
+    /// GROUND-1. An `edit_file`, a `download_url` and a picture written from a reference each mark
+    /// a write that landed in the session's own directory apart from a change to the project, as
+    /// `write_file` does. The control for each is the same call into the project, which is a
+    /// change and is not marked as a session write.
+    ///
+    /// The regression it rejects: one of those tools setting the changed-file flag whatever it
+    /// landed on, or never setting the session flag, so a delegate's finished note leaves out that
+    /// write or counts it in the project.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fixture serves three tools and their controls, and the closure that runs a tool shares its setup with the assertions that follow"
+    )]
+    #[cfg(unix)]
+    #[test]
+    fn an_edit_a_download_and_a_picture_in_the_session_directory_are_marked_as_session_writes() {
+        use std::io::{Read, Write};
+
+        let png = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD
+                .decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==",
+                )
+                .unwrap()
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let site = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut head = [0u8; 2048];
+                let _read = stream.read(&mut head);
+                stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 5\r\nConnection: close\r\n\r\nbytes",
+                ).ok();
+            }
+        });
+
+        let flags = |tool: &str, in_session: bool| {
+            let project = arguments::Scratch::new(&format!("marks-project-{tool}-{in_session}"));
+            let session = arguments::Scratch::new(&format!("marks-session-{tool}-{in_session}"));
+            let session_path = session.path.canonicalize().unwrap();
+            let mut workspace = Workspace::new(&project.path).unwrap();
+            workspace.open_scratch(crate::scratch::ScratchDirectory::observed(
+                session_path.clone(),
+            ));
+            let home = match in_session {
+                true => session_path.clone(),
+                false => project.path.clone(),
+            };
+            let destination = |file: &str| match in_session {
+                true => session_path.join(file).to_string_lossy().into_owned(),
+                false => file.to_string(),
+            };
+            let mut trust = TrustStore::new(&project.path);
+            if tool != "write_file" {
+                trust.trust(".");
+                trust.trust(&session_path.to_string_lossy());
+            }
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "save a file");
+            let mut sink = RecordingSink::new();
+            let (rules, rejected) = bravebot_core::permissions::Permissions::parse(
+                &[],
+                &[],
+                &["WebFetch(domain:127.0.0.1)".to_string()],
+                &bravebot_core::permissions::Anchors::none(),
+            );
+            assert!(rejected.is_empty(), "the rule did not parse");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([
+                    Capability::FileRead,
+                    Capability::FileWrite,
+                    Capability::WebFetch,
+                ]),
+                &mut sink,
+            )
+            .unwrap()
+            .with_trust(trust)
+            .with_permissions(rules);
+            let calls = match tool {
+                "edit_file" => {
+                    std::fs::write(home.join("target.txt"), "old\n").unwrap();
+                    vec![json!({
+                        "name": "edit_file",
+                        "arguments": json!({
+                            "path": destination("target.txt"),
+                            "old_text": "old",
+                            "new_text": "new",
+                        }),
+                    })]
+                }
+                "download_url" => vec![json!({
+                    "name": "download_url",
+                    "arguments": json!({
+                        "url": format!("{site}/logo.png"),
+                        "path": destination("logo.png"),
+                    }),
+                })],
+                _ => {
+                    std::fs::write(project.path.join("shot.png"), &png).unwrap();
+                    vec![json!({
+                        "name": "write_file",
+                        "arguments": json!({
+                            "path": destination("copy.png"),
+                            "contents_ref": "ref:1",
+                        }),
+                    })]
+                }
+            };
+            let last = with_tools(&workspace, |tools| {
+                if tool == "write_file" {
+                    // The name of a listed file, labelled through a call whose use count LABEL
+                    // does not pin, so this test adds no pinned site.
+                    let name = policy.label_user_configuration(
+                        "a listing of the project",
+                        "shot.png".to_string(),
+                    );
+                    policy
+                        .defer(
+                            "list_files",
+                            SlotId::new("ref:1"),
+                            "shot.png",
+                            &name,
+                            png.len(),
+                            tools.slots,
+                        )
+                        .unwrap();
+                }
+                calls
+                    .iter()
+                    .map(|call| {
+                        let call: ToolCall = serde_json::from_value(json!({
+                            "id": "a",
+                            "function": {
+                                "name": call["name"],
+                                "arguments": call["arguments"].to_string(),
+                            }
+                        }))
+                        .unwrap();
+                        dispatch(
+                            &mut policy,
+                            tools,
+                            &mut crate::confirm::ApproveWrites,
+                            &mut crate::report::IgnoreReports,
+                            &call,
+                        )
+                    })
+                    .last()
+                    .unwrap()
+            });
+            let landed = match tool {
+                "edit_file" => "target.txt",
+                "download_url" => "logo.png",
+                _ => "copy.png",
+            };
+            let file = std::fs::read(home.join(landed)).unwrap_or_default();
+            assert!(
+                !file.is_empty() && file != b"old\n",
+                "{tool} in_session={in_session}: the write did not land: {}",
+                arguments::told(&mut policy, &last.text)
+            );
+            (last.changed_a_file, last.wrote_in_the_session_directory)
+        };
+        for tool in ["edit_file", "download_url", "write_file"] {
+            assert_eq!(
+                flags(tool, true),
+                (false, true),
+                "{tool} into the session directory is not marked as a session write alone"
+            );
+            assert_eq!(
+                flags(tool, false),
+                (true, false),
+                "{tool} into the project is not marked as a change alone"
+            );
+        }
     }
 
     /// A redirection destination is listed with the file it lands on when that file is not the

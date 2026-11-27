@@ -47,7 +47,7 @@ They are counted by the rules [TURN-4](turns.md#TURN-4) already uses. A write th
 
 Whether a `run` line changed a file is the driver's own measurement. The workspace tree is listed before the line starts and again after it has stopped and any destination a scan refused has been put back (one the line created is removed, so it counts for nothing; one that existed is written back with its old bytes and a new modification time, so it counts), and the line changed a file if a path was added or removed or a file's length or modification time differs. Names, lengths and times are compared and no file is opened, so the driver reads only metadata and the result is one fact, a yes or a no. A program chooses the names, lengths and times it leaves, so it can make that fact true or false by what it writes, as it can with its exit status. The directories every walk of the tree steps over, such as `target`, `node_modules`, `.git` and `__pycache__`, are not listed, so an ordinary build that writes only there is a command and not a write, and "a command ran after the last write" stays true after it. The session stores are not listed either, so a workspace rooted at the home directory does not count the session records a running session saves as the line's write. The line need not have ended well: one that failed halfway has still left what it got to. A line the person declined or a mode refused ran nothing and counts neither. A line started in the background is listed before it starts, and a line moved to the background keeps the listing taken before it started. The second listing is taken once, when the turn learns the job has ended: between rounds, from the `job_output` call that reports the end, or when the turn ends and stops the jobs still running. A job stopped with the turn is listed after it has stopped, since it has still left what it wrote. A change is one write at that point and no command, since the command was counted when the line started, so no command ran after it. A job the session keeps past its turn ([RUN-15](tools/run.md#RUN-15)) is counted in the turn that learns of its end.
 
-A write that landed in the session's own directory is not counted. What a turn puts there is for its own use, outside the project and gone when the session ends, so it leaves nothing to build, and a rewind does not restore it ([sessions.md](sessions.md) records it as a coverage gap). It does not change the order either: a project write followed by a write there is still a write with no command after it, and a command after a project write still follows it. For a write call, whether it landed there is decided on the resolved destination, never on the name typed or on what the file holds. The listing of a `run` line covers the workspace tree only, so what a line writes in that directory is not listed while the directory is outside the tree. Delegates and goals add records that already exclude it, so the sentences of [GROUND-2](#GROUND-2) to [GROUND-4](#GROUND-4) leave it out too.
+A write that landed in the session's own directory is not counted. What a turn puts there is for its own use, outside the project and gone when the session ends, so it leaves nothing to build, and a rewind does not restore it ([sessions.md](sessions.md) records it as a coverage gap). It does not change the order either: a project write followed by a write there is still a write with no command after it, and a command after a project write still follows it. For a write call, whether it landed there is decided on the resolved destination, never on the name typed or on what the file holds. The listing of a `run` line covers the workspace tree only, so what a line writes in that directory is not listed while the directory is outside the tree. Goals add records that already exclude it, so the judge's record of [GROUND-4](#GROUND-4) leaves it out too. The driver keeps a separate count of the write calls that landed there, set from the same resolved destination and never from the name typed. It is not part of the work record, so it changes neither the unbuilt-changes warning nor the judge's record. A delegate in the turn's workspace adds its count to the turn's, as it adds its writes, and one in a checkout given the turn's changes adds none. Only the sentences of [GROUND-2](#GROUND-2) and [GROUND-3](#GROUND-3) say it. It counts write calls (the file tools, a download and a picture) and not a `run` line, whose writes there are not listed.
 
 Records are added in the order the work happened. The later record's counts are added to the earlier one's. A later record with a write settles the order by its own flag. A later record with commands and no write means a command ran after the last write. A record with neither leaves the order as it was. The same rule adds a delegate's record to the turn that takes it back, and a turn's record to a goal's.
 
@@ -59,8 +59,11 @@ A delegate in the turn's workspace adds its whole record. One in a checkout give
 
 `verified-by: bravebot_agent::outcome::each_write_that_changed_a_file_is_counted`
 `verified-by: bravebot_agent::tools::a_write_into_the_session_directory_is_not_a_changed_file`
+`verified-by: bravebot_agent::turn::writes_in_the_session_directory_roll_up_apart_from_the_work_record`
+`verified-by: bravebot_agent::turn::a_run_line_that_wrote_in_the_session_directory_is_not_tallied_as_a_session_directory_write`
 `verified-by: bravebot_agent::turn::a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt`
 `verified-by: bravebot_agent::turn::an_edit_a_download_and_a_picture_landing_in_the_session_directory_count_no_write`
+`verified-by: bravebot_agent::tools::an_edit_a_download_and_a_picture_in_the_session_directory_are_marked_as_session_writes`
 `verified-by: bravebot_agent::outcome::a_command_after_the_last_write_is_recorded_as_after_it`
 `verified-by: bravebot_agent::outcome::a_command_in_a_later_turn_is_after_a_write_in_an_earlier_one`
 `verified-by: bravebot_agent::turn::a_delegates_counts_are_added_to_the_turns_where_it_worked_on_the_turns_files`
@@ -96,7 +99,7 @@ A delegate in the turn's workspace adds its whole record. One in a checkout give
 <a id="GROUND-2"></a>
 ### GROUND-2: tell the planner what each delegate actually did
 
-When a delegate is collected, the planner's message about it gains one sentence: "It ran 2 commands and made 1 write." It ends "in its own checkout" where the delegate worked in one. Zero is said as zero.
+When a delegate is collected, the planner's message about it gains one sentence: "It ran 2 commands and made 1 write in the project." It says "in its own checkout" in place of "in the project" where the delegate worked in one. Zero is said as zero. Where the delegate made write calls that landed in the session's own directory ([GROUND-1](#GROUND-1)), the sentence continues "and 1 in the session directory", with that count, and says nothing more where there were none. A `run` line's writes there are not counted.
 
 The sentence sits beside the report, not inside it: after any sentence about a limit or a budget, and before the report. So the planner reads it when the report is a quarantined reference too.
 
@@ -109,15 +112,20 @@ It is said however the delegate ended: answered, stopped or failed. If the deleg
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_same_sentence_about_the_work`
 `verified-by: bravebot_agent::turn::a_delegate_that_failed_is_still_said_to_have_done_what_it_did`
 `verified-by: bravebot_agent::turn::delegate_end::a_delegate_in_a_checkout_is_said_to_have_worked_there`
+`verified-by: bravebot_agent::turn::delegate_end::writes_in_the_session_directory_are_said_apart_from_the_projects`
+`verified-by: bravebot_agent::turn::a_delegate_that_wrote_in_the_session_directory_is_said_to_have_done_so`
+`verified-by: bravebot_agent::turn::a_worker_that_wrote_in_the_session_directory_is_said_to_have_done_so_and_the_turn_counts_no_write`
+`verified-by: bravebot_agent::turn::a_run_line_that_wrote_in_the_session_directory_is_not_tallied_as_a_session_directory_write`
 
 <a id="GROUND-3"></a>
 ### GROUND-3: show the person the same counts, without paths
 
-The note you see when a delegate finishes gains the same two counts: "it ran 2 commands and made 1 write". It does not list the files written.
+The note you see when a delegate finishes gains the same counts: "it ran 2 commands and made 1 write in the project", and "and 1 in the session directory" where it wrote there. It does not list the files written.
 
 **Why no paths.** You already saw each write when it was approved or shown in the transcript. A kept checkout's paths are already listed next to the report ([CHECKOUT-18](checkouts.md#CHECKOUT-18)). The note stays one line.
 
 `verified-by: bravebot_agent::turn::the_note_for_a_finished_delegate_counts_its_commands_and_writes`
+`verified-by: bravebot_agent::turn::a_delegate_that_wrote_in_the_session_directory_is_said_to_have_done_so`
 
 <a id="GROUND-4"></a>
 ### GROUND-4: give the goal judge the record since the goal was set
@@ -181,8 +189,11 @@ No new row is needed in [LABEL-8](labels.md#LABEL-8). The counts are bravebot's 
 - **A background job's comparison covers its whole run.** Its tree is listed when its line starts and again when its end is learned, so a change made in between by the planner's own write tools or by a foreground `run` line is counted for that call and again as the job's write, and one made by anyone else is counted as the job's. A job the session keeps is compared in the later turn that learns of its end, so a change made between the turns is counted there too.
 - **A kept job that ends with the session is not counted.** No turn learns of its end, so no record takes its write.
 - **A build that writes outside the skipped directories counts as a write.** Object files next to the sources, `.coverage`, `out/` and `bin/` are listed, so a line that produces them is a write and "a command ran after the last write" is false until another command runs.
-- **A compromised delegate controls its own counts.** A delegate that read untrusted content picks how many commands and writes it makes, and the planner and judge see those numbers. Each of those calls still passed a gate or a person. Kept checkout paths, which carry much more, already reach the planner.
+- **A compromised delegate controls its own counts.** A delegate that read untrusted content picks how many commands and writes it makes, and how many of its writes land in the session directory, and the planner sees those numbers. The judge sees the first two. Each of those calls still passed a gate or a person. Kept checkout paths, which carry much more, already reach the planner.
 - **A write through a link that lands in the session's own directory is not counted**
   ([GROUND-1](#GROUND-1)), so it is hidden from the unbuilt-changes warning
   ([open-loops.md](open-loops.md#known-costs)).
+- **A `run` line's write in the session's own directory is not counted at all.** The sentence of
+  [GROUND-2](#GROUND-2) counts write calls there and cannot see what a program wrote, so a delegate
+  that only ran a program that wrote there is said to have made none.
 - **A command is not a test run.** `ls` counts as a command. The judge is told the count says nothing about what ran or how it went.

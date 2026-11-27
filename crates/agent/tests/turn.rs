@@ -26006,7 +26006,7 @@ fn a_delegate_that_wrote_three_files_is_reported_with_three_writes_and_its_paren
     assert!(
         asked
             .iter()
-            .any(|body| body.contains(" and made 3 writes.")),
+            .any(|body| body.contains(" and made 3 writes in the project.")),
         "the planner was not told the worker made 3 writes: {:?}",
         asked
             .iter()
@@ -26019,6 +26019,207 @@ fn a_delegate_that_wrote_three_files_is_reported_with_three_writes_and_its_paren
         work.writes, 4,
         "the turn's own count of writes is not its own one plus the worker's three"
     );
+}
+
+/// GROUND-1, GROUND-2, GROUND-3. A worker that runs one command and then writes a file in the
+/// session's own directory is said to have made no write in the project and one in the session
+/// directory, in the planner's message and the person's note, and the turn's own record counts the
+/// command and no write, so nothing is left unbuilt. A second worker that also writes in the project
+/// before its command is said to have made one write in each place.
+///
+/// The write in the session directory comes last so that a scratch write counted as a project
+/// write is a write with no command after it, which the unbuilt-changes assertion sees.
+///
+/// Rejects a sentence that counts only the project's writes (the planner reads "made 0 writes"
+/// beside a report that says a file was written), a scratch write folded into the project's count
+/// (1 write in the first case, and an unbuilt-changes loop), and a figure kept in the session
+/// directory clause that ignores a project write beside it.
+#[test]
+fn a_worker_that_wrote_in_the_session_directory_is_said_to_have_done_so_and_the_turn_counts_no_write()
+ {
+    for (name, also_in_the_project) in [("scratch-only", false), ("scratch-and-project", true)] {
+        let scratch = Scratch::new(&format!("delegate-writes-in-session-{name}"));
+        let session = Scratch::new(&format!("delegate-writes-in-session-{name}-given"));
+        let given = session.path.canonicalize().unwrap();
+        let mut workspace = Workspace::new(&scratch.path).unwrap();
+        workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
+        let note_path = given.join("note.txt");
+
+        let mut worker = Vec::new();
+        if also_in_the_project {
+            worker.push(tool_request(
+                "write_file",
+                r#"{"path":"kept.txt","contents":"y"}"#,
+            ));
+        }
+        worker.push(tool_request("run", r#"{"command":"printf one"}"#));
+        worker.push(tool_request(
+            "write_file",
+            &serde_json::json!({"path": note_path.to_string_lossy(), "contents": "x"}).to_string(),
+        ));
+        worker.push(reply_with("wrote note.txt"));
+        let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+            (
+                "PARENT-STARTS-THE-SESSION-WRITER",
+                writing_then_delegating(
+                    tool_request("list_files", r#"{"directory":"."}"#),
+                    r#"{"kind":"worker","task":"WRITE-IN-THE-SESSION-DIRECTORY"}"#,
+                ),
+            ),
+            ("WRITE-IN-THE-SESSION-DIRECTORY", worker),
+        );
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let completed = turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("PARENT-STARTS-THE-SESSION-WRITER"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve())
+                .approving_writes(),
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        completed.outcome.as_ref().unwrap();
+
+        assert!(
+            held.load(Ordering::SeqCst),
+            "{name}: the worker was answered before its parent waited for it"
+        );
+        assert!(note_path.is_file(), "{name}: the write did not land");
+        assert!(
+            !bravebot_agent::open_loops::Loops::from_work(completed.work).unbuilt_changes,
+            "{name}: a write in the session directory left something unbuilt: {:?}",
+            completed.work
+        );
+        let project_writes = usize::from(also_in_the_project);
+        assert_eq!(
+            completed.work.writes, project_writes,
+            "{name}: a write in the session directory was counted as the turn's"
+        );
+        assert_eq!(completed.work.commands, 1, "{name}");
+        let said = format!(
+            "ran 1 command and made {} in the project and 1 in the session directory",
+            match also_in_the_project {
+                true => "1 write",
+                false => "0 writes",
+            }
+        );
+        let (_, note, _) = reporter.delegates_finished.first().unwrap();
+        assert!(note.contains(&format!("it {said}")), "{name}: {note}");
+        let asked = every_request(&received);
+        assert!(
+            asked
+                .iter()
+                .any(|body| body.contains(&format!(" It {said}."))),
+            "{name}: the planner was not told: {:?}",
+            asked
+                .iter()
+                .filter_map(|body| body
+                    .find("It ran ")
+                    .and_then(|at| body.get(at..(at + 100).min(body.len()))))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// GROUND-1, GROUND-2, GROUND-3. A worker whose only command is a program that writes a file in
+/// the session's own directory is said to have run one command and made no write in the project,
+/// with no session directory clause, in the planner's message and the person's note. The driver
+/// lists the workspace tree for a `run` line and cannot see what the program wrote outside it, so
+/// only write calls are tallied there.
+///
+/// Rejects a `run` line counted as a write in the session directory (a clause that says "and 1 in
+/// the session directory" for a line that wrote nothing through a write call) and a tally taken
+/// from where a program's output landed.
+#[test]
+fn a_run_line_that_wrote_in_the_session_directory_is_not_tallied_as_a_session_directory_write() {
+    let scratch = Scratch::new("delegate-run-line-writes-in-session");
+    let session = Scratch::new("delegate-run-line-writes-in-session-given");
+    let given = session.path.canonicalize().unwrap();
+    let mut workspace = Workspace::new(&scratch.path).unwrap();
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
+
+    // A script rather than a line naming the variable: a `$` in a line is refused, so what reads
+    // the environment is the program the line named.
+    let script = scratch.path.join("mark");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf workings > \"$BRAVEBOT_SCRATCH_DIR/note.txt\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+        (
+            "PARENT-STARTS-THE-LINE-WRITER",
+            writing_then_delegating(
+                tool_request("list_files", r#"{"directory":"."}"#),
+                r#"{"kind":"worker","task":"RUN-THE-LINE-THAT-WRITES-IN-THE-SESSION-DIRECTORY"}"#,
+            ),
+        ),
+        (
+            "RUN-THE-LINE-THAT-WRITES-IN-THE-SESSION-DIRECTORY",
+            vec![
+                tool_request("run", r#"{"command":"./mark"}"#),
+                reply_with("ran the program"),
+            ],
+        ),
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("PARENT-STARTS-THE-LINE-WRITER"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes(),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    completed.outcome.as_ref().unwrap();
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the worker was answered before its parent waited for it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(given.join("note.txt")).unwrap(),
+        "workings",
+        "the line did not write in the session directory, so this proves nothing"
+    );
+    let (_, note, _) = reporter.delegates_finished.first().unwrap();
+    assert!(
+        note.contains("it ran 1 command and made 0 writes in the project"),
+        "{note}"
+    );
+    assert!(!note.contains("in the session directory"), "{note}");
+    let asked = every_request(&received);
+    assert!(
+        asked
+            .iter()
+            .any(|body| body.contains(" It ran 1 command and made 0 writes in the project.")),
+        "the planner was not told the worker made no write: {:?}",
+        asked
+            .iter()
+            .filter_map(|body| body
+                .find("It ran ")
+                .and_then(|at| body.get(at..(at + 100).min(body.len()))))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(completed.work.writes, 0, "{:?}", completed.work);
 }
 
 /// The question waits for a delegate still working in the turn's workspace, so a turn whose checker
@@ -59299,6 +59500,84 @@ fn a_delegate_whose_model_needs_a_sign_in_does_not_run_and_says_so() {
     );
 }
 
+/// BACKEND-3, DELEGATE-22: a delegate whose definition names a model written for a service
+/// bravebot knows, with no `provider` block of that id, does not run and sends nothing, and the
+/// notice names the id. A delegate does not fall back to the turn's model, which would spend past
+/// the boundary the definition drew.
+#[test]
+fn a_delegate_whose_model_names_a_service_with_no_block_does_not_run_and_says_so() {
+    let scratch = Scratch::new("delegate-model-no-block");
+    let home = Scratch::new("delegate-model-no-block-home");
+    define(
+        &home,
+        "local-reader",
+        "kind: reader\nmodel: ollama/some-model\n",
+        "READ-LOCALLY",
+    );
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-TO-LOCAL-READER",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"local-reader","task":"CHECK-LOCALLY"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegate finished"),
+            ],
+        ),
+        ("CHECK-LOCALLY", vec![reply_with("clear")]),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-TO-LOCAL-READER")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .unwrap();
+
+    let requests: Vec<String> = received.try_iter().collect();
+    assert!(
+        !requests.iter().any(|body| {
+            body.contains("CHECK-LOCALLY") && !body.contains("DELEGATE-TO-LOCAL-READER")
+        }),
+        "the delegate ran on some other model: {requests:?}"
+    );
+    assert!(
+        matches!(reporter.delegates_finished.as_slice(), [(_, _, true)]),
+        "the delegate was not reported as not finishing: {:?}",
+        reporter.delegates_finished
+    );
+    let said = |notice: &String| {
+        notice.contains("local-reader")
+            && notice.contains("ollama/some-model")
+            && notice.contains("no provider block named ollama")
+            && notice.contains("bravebot doctor")
+    };
+    assert!(
+        reporter.notices.iter().any(said),
+        "nobody watching was told why the delegate did not run: {:?}",
+        reporter.notices
+    );
+    assert!(
+        outcome.notices.iter().any(said),
+        "the turn's account did not say why the delegate did not run: {:?}",
+        outcome.notices
+    );
+}
+
 /// Writes one definition into a home directory's `agents/`, as a person keeps one.
 fn define(home: &Scratch, name: &str, fields: &str, body: &str) {
     std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
@@ -60196,6 +60475,93 @@ fn an_addressed_definition_whose_model_needs_a_sign_in_sends_nothing_and_says_so
         reporter.notices.iter().any(|notice| notice == said),
         "nobody watching was told why nothing ran: {:?}",
         reporter.notices
+    );
+}
+
+/// BACKEND-3, ADDRESS-11. A definition whose model is written for a service id bravebot knows, with
+/// no `provider` block of that id, is refused before any request: nothing reaches the endpoint and
+/// the notice names the id. A model with a leading segment no service owns is the control, and
+/// still reaches the endpoint, so the refusal is not made for every name that holds a slash.
+#[test]
+fn an_addressed_definition_naming_a_service_with_no_block_sends_nothing_and_names_it() {
+    let scratch = Scratch::new("address-no-block");
+    let home = Scratch::new("address-no-block-home");
+    define(
+        &home,
+        "local-worker",
+        "kind: worker\nmodel: ollama/some-model\n",
+        "WORK",
+    );
+    define(
+        &home,
+        "routed-worker",
+        "kind: worker\nmodel: z-ai/glm-4.6\n",
+        "WORK",
+    );
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) =
+        serve_by_marker(vec![("ADDRESSED-TASK", vec![reply_with("worked")])]);
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        _ => None,
+    })
+    .unwrap();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ran = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "local-worker"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "the definition ran on a service nobody configured"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a request was sent to the endpoint for a model no provider block serves"
+    );
+    assert!(
+        reporter.notices.iter().any(|notice| {
+            notice.contains("local-worker")
+                && notice.contains("ollama/some-model")
+                && notice.contains("no provider block named ollama")
+                && notice.contains("bravebot doctor")
+        }),
+        "the person was not told which block is missing: {:?}",
+        reporter.notices
+    );
+
+    let mut control = bravebot_agent::report::RecordingReporter::default();
+    let ran = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("ADDRESSED-TASK", &home, "routed-worker"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut control,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(
+        !matches!(ran, Err(bravebot_agent::turn::TurnError::Precommit(_))),
+        "a name with an unrecognised leading segment was refused: {:?}",
+        control.notices
+    );
+    assert!(
+        received.try_iter().count() > 0,
+        "the control name never reached the endpoint"
     );
 }
 
@@ -62179,7 +62545,7 @@ fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_re
     );
     assert_eq!(
         note,
-        "the delegate could not finish (refused); it ran 0 commands and made 0 writes"
+        "the delegate could not finish (refused); it ran 0 commands and made 0 writes in the project"
     );
 
     let told = received
@@ -62745,7 +63111,7 @@ fn a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_to
         assert_eq!(
             note,
             &format!(
-                "the delegate could not finish ({category}); it ran 0 commands and made 0 writes"
+                "the delegate could not finish ({category}); it ran 0 commands and made 0 writes in the project"
             )
         );
 
@@ -62845,7 +63211,7 @@ fn a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note() {
     assert_eq!(
         note,
         "a one-round delegate reached its limit of 1 round and answered with what it had, so it \
-         may not be finished; it ran 0 commands and made 0 writes"
+         may not be finished; it ran 0 commands and made 0 writes in the project"
     );
 }
 
@@ -97061,6 +97427,60 @@ fn a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so() {
     );
 }
 
+/// BACKEND-3. A skill naming a model written for a service bravebot knows, with no `provider` block
+/// of that id, does not move the turn onto it: the rounds after the skill loads keep the session's
+/// model, no request names the skill's model, and the person is told which block is missing.
+///
+/// Without the check the skill's name is adopted and every later round goes to Brave's endpoint,
+/// though no configured service serves that name.
+#[test]
+fn a_skill_whose_model_names_a_service_with_no_block_keeps_the_sessions_model_and_names_it() {
+    let scratch = Scratch::new("skill-model-no-block");
+    write_project_skill_declaring(&scratch.path, "on-ollama", "model: ollama/some-model\n");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("load_skill", r#"{"name":"on-ollama"}"#),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let outcome = turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("do the work").with_model(Some("custom-parent-model".to_string())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .unwrap();
+
+    let _first = received.recv().unwrap();
+    let second = received.recv().unwrap();
+    assert!(
+        second.contains(r#""model":"custom-parent-model""#),
+        "the round after the skill loaded left the session's model: {second}"
+    );
+    assert!(
+        !second.contains("ollama/some-model"),
+        "a request named the model of a service nobody configured: {second}"
+    );
+    assert!(
+        received
+            .try_iter()
+            .all(|body| !body.contains("ollama/some-model")),
+        "a later request named the model of a service nobody configured"
+    );
+    let said = outcome.notices.join(" | ");
+    assert!(
+        said.contains("on-ollama")
+            && said.contains("ollama/some-model")
+            && said.contains("no provider block named ollama")
+            && said.contains("bravebot doctor"),
+        "nobody was told which block the skill's model needs: {said}"
+    );
+}
+
 /// A config on the test endpoint whose managed layer denies `an-expensive-model`, and the file that
 /// does so, which a refusal has to name.
 fn a_config_denying_an_expensive_model(
@@ -98973,6 +99393,84 @@ fn an_advisor_the_settings_name_that_nothing_serves_is_answered_per_call_and_sto
         requests
             .iter()
             .all(|request| request["model"] != "a-model-nobody-has"),
+        "a request named the advisor model"
+    );
+    let sentence = "refused: no configured service answers for the advisor model, so it is not \
+                    asked. Carry on without it.";
+    assert!(
+        requests[1].to_string().contains(sentence),
+        "the first call was not answered with the sentence: {}",
+        requests[1]
+    );
+    assert_eq!(
+        requests[2].to_string().matches(sentence).count(),
+        2,
+        "the second call was not refused again: {}",
+        requests[2]
+    );
+}
+
+/// ADVISOR-8, ADVISOR-7, BACKEND-3: a model the setting names that is written for a service
+/// bravebot knows, with no `provider` block of that id, does not stop the run or hide the tool; each
+/// call is answered with the not-served sentence and nothing is sent for it. The endpoint is the
+/// test's server, which answers for any name, so an advisor call that was sent would reach it under
+/// the model's name and be recorded.
+///
+/// Rejects removing the `Serving::Unconfigured` arm from `advisor::consult`, which sends the whole
+/// conversation to the endpoint under `ollama/some-model`, and a refusal that ends the turn after
+/// the first call.
+#[test]
+fn an_advisor_the_settings_name_for_a_service_with_no_block_is_answered_per_call_and_stops_nothing()
+{
+    let scratch = Scratch::new("advisor-setting-no-block");
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("advisor", AN_ADVISOR_CALL),
+        tool_request(
+            "advisor",
+            r#"{"question":"and which file after that?","why":"asking again"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut config = config_for(&endpoint);
+    config.advisor_model = Some("ollama/some-model".into());
+    let egress = bravebot_net::Egress::new();
+    assert_eq!(
+        bravebot_agent::backend::serving(&config, &egress, "ollama/some-model"),
+        bravebot_agent::backend::Serving::Unconfigured {
+            id: "ollama".into()
+        },
+        "this test needs a model written for a service with no block"
+    );
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("choose the first file to read"),
+        &mut bravebot_agent::Unattended,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .unwrap();
+    let requests: Vec<serde_json::Value> = every_request(&received)
+        .iter()
+        .map(|body| serde_json::from_str(body).unwrap())
+        .collect();
+
+    assert_eq!(
+        requests.len(),
+        3,
+        "the planner's three requests and nothing for the advisor"
+    );
+    assert!(
+        the_tools_in(&requests[0]).contains(&"advisor".to_string()),
+        "the tool was withheld up front"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.to_string().contains("ollama/some-model")),
         "a request named the advisor model"
     );
     let sentence = "refused: no configured service answers for the advisor model, so it is not \
@@ -112061,6 +112559,144 @@ fn first_system_prompt(tag: &str, definition: Option<&str>, task: Task) -> Strin
         &task,
     );
     system_prompt_of(&received.recv().expect("a request"))
+}
+
+/// MEMORY-2, SKILL-3: a session in the home directory tells the planner, beside the notice the
+/// person is shown, how many definitions keep no memory and that `~/.bravebot/AGENTS.md` was not
+/// read, the cause and the remedy, and names none of them. The same files with the state directory
+/// elsewhere tell it nothing, and so do they with the state directory nested below the working
+/// directory, where `~/.bravebot/AGENTS.md` is left unread for another reason and the cause the
+/// planner is told would be false.
+///
+/// Rejects: a planner with no account of the notice the person asks about, one told in every
+/// session, one told a name, one told only of the definitions or only of the file, one told the
+/// working directory is the home directory where the state directory is nested below it, and one
+/// told to point at `/memory`, which only the terminal client has.
+#[test]
+fn the_planner_is_told_what_the_home_directory_notices_mean_and_only_in_the_home_directory() {
+    let mut said = Vec::new();
+    for tag in ["in-home", "elsewhere", "nested"] {
+        let scratch = Scratch::new(&format!("home-notice-planner-{tag}"));
+        let beside = Scratch::new(&format!("home-notice-planner-{tag}-state"));
+        let state = match tag {
+            "in-home" => scratch.path.join(".bravebot"),
+            "nested" => scratch
+                .path
+                .join("people")
+                .join("somebody")
+                .join(".bravebot"),
+            _ => beside.path.clone(),
+        };
+        std::fs::create_dir_all(state.join("agents")).unwrap();
+        for name in ["notes-keeper", "tally-clerk"] {
+            std::fs::write(
+                state.join("agents").join(format!("{name}.md")),
+                format!(
+                    "---\nname: {name}\ndescription: Keeps notes.\nkind: worker\nmemory: project\n---\n\nbody\n"
+                ),
+            )
+            .unwrap();
+        }
+        std::fs::write(state.join("AGENTS.md"), "HOME-CONVENTION").unwrap();
+        let workspace = Workspace::new(&scratch.path).unwrap();
+        let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+        run_turn_saying_notices(
+            &config_for(&endpoint),
+            &workspace,
+            &mut bravebot_agent::Conversation::new(),
+            &Task::new("SAY-HELLO").with_home(Some(state)),
+        );
+        said.push(system_prompt_of(&received.recv().unwrap()));
+    }
+    let [inside, elsewhere, nested] = &said[..] else {
+        unreachable!("three sessions")
+    };
+    assert!(
+        inside.contains("2 agent definitions that ask for a memory keep none")
+            && inside.contains("~/.bravebot/AGENTS.md was not read"),
+        "the planner was not told what the notices mean: {inside}"
+    );
+    assert!(
+        inside.contains("starting bravebot in a project directory"),
+        "{inside}"
+    );
+    assert!(
+        !inside.contains("/memory"),
+        "the planner was pointed at a command only one front end has: {inside}"
+    );
+    for name in ["notes-keeper", "tally-clerk"] {
+        assert!(
+            !inside.contains(name),
+            "a definition's name reached the planner: {inside}"
+        );
+    }
+    for (which, prompt) in [("elsewhere", elsewhere), ("nested", nested)] {
+        assert!(
+            !prompt.contains("keep none") && !prompt.contains("AGENTS.md was not read"),
+            "a session with the state directory {which} was told of a notice: {prompt}"
+        );
+    }
+}
+
+/// MEMORY-2: the count in the planner's account of the home directory notices is of definitions
+/// that loaded. Where nobody vouched for `.bravebot/agents`, the files ask for a memory and none
+/// loads, so the planner is told nothing about definitions keeping none and no name reaches it.
+///
+/// Rejects: a count taken from the definition files found before the trust gate decides whether
+/// they load, and a planner pointed at `/memory`.
+#[test]
+fn the_planner_is_told_no_count_for_definitions_in_an_untrusted_agents_directory() {
+    let scratch = Scratch::new("home-notice-planner-untrusted");
+    let state = scratch.path.join(".bravebot");
+    std::fs::create_dir_all(state.join("agents")).unwrap();
+    for name in ["notes-keeper", "tally-clerk"] {
+        std::fs::write(
+            state.join("agents").join(format!("{name}.md")),
+            format!(
+                "---\nname: {name}\ndescription: Keeps notes.\nkind: worker\nmemory: project\n---\n\nbody\n"
+            ),
+        )
+        .unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).unwrap();
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("SAY-HELLO").with_home(Some(state)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .unwrap();
+    let prompt = system_prompt_of(&received.recv().unwrap());
+    assert!(
+        !prompt.contains("keep none") && !prompt.contains("The /memory command names"),
+        "the planner was told definitions in an untrusted directory keep no memory: {prompt}"
+    );
+    for name in ["notes-keeper", "tally-clerk"] {
+        assert!(
+            !prompt.contains(name),
+            "a definition's name reached the planner: {prompt}"
+        );
+    }
+    assert!(
+        reporter
+            .notices
+            .iter()
+            .all(|said| !said.contains("keep no memory") && !said.contains("keeps no memory")),
+        "the person was told untrusted definitions keep no memory: {:?}",
+        reporter.notices
+    );
 }
 
 /// INSTR-9: the planner's system prompt says which front end the person is using, once, in the

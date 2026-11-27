@@ -207,7 +207,7 @@ for. A name no skill goes by picks nothing, and the turn says so:
 ~/.bravebot/agents/rule-reviewer.md names a skill this session did not find, so its delegate is offered without it: rule-reveiw
 ```
 
-**A report comes with what the delegate actually did.** When a delegate finishes, stops or fails, the planner and you are told how many commands it ran and how many writes it made, counted by this program and not taken from the report. So a report that says the tests pass, from a delegate that ran nothing, reads as "it ran 0 commands". The count names no file, and says "in its own checkout" where the delegate worked in one.
+**A report comes with what the delegate actually did.** When a delegate finishes, stops or fails, the planner and you are told how many commands it ran and how many writes it made in the project, and how many it made in the session directory where it made any, counted by this program and not taken from the report. So a report that says the tests pass, from a delegate that ran nothing, reads as "it ran 0 commands". The count names no file, and says "in its own checkout" in place of "in the project" where the delegate worked in one. The session directory figure counts the delegate's file, download and picture writes there and not what a program it ran wrote there.
 
 **`rounds` sets how long the delegate may work.** Nobody is watching a delegate, so each kind stops
 one after a set number of rounds and makes it answer with what it has: 60 for a `reader`, 80 for a
@@ -289,7 +289,9 @@ memory, and the turn says so:
 
 A definition keeping a memory needs a name of lowercase letters and digits in runs joined by single
 hyphens, at most 64 characters, since the file is named after it. A session in your home directory
-keeps none, because the file would be inside `~/.bravebot`.
+keeps none, because the file would be inside `~/.bravebot`. The session says so once for all of
+them, with the count and the cause, and tells you to start bravebot in a project directory to give
+them a memory. In the terminal client, `/memory` names them.
 
 **A memory is read on the [trust map](../security/trust.md)'s terms.** In a directory you did not
 vouch for, the run is told its memory is withheld, and reading it is a quarantined read like any

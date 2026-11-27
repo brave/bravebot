@@ -331,6 +331,33 @@ pub fn known_ids() -> impl Iterator<Item = &'static str> {
     KNOWN_ENDPOINTS.iter().map(|(id, _, _)| *id)
 }
 
+/// The id a local Ollama server's entry is written under, which the configuration guide's block uses.
+pub(crate) const OLLAMA_ID: &str = "ollama";
+
+/// The id a local LM Studio server's entry is written under.
+pub(crate) const LMSTUDIO_ID: &str = "lmstudio";
+
+/// The id a local llama-server's entry is written under.
+pub(crate) const LLAMA_SERVER_ID: &str = "llama-server";
+
+/// Every id a person writes a `provider` block under that bravebot itself recognises: the ones with
+/// an endpoint compiled in ([`known_ids`]), the local servers the import reads, and the services
+/// whose endpoint is built from the block's options.
+///
+/// The ChatGPT and xAI account ids are not here. A model qualified with either is served by the
+/// account where no block has the id, so no block is needed for it.
+pub fn service_ids() -> impl Iterator<Item = &'static str> {
+    known_ids().chain([
+        OLLAMA_ID,
+        LMSTUDIO_ID,
+        LLAMA_SERVER_ID,
+        GOOGLE_VERTEX_ID,
+        CLOUDFLARE_WORKERS_AI_ID,
+        CLOUDFLARE_AI_GATEWAY_ID,
+        AWS_PROVIDER_ID,
+    ])
+}
+
 /// The name a service is written with where its block gives none, for the ids that have one.
 ///
 /// Every place that names a provider reads [`Provider::display_name`], which ends here, so the

@@ -119,9 +119,9 @@ impl Source {
     /// guide's block uses. `None` for a source that is files.
     fn gateway_id(self) -> Option<&'static str> {
         match self {
-            Self::Ollama => Some("ollama"),
-            Self::LmStudio => Some("lmstudio"),
-            Self::LlamaServer => Some("llama-server"),
+            Self::Ollama => Some(provider::OLLAMA_ID),
+            Self::LmStudio => Some(provider::LMSTUDIO_ID),
+            Self::LlamaServer => Some(provider::LLAMA_SERVER_ID),
             Self::ClaudeCode | Self::Opencode | Self::Environment => None,
         }
     }

@@ -216,11 +216,11 @@ from a checkout, so no turn's output and no file in a checkout can set it. It is
 the set a turn starting now would resolve ([ADDRESS-5](#ADDRESS-5)) before any turn is sent, so an
 edit to the definition is followed. A name that matches nothing now is said, with the definition
 named and that the narrowing is gone, and the session opens without it and no longer records it. A
-definition whose model needs a sign-in is refused, as at the start ([ADDRESS-11](#ADDRESS-11)),
-rather than replaced by the planner. A `--agent` on the command line that resumes names the
-definition for that session in place of the recorded one. A `/clear` opens a new record under the
-definition the session still works under. The desktop addresses no definition, so a session resumed
-there stops recording the name.
+definition whose model needs a sign-in, or is written for a service that has no `provider` block, is
+refused, as at the start ([ADDRESS-11](#ADDRESS-11)), rather than replaced by the planner. A
+`--agent` on the command line that resumes names the definition for that session in place of the
+recorded one. A `/clear` opens a new record under the definition the session still works under. The
+desktop addresses no definition, so a session resumed there stops recording the name.
 
 [MEMORY-10](definition-memory.md#MEMORY-10) adds a second source: a
 turn in a desktop bot's conversation addresses that bot's definition. The name comes from the
@@ -453,10 +453,13 @@ Where the definition names a model that needs a sign-in this machine has not mad
 the person is told which definition asked for which model. The session's own model is not
 substituted. Where the endpoint answers with a model other than the one asked for, that is said
 too, naming the definition and the model it named, and a reply from the model the definition named
-is not reported as the session's model substituted. A delegate the run spawns whose own definition
-names no model inherits the addressed definition's, not the session's. Where `--model` named a model
-for a one-shot run ([CLI-17](cli.md#CLI-17)), that model is asked for in place of the definition's,
-and the run says which model the definition asked for and was not given.
+is not reported as the session's model substituted. A definition naming a model written
+`<id>/<name>` for a service bravebot recognises, where no `provider` block has that id
+([BACKEND-3](backends.md#BACKEND-3)), does not run either, and the person is told which block is
+missing; the terminal's `/agent` line refuses in the same words. A delegate the run spawns whose own
+definition names no model inherits the addressed definition's, not the session's. Where `--model`
+named a model for a one-shot run ([CLI-17](cli.md#CLI-17)), that model is asked for in place of the
+definition's, and the run says which model the definition asked for and was not given.
 
 **Why.** A definition naming a cheap model is often a cost boundary, and running it on the
 session's model would spend past that boundary without anybody choosing to. The person is at the
@@ -469,6 +472,8 @@ definition did not get the model it asked for.
 
 `verified-by: bravebot_agent::turn::an_addressed_definition_whose_model_needs_a_sign_in_sends_nothing_and_says_so`
 `verified-by: bravebot_tui::app::tests::naming::a_definition_whose_model_needs_a_sign_in_runs_nothing_and_says_so`
+`verified-by: bravebot_agent::turn::an_addressed_definition_naming_a_service_with_no_block_sends_nothing_and_names_it`
+`verified-by: bravebot_tui::app::tests::naming::a_definition_whose_model_names_a_service_with_no_block_runs_nothing_and_says_so`
 `verified-by: bravebot_agent::turn::an_addressed_definition_answered_by_another_model_says_so`
 `verified-by: bravebot_agent::turn::a_delegate_an_addressed_turn_spawns_inherits_the_definitions_model`
 `verified-by: bravebot_tui::app::tests::naming::addressing_a_definition_that_names_a_model_carries_that_model`

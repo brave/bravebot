@@ -1013,11 +1013,226 @@ fn a_memory_that_would_sit_inside_the_state_directory_is_not_kept_and_is_said() 
         (
             Some(false),
             vec![
-                ".bravebot/agents/notes-keeper.md keeps no memory here: in this directory its \
-                 memory would be inside ~/.bravebot, which no write can leave untrusted"
+                "1 agent definition keeps no memory because this session's working directory is \
+                 your home directory, or is ~/.bravebot or inside it. Start bravebot in a project \
+                 directory to give it one"
                     .to_string()
             ]
         )
+    );
+}
+
+/// MEMORY-2: any number of definitions that would keep a memory in the home directory are said in
+/// one notice that counts them and gives the cause and the remedy, and names none of them. The
+/// same definitions with the state directory elsewhere give no notice.
+///
+/// Rejects: one notice per definition coming back, a notice with no count, cause or remedy, one
+/// that names a definition, and one said where the state directory is elsewhere.
+#[test]
+fn definitions_that_keep_no_memory_in_the_home_directory_are_said_once_with_the_cause() {
+    let scratch = Scratch::new("memory-in-home-once");
+    let project = scratch.workspace();
+    let elsewhere = scratch.home();
+    let inside = project.join(".bravebot");
+    let names = ["notes-keeper", "archivist", "scribe"];
+    for home in [&inside, &elsewhere] {
+        for name in names {
+            write_definition(
+                home,
+                name,
+                &format!(
+                    "{}\nmemory: project",
+                    frontmatter(name, "keeps notes", "worker")
+                ),
+                "body",
+            );
+        }
+    }
+    let workspace = Workspace::new(&project).unwrap();
+
+    let mut sink = RecordingSink::new();
+    let mut said = |home: &Path| {
+        let mut policy = policy(&mut sink, &["."]);
+        let (_, notices) = agents::discover(&mut policy, &workspace, Some(home));
+        notices.into_iter().map(|n| n.message).collect::<Vec<_>>()
+    };
+
+    let all = said(&inside);
+    assert_eq!(
+        all,
+        [
+            "3 agent definitions keep no memory because this session's working directory is \
+             your home directory, or is ~/.bravebot or inside it. Start bravebot in a project \
+             directory to give them one"
+        ]
+    );
+    for name in names {
+        assert!(
+            !all[0].contains(name),
+            "a definition's name was in the notice"
+        );
+    }
+    assert!(
+        said(&elsewhere).is_empty(),
+        "a state directory elsewhere said a memory was not kept"
+    );
+}
+
+/// MEMORY-2: a working directory inside the state directory, which is not the home directory, keeps
+/// no memory either, and the notice states a cause that is true there: the working directory is
+/// `~/.bravebot` or inside it. The notice is the one the home directory gets, since the condition
+/// is the same, and it does not say the working directory is the home directory alone.
+///
+/// Rejects: a notice that gives only "your home directory" as the cause where the working
+/// directory is a directory inside `~/.bravebot`.
+#[test]
+fn a_working_directory_inside_the_state_directory_is_said_to_be_inside_it() {
+    let scratch = Scratch::new("memory-inside-state");
+    let state = scratch.home();
+    let project = state.join("work");
+    std::fs::create_dir_all(&project).unwrap();
+    write_definition(
+        &project.join(".bravebot"),
+        "notes-keeper",
+        &format!(
+            "{}\nmemory: project",
+            frontmatter("notes-keeper", "keeps notes", "worker")
+        ),
+        "body",
+    );
+    let workspace = Workspace::new(&project).unwrap();
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        agents::discover(&mut policy, &workspace, Some(&state))
+    };
+
+    assert_eq!(
+        definitions
+            .get("notes-keeper")
+            .map(|definition| definition.keeps_memory()),
+        Some(false),
+        "a memory was kept inside the state directory"
+    );
+    let said: Vec<String> = notices
+        .into_iter()
+        .map(|n| n.message)
+        .filter(|said| said.contains("keep") && said.contains("no memory"))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            "1 agent definition keeps no memory because this session's working directory is your \
+          home directory, or is ~/.bravebot or inside it. Start bravebot in a project directory \
+          to give it one"
+        ]
+    );
+}
+
+/// MEMORY-2, MEMORY-12: the definitions counted as keeping no memory in the home directory are the
+/// ones that loaded. Where the map does not vouch for `.bravebot/agents`, no definition loads, so
+/// no notice says one keeps no memory, `/memory` names none, and the count the planner is told is
+/// zero. The files are there and ask for a memory, and the trusted case is the control.
+///
+/// Rejects: a count taken from the definition files found in the directory before the trust gate
+/// decides whether they load.
+#[test]
+fn definitions_in_an_untrusted_agents_directory_are_not_counted_as_keeping_no_memory() {
+    let scratch = Scratch::new("memory-in-home-untrusted");
+    let project = scratch.workspace();
+    let inside = project.join(".bravebot");
+    for name in ["notes-keeper", "archivist"] {
+        write_definition(
+            &inside,
+            name,
+            &format!(
+                "{}\nmemory: project",
+                frontmatter(name, "keeps notes", "worker")
+            ),
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).unwrap();
+
+    let mut sink = RecordingSink::new();
+    let (definitions, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        agents::discover(&mut policy, &workspace, Some(&inside))
+    };
+    assert!(
+        definitions.get("notes-keeper").is_none() && definitions.get("archivist").is_none(),
+        "a definition in an untrusted directory loaded"
+    );
+    let told: Vec<String> = notices.into_iter().map(|n| n.message).collect();
+    assert!(
+        told.iter()
+            .all(|said| !said.contains("keep no memory") && !said.contains("keeps no memory")),
+        "an untrusted directory's definitions were said to keep no memory: {told:?}"
+    );
+
+    let untrusted = TrustStore::new("/work");
+    let left = agents::memories_with_left(
+        &workspace,
+        Some(&inside),
+        &untrusted,
+        bravebot_core::permissions::Permissions::default(),
+        &mut sink,
+    )
+    .1;
+    assert!(left.is_empty(), "names were left for /memory: {left:?}");
+
+    let mut trusted = TrustStore::new("/work");
+    trusted.trust(".");
+    let left = agents::memories_with_left(
+        &workspace,
+        Some(&inside),
+        &trusted,
+        bravebot_core::permissions::Permissions::default(),
+        &mut sink,
+    )
+    .1;
+    assert_eq!(
+        left.len(),
+        2,
+        "the same files, trusted, are not counted: {left:?}"
+    );
+}
+
+/// MEMORY-12: `/memory` can name the definitions the notice counts, and only the ones that ask for
+/// a memory.
+///
+/// Rejects: a listing that names a definition that asks for no memory, one that names none where
+/// the notice counted some, and a listing that is not given in the same call as the memories.
+#[test]
+fn the_definitions_left_without_a_memory_in_the_home_directory_are_named_on_request() {
+    let scratch = Scratch::new("memory-left-named");
+    let project = scratch.workspace();
+    let inside = project.join(".bravebot");
+    for (name, memory) in [("notes-keeper", "\nmemory: project"), ("plain", "")] {
+        write_definition(
+            &inside,
+            name,
+            &format!("{}{memory}", frontmatter(name, "d", "worker")),
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).unwrap();
+    let mut store = TrustStore::new("/work");
+    store.trust(".");
+
+    let mut sink = RecordingSink::new();
+    let (listed, left) = agents::memories_with_left(
+        &workspace,
+        Some(&inside),
+        &store,
+        bravebot_core::permissions::Permissions::default(),
+        &mut sink,
+    );
+    assert_eq!(left, ["notes-keeper"]);
+    assert!(
+        listed.is_empty(),
+        "a memory that is not kept was listed as kept: {listed:?}"
     );
 }
 
