@@ -156,6 +156,10 @@ pub struct Command {
     pub words: Vec<Word>,
     pub redirections: Vec<Redirection>,
     pub span: Span,
+    /// The `|`, `||`, `;` or `&&` that started this command where it was written directly onto
+    /// the end of the previous word, as in `--format=%h|%an`. Such a character is often meant as
+    /// part of that word, so a program name that cannot be found after one says to quote it.
+    pub glued_after: Option<&'static str>,
 }
 
 impl Command {
@@ -289,6 +293,11 @@ pub enum Reason {
     NotOneProgram,
     /// A program name nothing on `$PATH` matches.
     NotFound,
+    /// A program name nothing on `$PATH` matches, in a command that an unquoted `|`, `||`, `;` or
+    /// `&&` started where the character was written directly onto the end of the previous word.
+    /// It carries that separator, because an argument such as `--format=%h|%an` is read as two
+    /// commands until it is quoted.
+    NotFoundAfter(&'static str),
     /// A program named by a path where nothing runnable is.
     NotAtPath,
     /// A redirection target that is not exactly one file.
@@ -432,6 +441,10 @@ impl fmt::Display for Reason {
             ),
             Self::NotFound => f.write_str(
                 "is not a program that could be found. `$PATH` decides what a bare name means, and nothing on it matches",
+            ),
+            Self::NotFoundAfter(separator) => write!(
+                f,
+                "is not a program that could be found. `$PATH` decides what a bare name means, and nothing on it matches. The unquoted `{separator}` written directly before it ends the previous command and starts this one. Where you mean the character as text, as in a `--format` argument, quote the whole argument"
             ),
             Self::NotAtPath => f.write_str(
                 "is not a program that could be found: nothing runnable is at that path. Every program in a line is found before any step runs, so if an earlier step in this line creates it, run that step on its own first",
@@ -1530,6 +1543,26 @@ impl<'a> Parser<'a> {
             .then(|| self.refuse(next.span(), Reason::Parenthesis(character)))
     }
 
+    /// The separator that started the command about to be read, where it is written directly onto
+    /// the end of the word before it, as in `--format=%h|%an`. A separator after a space is a
+    /// pipeline or a sequence the writer meant, and one with nothing before it is a syntax error,
+    /// so those are not this.
+    fn separator_glued_to_a_word(&self) -> Option<&'static str> {
+        let separator = self.at.checked_sub(1).and_then(|at| self.tokens.get(at))?;
+        let text = match separator {
+            Tok::Pipe(_) => "|",
+            Tok::OrIf(_) => "||",
+            Tok::AndIf(_) => "&&",
+            Tok::Semi(_) => ";",
+            _ => return None,
+        };
+        let Some(Tok::Word(word)) = self.at.checked_sub(2).and_then(|at| self.tokens.get(at))
+        else {
+            return None;
+        };
+        (word.span.end == separator.span().start).then_some(text)
+    }
+
     /// The end of the line, for a span pointing at something that is not there.
     fn tail(&self) -> Span {
         Span::new(self.line.len(), self.line.len())
@@ -1620,6 +1653,7 @@ impl<'a> Parser<'a> {
                 Reason::TooManySteps { cap: MAX_STEPS },
             ));
         }
+        let glued_after = self.separator_glued_to_a_word();
         let mut assignments = Vec::new();
         let mut words: Vec<Word> = Vec::new();
         let mut redirections = Vec::new();
@@ -1747,6 +1781,7 @@ impl<'a> Parser<'a> {
             words,
             redirections,
             span: Span::new(start, end),
+            glued_after,
         })
     }
 }
@@ -2582,6 +2617,8 @@ impl Compiler<'_, '_> {
             text: program.clone(),
             reason: if crate::programs::has_separator(program) {
                 Reason::NotAtPath
+            } else if let Some(separator) = command.glued_after {
+                Reason::NotFoundAfter(separator)
             } else {
                 Reason::NotFound
             },
@@ -4919,6 +4956,56 @@ mod tests {
         let refused = compile_refused("bravebot-no-such-program-anywhere x", &tree.root);
         assert_eq!(refused.reason, Reason::NotFound);
         assert!(refused.to_string().contains("`$PATH`"), "{refused}");
+    }
+
+    /// An unquoted `|`, `||`, `;` or `&&` inside a format argument, as in `--format=%h|%an|%ae`,
+    /// ends the command, and the text after it is looked up as a program. The planner can only
+    /// repair the line if that refusal names the separator and says to quote the argument. A
+    /// separator after a space is a pipeline or a sequence the writer meant, so it keeps the plain
+    /// refusal, as does a program that is not preceded by one.
+    ///
+    /// Rejects an implementation that words every unfound program alike, one that adds the hint
+    /// whenever a separator precedes the program, and one that names a different separator.
+    #[test]
+    fn a_program_not_found_after_a_separator_written_onto_an_argument_says_to_quote_it() {
+        let tree = Tree::new("missing-after-separator");
+        tree.executable("bin/tool");
+        for (line, text, separator) in [
+            ("./bin/tool -3 --format=%h|%an|%ae HEAD", "%an", "|"),
+            ("./bin/tool a||%an", "%an", "||"),
+            ("./bin/tool a;%an", "%an", ";"),
+            ("./bin/tool a&&%an", "%an", "&&"),
+            ("./bin/tool a > out|%an", "%an", "|"),
+        ] {
+            let refusal = compile_refused(line, &tree.root);
+            assert_eq!(refusal.reason, Reason::NotFoundAfter(separator), "{line}");
+            assert_eq!(refusal.text, text, "{line}");
+            let said = refusal.to_string();
+            assert!(
+                said.contains(&format!("unquoted `{separator}`"))
+                    && said.contains("quote the whole argument"),
+                "`{line}` was refused without naming `{separator}` and saying to quote: {said}"
+            );
+        }
+        for line in [
+            "./bin/tool a | %an",
+            "./bin/tool a || %an",
+            "./bin/tool a ; %an",
+            "./bin/tool a && %an",
+            "%an|./bin/tool",
+            "( %an )",
+        ] {
+            assert_eq!(
+                compile_refused(line, &tree.root).reason,
+                Reason::NotFound,
+                "{line}"
+            );
+        }
+        assert_eq!(
+            argv("./bin/tool -3 '--format=%h|%an|%ae' HEAD"),
+            ["./bin/tool", "-3", "--format=%h|%an|%ae", "HEAD"]
+        );
+        compiled("./bin/tool -3 '--format=%h|%an|%ae' HEAD", &tree.root);
     }
 
     /// A line that makes a program and runs it, such as a venv created and its interpreter run,
