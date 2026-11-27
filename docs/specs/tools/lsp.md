@@ -630,7 +630,7 @@ incognito has already accepted.
 `verified-by: bravebot_lsp::server::the_name_of_a_session_index_directory_is_not_one_a_stage_could_work_out`
 `verified-by: bravebot_sandbox::private::a_directory_another_account_owns_is_refused`
 `verified-by: bravebot_agent::lsp::a_session_that_keeps_no_index_gives_its_server_an_index_under_the_account_cache_directory`
-`verified-by: bravebot_agent::confine::no_stage_of_a_session_beside_the_home_writes_the_directory_a_session_that_keeps_no_index_gives_its_server`
+`verified-by: bravebot_agent::confine::tests::no_stage_of_a_session_beside_the_home_writes_the_directory_a_session_that_keeps_no_index_gives_its_server`
 `verified-by: bravebot_lsp::server::the_cache_is_never_read_by_the_driver`
 `verified-by: bravebot_lsp::server::nothing_the_driver_does_with_an_index_reads_a_file_inside_it`
 `verified-by: bravebot_lsp::server::a_server_whose_index_directory_cannot_be_made_private_does_not_start`

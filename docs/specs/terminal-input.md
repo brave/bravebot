@@ -1041,7 +1041,7 @@ as though the person had typed it, so a file a stage could replace would let it 
 `verified-by: bravebot_tui::editor::the_file_a_body_is_edited_in_is_private_named_for_its_kind_and_removed`
 `verified-by: bravebot_tui::incognito::the_editor_hand_off_is_made_under_the_cache_directory_and_adds_nothing_to_the_state_directory`
 `verified-by: bravebot_sandbox::private::a_directory_another_account_owns_is_refused`
-`verified-by: bravebot_agent::confine::no_stage_of_a_session_beside_the_home_writes_the_directory_the_editor_is_handed_a_file_in`
+`verified-by: bravebot_agent::confine::tests::no_stage_of_a_session_beside_the_home_writes_the_directory_the_editor_is_handed_a_file_in`
 
 <a id="INPUT-15"></a>
 ### INPUT-15: `$VISUAL`, then `$EDITOR`, then a list that prefers a full editor to a last resort
