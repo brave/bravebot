@@ -41,6 +41,7 @@ import type {
 import type { ExportTurn } from '../shared/export'
 import type { DroppedFile } from '../shared/drops'
 import type { AsideDone } from '../shared/aside'
+import type { GoalTone } from '../shared/goal'
 
 /** A picture or PDF dropped onto a `/manifest` task, and the marker that stands for it there. */
 export interface DroppedOnTask {
@@ -219,6 +220,16 @@ export type Entry = (
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
   | { kind: 'error'; id: string; text: string; category?: string | null; accountMessage?: string | null; accountCommand?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
+  /**
+   * The driver's sentence that carries the work on under a goal (GOAL-7): a turn's prompt that the
+   * person did not type. Drawn from the bridge's `goal.carried` event, never from a prompt's words.
+   */
+  | { kind: 'goal-turn'; id: string; text: string }
+  /**
+   * What `/goal` answered, or what a check of the goal came to (GOAL-13): the bridge's sentence,
+   * marked by `tone`, which comes from the answer's fields and never from the sentence.
+   */
+  | { kind: 'goal-notice'; id: string; text: string; tone: GoalTone }
   /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
   | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
   /** A replayed tool line from a stored session: no outcome, because none was kept. */
@@ -307,7 +318,7 @@ export function summonedReplies(entries: Entry[]): Map<string, string> {
     // A line read into a running turn belongs to it, and a watch or a consolidation starts a turn
     // of its own, which no pick was made for.
     if (entry.kind === 'user') { if (!entry.interjected) waiting = entry.summoned ?? null }
-    else if (entry.kind === 'watch' || entry.kind === 'consolidation') waiting = null
+    else if (entry.kind === 'watch' || entry.kind === 'goal-turn' || entry.kind === 'consolidation') waiting = null
     else if (entry.kind === 'assistant' && waiting !== null) {
       found.set(entry.id, waiting)
       waiting = null
@@ -324,7 +335,7 @@ export function summonedFor(entries: Entry[]): string | undefined {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]!
     if (entry.kind === 'user' && !entry.interjected) return entry.summoned
-    if (entry.kind === 'watch' || entry.kind === 'consolidation') return undefined
+    if (entry.kind === 'watch' || entry.kind === 'goal-turn' || entry.kind === 'consolidation') return undefined
   }
   return undefined
 }
@@ -364,6 +375,8 @@ export const asideAnswered = (done: AsideDone): Entry => {
   if (done.status === 'stopped') return { kind: 'narration', id: nextId(), text: `${asked}: stopped.`, command }
   return { kind: 'narration', id: nextId(), text: `${asked}: ${done.message ?? 'the question failed'}`, command, refused: true }
 }
+export const goalCarried = (prompt: string): Entry => ({ kind: 'goal-turn', id: nextId(), text: prompt })
+export const goalNoticed = (text: string, tone: GoalTone): Entry => ({ kind: 'goal-notice', id: nextId(), text, tone })
 export const watchFired =(number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string, category?: string): Entry => ({ kind: 'error', id: nextId(), text, ...(category ? { category } : {}) })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })
@@ -501,7 +514,7 @@ export function beginTurn(entries: Entry[], number: number): Entry[] {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]!
     if (entry.kind === 'assistant' || entry.kind === 'turn-start') break
-    if (entry.kind === 'user' || entry.kind === 'consolidation' || entry.kind === 'watch') { at = index + 1; break }
+    if (entry.kind === 'user' || entry.kind === 'consolidation' || entry.kind === 'watch' || entry.kind === 'goal-turn') { at = index + 1; break }
   }
   return [...entries.slice(0, at), turnStarted(number), ...entries.slice(at)]
 }
@@ -687,6 +700,8 @@ export function plainText(entry: Entry): string | null {
     case 'assistant':
     case 'narration':
     case 'watch':
+    case 'goal-turn':
+    case 'goal-notice':
     case 'error':
     case 'replayed-tool':
     case 'plan-task':

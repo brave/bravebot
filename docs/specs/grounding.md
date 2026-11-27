@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/result.rs
   - crates/agent/src/goal.rs
+  - crates/agent/src/goal/standing.rs
   - crates/tui/src/goals.rs
   - crates/tui/src/state.rs
   - crates/tui/src/app/turns.rs

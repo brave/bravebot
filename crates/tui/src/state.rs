@@ -3974,55 +3974,7 @@ impl Session {
     /// no tool call, which leaves it set. The reason is kept either way, so a goal that has just
     /// given up can still say what it kept hearing.
     pub fn goal_not_met(&mut self, reason: String) -> Option<String> {
-        // Counted off the turn that was just judged, before the next one moves the mark.
-        let tool_calls = self.transcript
-            [self.turn_start.transcript_len.min(self.transcript.len())..]
-            .iter()
-            .filter(|entry| entry.speaker == Speaker::Tool)
-            .count();
-        let goal = self.goal.as_mut()?;
-        let condition = goal.condition().to_string();
-        match goal.not_met(reason.clone(), tool_calls) {
-            crate::goals::Next::SendBack => {}
-            crate::goals::Next::Spent => {
-                let rounds = goal.rounds();
-                let usage = self.goal_usage();
-                self.goal = None;
-                self.note(t!(goal_spent, rounds = rounds));
-                self.note_usage(usage);
-                // The sentence `/goal` answers with, said here because there is no goal left to
-                // ask: the round that spent the budget is the one whose reason a person wants,
-                // and this is the only place it is ever reported.
-                if !reason.is_empty() {
-                    self.note(t!(goal_last_check, reason = &reason));
-                }
-                return None;
-            }
-            crate::goals::Next::Stalled => {
-                // The goal stays set, as it does for a turn somebody stopped (GOAL-10): the next
-                // prompt is judged against it again.
-                self.note(t!(goal_stalled));
-                if !reason.is_empty() {
-                    self.note(t!(goal_last_check, reason = &reason));
-                }
-                return None;
-            }
-        }
-        if reason.is_empty() {
-            self.note(t!(goal_not_met_unsaid));
-        } else {
-            self.note(t!(goal_not_met, reason = &reason));
-        }
-        // The driver's own sentence with the judge's reason quoted inside it, which is why it is
-        // not a message from the catalog: it goes to a model rather than to a reader.
-        let prompt = bravebot_agent::goal::carry_on(&condition, &reason);
-        // The driver's sentence quoting a judge, so the turn names nothing.
-        Some(self.begin_turn(
-            prompt,
-            (Vec::new(), Vec::new()),
-            Vec::new(),
-            NamesFrom::nothing(),
-        ))
+        self.goal_judged(Ok(bravebot_agent::goal::Verdict::NotMet { reason }))
     }
 
     /// Act on what a check of the goal came back with, and give back the prompt that sends the
@@ -4033,53 +3985,79 @@ impl Session {
         &mut self,
         judged: Result<bravebot_agent::goal::Verdict, String>,
     ) -> Option<String> {
-        use bravebot_agent::goal::Verdict;
-        // A goal held still while the check was in flight is a person having said not now, the way
-        // one taken off is a person having said stop: the verdict is about a goal nothing is being
-        // judged against, so it is not acted on and not reported, and a failed check does not end
-        // a goal the person chose to keep.
-        if self.goal.as_ref().is_some_and(|goal| goal.is_paused()) {
-            return None;
-        }
-        let verdict = match judged {
-            Ok(verdict) => verdict,
-            Err(problem) => {
-                self.drop_goal();
+        use bravebot_agent::goal::Settled;
+        // Counted off the turn that was just judged, before the next one moves the mark.
+        let tool_calls = self.transcript
+            [self.turn_start.transcript_len.min(self.transcript.len())..]
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::Tool)
+            .count();
+        // Taken before the decision, which may drop the goal the figure is read from.
+        let usage = self.goal_usage();
+
+        // `settle` decides, in the order GOAL-6 gives: a paused goal or one taken off ignores the
+        // verdict, a failed check ends the goal, and only a verdict of not-yet sends the work back.
+        match bravebot_agent::goal::settle(&mut self.goal, judged, tool_calls) {
+            Settled::Ignored => None,
+            Settled::Failed { problem } => {
                 self.note(t!(goal_failed, problem = problem));
-                return None;
-            }
-        };
-
-        // A goal taken off while the check was in flight is a person having said stop. The verdict
-        // is about a goal that no longer exists, so it is not acted on and not reported: telling
-        // them the condition cannot be met, a moment after they cleared it, describes a session
-        // they are no longer in.
-        self.goal.as_ref()?;
-
-        // Four of the five verdicts end the goal, and the person is told which one it was in each
-        // case. Only one sends the work back, and even that one stops where the rounds are spent.
-        match verdict {
-            Verdict::NotMet { reason } => self.goal_not_met(reason),
-            Verdict::Met { reason } => {
-                self.goal_met(reason);
                 None
             }
-            Verdict::Impossible { reason } => {
-                let usage = self.goal_usage();
-                self.drop_goal();
+            Settled::Met { reason } => {
+                if reason.is_empty() {
+                    self.note(t!(goal_met_unsaid));
+                } else {
+                    self.note(t!(goal_met, reason = &reason));
+                }
+                self.note_usage(usage);
+                None
+            }
+            Settled::Impossible { reason } => {
                 self.note(t!(goal_impossible, reason = &reason));
                 self.note_usage(usage);
                 None
             }
-            Verdict::Unreadable => {
-                self.drop_goal();
+            Settled::Unreadable => {
                 self.note(t!(goal_unreadable));
                 None
             }
-            Verdict::Quarantined => {
-                self.drop_goal();
+            Settled::Quarantined => {
                 self.note(t!(goal_quarantined));
                 None
+            }
+            Settled::Spent { rounds, reason } => {
+                self.note(t!(goal_spent, rounds = rounds));
+                self.note_usage(usage);
+                // The sentence `/goal` answers with, said here because there is no goal left to
+                // ask: the round that spent the budget is the one whose reason a person wants,
+                // and this is the only place it is ever reported.
+                if !reason.is_empty() {
+                    self.note(t!(goal_last_check, reason = &reason));
+                }
+                None
+            }
+            Settled::Stalled { reason } => {
+                // The goal stays set, as it does for a turn somebody stopped (GOAL-10): the next
+                // prompt is judged against it again.
+                self.note(t!(goal_stalled));
+                if !reason.is_empty() {
+                    self.note(t!(goal_last_check, reason = &reason));
+                }
+                None
+            }
+            Settled::CarryOn { prompt, reason } => {
+                if reason.is_empty() {
+                    self.note(t!(goal_not_met_unsaid));
+                } else {
+                    self.note(t!(goal_not_met, reason = &reason));
+                }
+                // The driver's sentence quoting a judge, so the turn names nothing.
+                Some(self.begin_turn(
+                    prompt,
+                    (Vec::new(), Vec::new()),
+                    Vec::new(),
+                    NamesFrom::nothing(),
+                ))
             }
         }
     }

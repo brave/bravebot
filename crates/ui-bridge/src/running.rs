@@ -385,7 +385,8 @@ impl State {
         // checkouts the record lists are not placed yet: `take_back_checkouts` counts them again
         // once they are.
         if let Ok(workspace) = bravebot_agent::Workspace::new(project) {
-            let loops = crate::open_loops::of(&state, &workspace);
+            // A goal is never recorded (GOAL-12), so a resumed chat has none.
+            let loops = crate::open_loops::of(&state, &workspace, false);
             state.open_loops.ended_with(loops);
         }
         Ok(state)

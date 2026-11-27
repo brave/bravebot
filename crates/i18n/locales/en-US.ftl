@@ -4885,6 +4885,49 @@ goal-replaces-loop =
     the loop that was running has been stopped: a session works towards one thing at a time
 
 
+## What the desktop window says of /goal
+
+desktop-goal-set =
+    Working towards: { $condition }. Nothing runs until you send something. From then on each turn
+    is judged against it, and /goal clear takes it off.
+desktop-goal-replaced = The goal that was set has been replaced.
+desktop-goal-replaces-watches =
+    The watches that were running have been stopped, because a chat works towards one thing at a
+    time.
+desktop-goal-cleared = The goal is cleared.
+desktop-goal-paused =
+    The goal is paused. Turns are not judged against it until /goal resume, and /goal clear still
+    takes it off.
+desktop-goal-already-paused = The goal is already paused. /goal resume arms it again.
+desktop-goal-resumed = The goal is resumed. The next turn is judged against it again.
+desktop-goal-not-paused = The goal is not paused.
+desktop-goal-none =
+    No goal is set. /goal <condition> sets one, as in /goal cargo test exits 0, and /goal clear
+    takes it off again.
+desktop-goal-active = Working towards: { $condition }
+desktop-goal-last-check = The last check said: { $reason }
+desktop-goal-never-checked = Nothing has been judged against it yet.
+desktop-goal-not-met = The goal is not met yet: { $reason }
+desktop-goal-not-met-unsaid = The goal is not met yet, and the check did not say what is missing.
+desktop-goal-met = The goal is met: { $reason }
+desktop-goal-met-unsaid = The goal is met.
+desktop-goal-impossible = The goal cannot be met, so it is cleared: { $reason }
+desktop-goal-unreadable =
+    The check did not answer with a verdict, so there is nothing to act on and the goal is
+    cleared.
+desktop-goal-quarantined =
+    This chat has met untrusted content, so a verdict about it is not something this program may
+    act on. The goal is cleared.
+desktop-goal-spent =
+    The goal has sent the work back { $rounds } times without being met, and has stopped rather
+    than carrying on.
+desktop-goal-stalled =
+    The goal has sent the work back without a turn making a tool call, and has stopped sending it.
+    It is still set, and your next message is judged against it.
+desktop-goal-failed = The goal could not be checked ({ $problem }), so it is cleared.
+desktop-goal-ended-unexpectedly = The goal check ended unexpectedly.
+
+
 ## Being told when a file changes
 
 watch-armed =

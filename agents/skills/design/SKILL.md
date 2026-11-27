@@ -224,6 +224,23 @@ Compose from these before inventing a new pattern.
 - **Toast**: bottom-right of the conversation card. Confirmations clear themselves after four
   seconds; errors stay until dismissed and use `role="alert"`.
 - **Inspector**: one head, one row height and one empty state for every list in it.
+- **Goal section** (`Context.tsx`, `inspector.css`): heads Overview only while a `/goal` is set, so
+  it has no empty state and is not in Choose sections. The condition in meta-strong, one state line
+  with a meta icon centred on its first line (`flag`, or `pause-circle` / `warning-triangle-outline`
+  in `--status-warning` for paused and stalled, with words saying which), then `context-facts` rows
+  with tabular figures on the condition's left edge.
+- **Goal notice** (`.goal-notice`, `activity.css`): what `/goal` answered and each verdict, as a
+  caption notice whose 16px icon sits on the first line and whose single line is the working row's
+  height, so a verdict takes the check's place. `flag` by default, `check-circle-filled` in
+  `--status-success` with secondary ink for MET, `warning-triangle-outline` or `pause-circle` in
+  `--status-warning` for a goal that ended unmet, stalled or is paused. Each whole command it names
+  is one code span at the sentence's size. A check is the working row's phase, with no token count
+  and no row of its own.
+- **Driver's turn row** (`.watch-turn`, `activity.css`): a turn the app started rather than the
+  person (a watch firing, a goal carrying the work on) is a caption meta line with an icon, a
+  strong head and "Automatic turn · …", never a `.bubble.user`. A goal's row has a turn's space
+  above it and `--leo-spacing-2xl` below, and folds the sentence it sent under a collapsed
+  "Details", lined up past the icon.
 - **List rows**: `--session-row-h` rows in the sidebar, three lines of text, a hover control that
   overlays the time, sticky caption-ink group headings.
 - **Menus**: Leo menu items with a leading icon column and a check column (`menus.css`).

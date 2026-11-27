@@ -145,12 +145,51 @@ export interface StatusReport {
   title: string | null
   turns: number
   tokens: number
+  /** The goal the chat works towards, absent where none is set (GOAL-13). */
+  goal?: StatusGoal
   /** Set while a turn runs: it holds the trust map and the vouched programs, so `rules` is null (CMD-8). */
   rulesHeldByTurn: boolean
   rules: {
     paths: { path: string; shownPath: string; integrity: string }[]
     commands: { display: string; shownDirectory: string }[]
   } | null
+}
+
+/**
+ * The goal as `session.report.status` states it: the bridge's counts, from when the goal was set,
+ * with the running turn's tokens in the spend (GOAL-13).
+ */
+export interface StatusGoal {
+  condition: string
+  rounds: number
+  left: number
+  paused: boolean
+  stalled: boolean
+  elapsedSeconds: number
+  spentTokens: number
+}
+
+/** Whole seconds as the terminal's `/status` says them: `42s`, or `3m 05s`. */
+export function elapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
+}
+
+/**
+ * The goal's rows under its condition: how many rounds have gone and are left, then how long it
+ * has been set and what the chat has spent since.
+ */
+function goalRows(goal: StatusGoal): Row[] {
+  const rounds = goal.rounds === 0
+    ? 'not judged yet'
+    : `sent back ${goal.rounds} ${goal.rounds === 1 ? 'time' : 'times'}`
+  const state = goal.paused ? ' · paused, /goal resume arms it' : goal.stalled ? ' · stopped: rounds made no tool call' : ''
+  return [
+    ['Goal', goal.condition],
+    // The same count the Goal panel gives, with its unit.
+    ['', `${rounds} · ${goal.left} of ${goal.rounds + goal.left} rounds left${state}`],
+    ['', `set ${elapsed(goal.elapsedSeconds)} ago · ${tokens(goal.spentTokens)} spent`],
+  ]
 }
 
 const PERMISSION_NAMES: Record<string, string> = {
@@ -190,6 +229,7 @@ export function statusNotice(report: StatusReport): ReportNotice {
   rows.push(['Permissions', PERMISSION_NAMES[report.permissionMode] ?? report.permissionMode])
   rows.push(['Sandbox', SANDBOX_NAMES[report.sandboxMode] ?? report.sandboxMode])
   rows.push(['Spent', `${turns(report.turns)} · ${tokens(report.tokens)}`])
+  if (report.goal) rows.push(...goalRows(report.goal))
   if (report.rulesHeldByTurn || !report.rules) {
     rows.push(['Trust', HELD_BY_THE_TURN], ['Programs', HELD_BY_THE_TURN])
     return {

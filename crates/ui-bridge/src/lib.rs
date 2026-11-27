@@ -62,6 +62,7 @@ pub mod effort;
 pub mod emit;
 pub mod enhance;
 pub mod fork;
+mod goal;
 pub mod handoff;
 pub mod help;
 pub mod hooks;

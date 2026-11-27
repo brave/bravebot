@@ -35,10 +35,14 @@ export interface TurnInputs {
   backendReady: boolean | null
   draft: string
   setDraft: (text: string) => void
+  /** Chats whose queued message is on its way to the bridge, shared with `useGoal`. */
+  dequeuing: MutableRefObject<Set<string>>
+  /** Send a typed `/goal` line's argument, with what was staged on it (`useGoal`). */
+  goal: (handle: string, argument: string, staged: Staged[]) => Promise<void>
 }
 
 /** Sending, queueing, interjecting and cancelling turns, and answering what a turn asks. */
-export function useTurn({ handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft }: TurnInputs) {
+export function useTurn({ handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft, dequeuing, goal }: TurnInputs) {
   const answeringTrust = useRef(false)
 
   const answerTrust = useCallback(async (trusted: boolean) => {
@@ -316,10 +320,10 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     send,
   }, handle, task, line, staged, queuedAlready), [send, updateSession])
 
-  // Chats whose queued message is between leaving the queue and `send` returning. `send` awaits the
-  // bridge's check of the message's `@` names before it marks the chat running, and without this the
-  // queue would take the next message in that gap and send both.
-  const dequeuing = useRef(new Set<string>())
+  // `dequeuing` holds the chats whose queued message is between leaving the queue and `send`
+  // returning. `send` awaits the bridge's check of the message's `@` names before it marks the chat
+  // running. Without it the queue would take the next message in that gap and send both, and the
+  // goal would ask for its next step before the person's prompt had gone.
   useEffect(() => {
     for (const item of openedLives.current.values()) {
       if (item.running || !item.queued?.length || askingFirst(item) || !mayGo(item)) continue
@@ -439,6 +443,12 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void schedule(handle, exit.argument, exit.line, exit.staged)
       return
     }
+    if (exit.to === 'goal' && handleRef.current) {
+      setDraft('')
+      setLive((old) => old ? { ...old, staging: sent(old.staging) } : old)
+      void goal(handleRef.current, exit.argument, exit.staged)
+      return
+    }
     if (exit.to === 'aside' && handleRef.current) {
       setDraft('')
       void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
@@ -487,6 +497,12 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       void plan(handleRef.current, task, exit.line, exit.staged)
       return
     }
+    if (exit.to === 'goal') {
+      setDraft('')
+      setLive((old) => old ? { ...old, staging: sent(old.staging) } : old)
+      void goal(handleRef.current, exit.argument, exit.staged)
+      return
+    }
     if (exit.to === 'aside') {
       setDraft('')
       void askAside(handleRef.current, exit.kind, exit.question, exit.line, exit.staged)
@@ -503,7 +519,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     setDraft('')
     // A refused send puts `exit.line` back in the composer, which is the words.
     void send(exit.line, undefined, undefined, exit.staged)
-  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, askAside, planRun, plan, backendReady])
+  }, [draft, live?.staging, live?.running, live?.askingTrust, live?.rulesQuestion, live?.folderQuestion, send, schedule, askAside, planRun, plan, backendReady, goal])
 
   /** What the composer's interject key does: queue the line behind the turn, or send it into the turn. */
   const interjectDraft = () => {
@@ -523,6 +539,12 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
       setDraft('')
       setLive((old) => old ? { ...old, staging: sent(old.staging) } : old)
       void plan(handle, task, exit.line, exit.staged)
+      return
+    }
+    if (exit.to === 'goal') {
+      setDraft('')
+      setLive((old) => old ? { ...old, staging: sent(old.staging) } : old)
+      void goal(handle, exit.argument, exit.staged)
       return
     }
     if (exit.to === 'aside') {

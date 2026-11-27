@@ -16,6 +16,7 @@ import type { DropOutcome, DroppedFile } from '../shared/drops'
 import { FOLDED_TEXT_MAX, type PastedPicture, type PastedText } from '../shared/pastes'
 import { summonMarker } from '../shared/summons'
 import { btwQuestion, isRecap } from '../shared/aside'
+import { goalArgument } from '../shared/goal'
 import { scheduleArgument } from '../shared/schedule'
 
 /** A bot picked from the `@` list for one message (MEMORY-14). */
@@ -176,13 +177,14 @@ export function leaving(staging: Staging | undefined, draft: string): { words: s
 
 /**
  * Where a draft goes when it leaves the composer, and what it carries there: a `/schedule`
- * argument, a `/btw` or `/recap` question, or a prompt to send, queue or put into the turn. Each is
+ * argument, a `/goal` argument, a `/btw` or `/recap` question, or a prompt to send, queue or put into the turn. Each is
  * read from the words, with every folded paste put back, so no exit carries a marker (PASTE-1).
  * `line` is the words, which is also what goes back into the composer when the exit fails.
  */
 export type Exit =
   | { to: 'schedule'; argument: string; line: string; staged: Staged[] }
   | { to: 'aside'; kind: 'btw' | 'recap'; question: string; line: string; staged: Staged[] }
+  | { to: 'goal'; argument: string; line: string; staged: Staged[] }
   | { to: 'prompt'; line: string; staged: Staged[] }
 
 /** The exit `draft` takes, or null for a blank draft. */
@@ -191,6 +193,8 @@ export function exitOf(staging: Staging | undefined, draft: string): Exit | null
   if (!line) return null
   const argument = scheduleArgument(line)
   if (argument !== null) return { to: 'schedule', argument, line, staged }
+  const condition = goalArgument(line)
+  if (condition !== null) return { to: 'goal', argument: condition, line, staged }
   const question = btwQuestion(line)
   if (question !== null) return { to: 'aside', kind: 'btw', question, line, staged }
   if (isRecap(line)) return { to: 'aside', kind: 'recap', question: '', line, staged }

@@ -80,6 +80,9 @@ struct Open {
     running: Option<Running>,
     model: Option<String>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
+    /// The goal this chat works towards, set by a `/goal` the person typed. Beside the watches and
+    /// never in `state`, so nothing that writes the session record reaches it (GOAL-12).
+    goal: Arc<Mutex<crate::goal::GoalSlot>>,
     /// Settled once, when the session opened, as the terminal does: a session that opened with
     /// the mode on said so at the top, and a later change to the file would make that untrue.
     auto_vetting: bool,
@@ -182,6 +185,7 @@ impl Open {
             running: None,
             model: None,
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            goal: Arc::new(Mutex::new(crate::goal::GoalSlot::default())),
             auto_vetting,
             // Set with the rules, which are read once the session is minted.
             reads_stay_in_workspace: false,
@@ -232,6 +236,14 @@ impl Open {
                 "a turn is already running in this session",
             ));
         }
+        // The check holds no state, but the turn after it is the one its verdict decides, so
+        // nothing starts until it has been settled.
+        if self.goal.lock().map_or(true, |slot| slot.is_judging()) {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "Wait for the goal's check to finish.",
+            ));
+        }
         self.not_compacting()
     }
 
@@ -246,6 +258,15 @@ impl Open {
         }
         Ok(())
     }
+}
+
+/// Whose line a turn's prompt is, which decides whether an `@path` in it names a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wrote {
+    /// The person sent it, and each `@path` they could read in it names a file (NAME-9).
+    Person,
+    /// The bridge wrote it, so no `@path` in it names anything (GOAL-8).
+    Driver,
 }
 
 /// A question asked beside the work, from when it is sent until its worker has settled it.
@@ -601,6 +622,8 @@ impl Bridge {
             "crash_reports.mark_notice_shown" => Ok(crate::crash_notice::mark_shown()),
             "changelog.read" => Ok(crate::help::changelog()),
             "schedule.command" => self.schedule_command(request),
+            "session.goal" => self.goal_command(request),
+            "session.goal.continue" => self.goal_continue(request),
             "caffeinate.confirmed" => {
                 Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
             }
@@ -1052,7 +1075,20 @@ impl Bridge {
             "permissionMode": wire::permission_mode_name(open.permission_mode.get()),
             "sandboxMode": wire::sandbox_mode_name(self.sandbox_mode_in(&open.project, open.sandbox)),
         });
-        merge(&mut status, crate::reports::hold(&open.reports).status());
+        let reports = crate::reports::hold(&open.reports).status();
+        // The goal, where one is set: its spend is counted against the session's total with the
+        // running turn's tokens in it (GOAL-13). A chat with no goal says nothing about one.
+        let goal = open.goal.lock().ok().map(|slot| {
+            crate::goal::snapshot(
+                &slot,
+                reports["tokens"].as_u64().unwrap_or(0),
+                std::time::Instant::now(),
+            )
+        });
+        merge(&mut status, reports);
+        if let Some(goal) = goal.filter(|goal| !goal.is_null()) {
+            merge(&mut status, json!({ "goal": goal }));
+        }
         let running = open.running.is_some();
         merge(
             &mut status,
@@ -1577,7 +1613,8 @@ impl Bridge {
                     // Taken as the last turn's, as a resume takes it (OPEN-3, OPEN-6). The child
                     // keeps no checkouts.
                     if let Ok(workspace) = Workspace::new(&project) {
-                        let loops = crate::open_loops::of(&forked, &workspace);
+                        // The fork starts with no goal (GOAL-12).
+                        let loops = crate::open_loops::of(&forked, &workspace, false);
                         forked.open_loops.ended_with(loops);
                     }
                     forked.account = self.account_session(&project);
@@ -2133,7 +2170,7 @@ impl Bridge {
         // back to recognising them by their wording; what it may not do is claim one of the
         // agent's, which is [`wire::composed`]'s whole job.
         let answer = crate::wire::composed(request.params.get("composed"))
-            .and_then(|composed| self.start_turn(request, composed));
+            .and_then(|composed| self.start_turn(request, composed, Wrote::Person));
         if let Some(open) = self.open.get_mut(&handle) {
             open.sends.record(id, &request.params, answer.clone());
         }
@@ -2147,10 +2184,14 @@ impl Bridge {
     /// have a transcript draw a file's row, or a watch's, around a line a person typed, which is
     /// the thing the tag exists to stop anyone doing. The tag for a prompt the front end composed
     /// itself is a different claim, and [`wire::composed`] is where a request may make it.
+    ///
+    /// `wrote` says whose line the prompt is. Only a line the person sent names a file with `@`
+    /// (NAME-9): the driver's own sentences, such as a goal's carry-on, name none (GOAL-8).
     fn start_turn(
         &mut self,
         request: &Request,
         composed: Option<bravebot_agent::conversation::Composed>,
+        wrote: Wrote,
     ) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let prompt = request.string("prompt")?;
@@ -2226,7 +2267,7 @@ impl Bridge {
         // showed it, each folded paste behind its marker, and the names are read there, since the
         // pasted words name no file (NAME-12).
         let mut files = files;
-        if composed.is_none() {
+        if composed.is_none() && wrote == Wrote::Person {
             let shown = request.params.get("shown").and_then(Value::as_str);
             for named in crate::mentions::named_as_shown(&workspace, &prompt, shown)? {
                 if !files.contains(&named) {
@@ -2264,6 +2305,10 @@ impl Bridge {
         let state = Arc::clone(&open.state);
         let reports = Arc::clone(&open.reports);
         let watches = Arc::clone(&open.watches);
+        let goal = Arc::clone(&open.goal);
+        // The condition this turn works towards, read when it starts as the terminal reads it: a
+        // paused goal's turns are not told of it (GOAL-14).
+        let working_towards = goal.lock().ok().and_then(|slot| slot.in_force());
         let (turn_number, tokens_at_turn) = state
             .lock()
             .map(|s| (s.turns + 1, s.tokens))
@@ -2294,6 +2339,13 @@ impl Bridge {
         let answerers = self.answerers_of(&handle);
 
         let worker_model = model.clone();
+
+        // A prompt sent now goes before the goal's check and its carry-on, which this turn's end
+        // makes due again. Cleared here, past every refusal and before the worker can end the
+        // turn, so the turn's own end is what sets the check due.
+        if let Ok(mut slot) = goal.lock() {
+            slot.turn_starting();
+        }
 
         self.emitter.view_started(
             &handle,
@@ -2336,6 +2388,8 @@ impl Bridge {
                 addressing,
                 addressing_standing,
                 watches,
+                goal,
+                working_towards,
                 emitter,
                 session,
                 project,
@@ -2723,6 +2777,8 @@ impl Bridge {
             .lock()
             .map(|watches| !watches.is_empty())
             .unwrap_or(true);
+        // A goal set, paused or not, goes on sending work without anybody typing (BG-2).
+        let under_a_goal = open.goal.lock().map_or(true, |slot| slot.running.is_some());
         // Read only when nothing is running, since a running turn holds the state. A busy chat is
         // refused before the record is consulted.
         let left = match busy {
@@ -2738,8 +2794,8 @@ impl Bridge {
             sandbox: self.sandbox_mode_in(&open.project, open.sandbox),
             settled: self.sandbox_mode_in(&open.project, None),
             busy,
-            // A chat has no loop or goal, so its watches are all it could keep running.
-            keeps_running: watching,
+            // A chat has no loop, so its watches and its goal are all it could keep running.
+            keeps_running: watching || under_a_goal,
             recorded: left.is_some(),
             incognito: bravebot_core::incognito::engaged(),
         };
@@ -3178,6 +3234,7 @@ impl Bridge {
         let mut workspace =
             turn_workspace(project.clone(), &settings, open.reads_stay_in_workspace)
                 .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+        let stopped_goal = goal_stalled(open);
         let mut guard = open
             .state
             .lock()
@@ -3288,7 +3345,7 @@ impl Bridge {
                 workspace = workspace.with_kept_between_turns(kept);
             }
             state.open_loops = Default::default();
-            let loops = crate::open_loops::of(state, &workspace);
+            let loops = crate::open_loops::of(state, &workspace, stopped_goal);
             state.open_loops.ended_with(loops);
         }
         if !discard && state.handle.is_some() {
@@ -3442,6 +3499,25 @@ impl Bridge {
             && let Some(compacting) = &open.compacting
         {
             compacting.cancel.cancel();
+        }
+        // During the goal's check the stop takes the goal off with the request, so the next round
+        // is not sent after it (GOAL-10, INPUT-4). The verdict that may still arrive is dropped.
+        let mut goal_cleared = false;
+        if expected.is_none()
+            && let Ok(mut slot) = open.goal.lock()
+            && let Some(judging) = &slot.judging
+        {
+            judging.cancel.cancel();
+            slot.running = None;
+            slot.carry_on = None;
+            goal_cleared = true;
+        }
+        if goal_cleared {
+            self.emitter.send(Event::new(
+                "goal.changed",
+                &handle,
+                json!({ "goal": Value::Null }),
+            ));
         }
         if let Ok(mut watches) = open.watches.lock() {
             watches.stop_firing();
@@ -4009,6 +4085,208 @@ impl Bridge {
         )
     }
 
+    /// `/goal` typed in the window (CMD-1). Setting a goal sends nothing (GOAL-2) and ends the
+    /// chat's watches, which are its other unattended work (GOAL-11). Every change is sent as
+    /// `goal.changed`.
+    fn goal_command(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let argument = request.string("argument")?;
+        // Only names and sentences enter the line: no dropped file is opened, and a pasted
+        // picture is said not to join it (DROP-4).
+        let argument = crate::attached::in_words_for_a_command(request, &argument)?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let asked = bravebot_agent::goal::parse(&argument);
+        let mut watches_ended = 0;
+        if matches!(asked, bravebot_agent::goal::Asked::Set(_)) {
+            let mut watches = open
+                .watches
+                .lock()
+                .map_err(|_| Failure::bad_request("Watches unavailable."))?;
+            for watch in watches.live() {
+                self.emitter.send(Event::new(
+                    "watch.ended",
+                    &handle,
+                    json!({"number": watch.number(), "reason": "goal"}),
+                ));
+                watches_ended += 1;
+            }
+            watches.stop_all();
+        }
+        // A turn holds the state for its length, and the total until it ends is the one it began
+        // with.
+        let tokens = match open.state.try_lock() {
+            Ok(state) => state.tokens,
+            Err(_) => open.tokens_at_turn,
+        };
+        let mut slot = open
+            .goal
+            .lock()
+            .map_err(|_| Failure::bad_request("Goal unavailable."))?;
+        let answer = crate::goal::command(
+            &mut slot,
+            asked,
+            tokens,
+            open.running.is_some(),
+            watches_ended,
+        );
+        let goal = crate::goal::snapshot(&slot, tokens, std::time::Instant::now());
+        if answer.changed {
+            self.emitter
+                .send(Event::new("goal.changed", &handle, json!({ "goal": goal })));
+        }
+        Ok(crate::goal::answered(&answer, &goal))
+    }
+
+    /// Take the goal's next step, which the window asks for once a turn has ended and the prompts
+    /// the person queued are sent, so a goal never gets ahead of the person.
+    ///
+    /// Where a carry-on is waiting, its turn starts, with the driver's sentence as the prompt and
+    /// no `@path` in it read (GOAL-7, GOAL-8). Where a check is due, the goal is put to the judge
+    /// with no tools over a copy of the exchange (GOAL-3), `goal.checking` is sent and the answer
+    /// returns before the judge has; `goal.judged` says what it decided. Otherwise nothing starts.
+    /// Refused, as a turn is, while the chat is not free for work.
+    fn goal_continue(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+        let step = open
+            .goal
+            .lock()
+            .map_err(|_| Failure::bad_request("Goal unavailable."))?
+            .step();
+        match step {
+            crate::goal::Step::Nothing => Ok(json!({ "started": false })),
+            crate::goal::Step::CarryOn(prompt) => {
+                // Not recall: the person did not type it, so it neither joins their history nor
+                // names the chat. Announced before the worker starts, as `watch.fired` is, so the
+                // window draws the prompt as the driver's before the turn's own events arrive.
+                self.emitter.send(Event::new(
+                    "goal.carried",
+                    &handle,
+                    // Line by line, so its paragraphs stay paragraphs and no other control is drawn.
+                    json!({ "prompt": prompt
+                        .split('\n')
+                        .map(bravebot_agent::confirm::printable)
+                        .collect::<Vec<_>>()
+                        .join("\n") }),
+                ));
+                let request = Request {
+                    id: 0,
+                    method: "turn.send".into(),
+                    params: json!({ "session": handle, "prompt": prompt, "recall": false }),
+                };
+                let started = self.start_turn(&request, None, Wrote::Driver)?;
+                Ok(
+                    json!({ "started": "turn", "turn": started["turn"], "target": started["target"] }),
+                )
+            }
+            crate::goal::Step::Check {
+                condition,
+                record,
+                goal_started,
+            } => self.check_goal(&handle, &condition, record, goal_started),
+        }
+    }
+
+    /// Put the goal to the judge on a worker, as `goal_continue` found due.
+    fn check_goal(
+        &mut self,
+        handle: &str,
+        condition: &str,
+        record: bravebot_agent::Work,
+        goal_started: std::time::Instant,
+    ) -> Result<Value, Failure> {
+        let open = self.open.get(handle).ok_or_else(Failure::no_such_session)?;
+        let (model, config) = crate::models::chosen(
+            None,
+            open.model.as_deref(),
+            &open.project,
+            self.settings.as_deref(),
+        )?;
+        let state = Arc::clone(&open.state);
+        let goal = Arc::clone(&open.goal);
+        // Taken here, on the thread that holds the state, because a conversation is not `Clone`
+        // and what crosses to the worker is the request and not the exchange.
+        let (check, account, trust) = {
+            let state = state.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's state is unavailable")
+            })?;
+            (
+                bravebot_agent::goal::Check::of(&state.conversation, condition, record),
+                state.account.clone(),
+                state.answers.trust.clone(),
+            )
+        };
+        let cancel = Cancel::new();
+        goal.lock()
+            .map_err(|_| Failure::bad_request("Goal unavailable."))?
+            .judging = Some(crate::goal::Judging {
+            cancel: cancel.clone(),
+            goal_started,
+        });
+        self.emitter
+            .send(Event::new("goal.checking", handle, json!({})));
+        let emitter = self.emitter.clone();
+        let session = handle.to_string();
+        self.workers_of(handle).spawn(move || {
+            let egress = Egress::new();
+            let mut sink = bravebot_session::audit::Trail::new();
+            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                agent_turn::goal(
+                    &config,
+                    &egress,
+                    &account,
+                    check,
+                    model.as_deref(),
+                    &mut sink,
+                    trust,
+                    &cancel,
+                )
+                .map_err(|error| error.to_string())
+            }))
+            .unwrap_or_else(|_| {
+                Err(bravebot_i18n::t!(desktop_goal_ended_unexpectedly).to_string())
+            });
+            // Charged as the terminal charges it: the request was made and spent what it spent,
+            // whatever it decided.
+            let spent = done.as_ref().map_or(0, |assessed| assessed.usage.total());
+            let tokens = match state.lock() {
+                Ok(mut state) => {
+                    state.tokens += spent;
+                    state.tokens
+                }
+                Err(_) => 0,
+            };
+            let judged = done.map(|assessed| assessed.verdict);
+            let now = std::time::Instant::now();
+            let said = goal.lock().ok().and_then(|mut slot| {
+                let said = slot.judged(judged, cancel.is_cancelled(), tokens, now)?;
+                Some((said, crate::goal::snapshot(&slot, tokens, now)))
+            });
+            // Cleared on every path, so a stopped or settled check frees the chat for work.
+            if let Ok(mut slot) = goal.lock() {
+                slot.judging = None;
+            }
+            if let Some((said, snapshot)) = said {
+                emitter.send(Event::new("goal.judged", &session, said));
+                emitter.send(Event::new(
+                    "goal.changed",
+                    &session,
+                    json!({ "goal": snapshot }),
+                ));
+            }
+        });
+        Ok(json!({ "started": "check" }))
+    }
+
     fn watches(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         self.reap(&handle);
@@ -4185,6 +4463,7 @@ impl Bridge {
                     number,
                     path: path.to_string(),
                 }),
+                Wrote::Driver,
             )
         {
             if let Some(open) = self.open.get(handle)
@@ -4767,15 +5046,21 @@ fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
         state.kept = Some(workspace.kept_between_turns());
         // The placed checkouts are open loops of the session's too, part of the set the resume
         // took as the last turn's (OPEN-3, OPEN-6).
-        let loops = crate::open_loops::of(&state, &workspace);
+        let loops = crate::open_loops::of(&state, &workspace, goal_stalled(open));
         state.open_loops.ended_with(loops);
     }
 }
 
+/// Whether the chat `open` has a goal that stopped sending the work back and is still set, which
+/// is an open loop (OPEN-1). Read before the state is locked, which a turn holds for its length.
+fn goal_stalled(open: &Open) -> bool {
+    open.goal.lock().is_ok_and(|slot| slot.stalled())
+}
+
 /// The line a turn ends with where the open loops changed since the last turn ended, or `None`
 /// where they are the same, so a loop the person left open is not said every turn (OPEN-3).
-fn say_open_loops(state: &mut State, workspace: &Workspace) -> Option<String> {
-    let loops = crate::open_loops::of(state, workspace);
+fn say_open_loops(state: &mut State, workspace: &Workspace, stopped_goal: bool) -> Option<String> {
+    let loops = crate::open_loops::of(state, workspace, stopped_goal);
     let line = loops.to_the_person();
     state.open_loops.ended_with(loops).then_some(line)
 }
@@ -4789,8 +5074,9 @@ fn resumed_loops(
 ) -> Option<bravebot_agent::open_loops::Loops> {
     let settings = crate::settings::layers(Some(directory), settings);
     let workspace = with_session_checkouts(open, session_workspace(open, &settings).ok()?);
+    let stopped_goal = goal_stalled(open);
     let state = open.state.lock().ok()?;
-    Some(crate::open_loops::of(&state, &workspace))
+    Some(crate::open_loops::of(&state, &workspace, stopped_goal))
 }
 
 /// As a session is forked, place the names the parent's file tools reached as the child's, so the
@@ -4894,6 +5180,11 @@ struct Work {
     /// Each MCP server the settings request, with the file that requested it.
     mcp_requested: Vec<(PathBuf, String)>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
+    /// The chat's goal slot, where the turn records its work and whether the check is due.
+    goal: Arc<Mutex<crate::goal::GoalSlot>>,
+    /// The condition of the goal in force when the turn started, which the planner is told of
+    /// (GOAL-14). `None` where no goal is set or it is paused.
+    working_towards: Option<String>,
     model: Option<String>,
     /// The definition this turn is addressed to, where it is a turn in a bot's conversation
     /// (MEMORY-10).
@@ -5017,6 +5308,8 @@ fn work(work: Work) {
         permission_mode,
         mcp_requested,
         watches,
+        goal,
+        working_towards,
         model,
         addressing,
         addressing_standing,
@@ -5153,7 +5446,10 @@ fn work(work: Work) {
         .addressing_standing(addressing_standing)
         // The open loops that changed since the planner was last told (OPEN-4). The turn ends
         // with OPEN-3's line, sent on `turn.done`/`turn.error`, in place of TURN-4's narration.
-        .with_open_loops(state.open_loops.for_the_planner());
+        .with_open_loops(state.open_loops.for_the_planner())
+        // The goal in force, which the planner is told it works towards (GOAL-14, GOAL-15,
+        // GOAL-16), as the terminal tells it.
+        .working_towards(working_towards);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -5179,7 +5475,12 @@ fn work(work: Work) {
         .lock()
         .map(|w| bravebot_agent::watch::MAX_LIVE.saturating_sub(w.live().len()))
         .unwrap_or(0);
-    task = task.arming(if free == 0 {
+    // A goal set, paused or not, is work that happens without anybody typing, so a turn under one
+    // arms no watch (GOAL-11), as the terminal's `arming` decides.
+    let under_a_goal = goal.lock().map_or(true, |slot| slot.running.is_some());
+    task = task.arming(if under_a_goal {
+        bravebot_agent::watch::Arming::UnderAGoal
+    } else if free == 0 {
         bravebot_agent::watch::Arming::Full
     } else {
         bravebot_agent::watch::Arming::Allowed { free }
@@ -5237,7 +5538,8 @@ fn work(work: Work) {
     state.rewind.keep_backups(workspace.take_backups());
     // Kept whatever the outcome (GROUND-4): a failed or cancelled turn may still have written or
     // run something, and the session's open loops are worked out from all of it (OPEN-1).
-    state.work.then(completed.work);
+    let turn_work = completed.work;
+    state.work.then(turn_work);
     for path in reporter.written() {
         if !state.written.contains(path) {
             state.written.push(path.clone());
@@ -5296,7 +5598,16 @@ fn work(work: Work) {
     // The loops this turn left open, whatever its ending, after its work and todos are the
     // session's: said to the person where they changed (OPEN-3), and told to the planner on the
     // next turn (OPEN-4).
-    let open_line = say_open_loops(&mut state, &workspace);
+    //
+    // The goal's record takes this turn's work whatever its ending (GROUND-4). Only a turn that
+    // ended normally and was not stopped makes the check due: a failed or stopped turn is not
+    // judged and leaves the goal set (GOAL-10).
+    let judged = outcome.is_ok() && !cancel.is_cancelled();
+    let stopped_goal = goal.lock().is_ok_and(|mut slot| {
+        slot.turn_ended(turn_work, reporter.tool_calls(), judged);
+        slot.stalled()
+    });
+    let open_line = say_open_loops(&mut state, &workspace, stopped_goal);
 
     let event = match outcome {
         Ok(outcome) => {
@@ -7923,6 +8234,10 @@ mod completion_tests;
 #[cfg(test)]
 #[path = "open_loops_tests.rs"]
 mod open_loops_tests;
+
+#[cfg(test)]
+#[path = "goal_tests.rs"]
+mod goal_tests;
 
 // Beside the turn worker rather than the store, because one of them runs a turn.
 #[cfg(test)]

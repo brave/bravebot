@@ -346,6 +346,12 @@ pub const DENIED: &[&str] = &[
     "watches.add",
     "watches.stop",
     "watches.poll",
+    // The condition a chat works towards is a line a person typed into the window's own composer
+    // (CMD-1, GOAL-1). A client of the host is a program, and a program never types that line.
+    "session.goal",
+    // Puts that goal to its judge and sends the work back, which the window asks for once it has
+    // sent the prompts the person queued, so a goal never gets ahead of the person.
+    "session.goal.continue",
     // Lists and changes the schedule entries kept on this machine, for a line a person typed into
     // the window's own composer (CMD-1). A client of the host is a program, and a program never
     // types that line.
@@ -586,6 +592,25 @@ mod tests {
         .err()
         .expect("refused");
         assert_eq!(failure.code, ErrorCode::NotAllowed);
+    }
+
+    /// Rejects `session.goal` for a client of the host: the condition is a line a person typed
+    /// (CMD-1, GOAL-1), so no program may set, pause or clear it.
+    #[test]
+    fn the_goal_command_is_denied_to_a_client_of_the_host() {
+        assert!(DENIED.contains(&"session.goal"));
+        let refused = check(&request(
+            "session.goal",
+            json!({"session": "s1", "argument": "cargo test exits 0"}),
+        ))
+        .err()
+        .map(|failure| failure.code);
+        assert_eq!(refused, Some(ErrorCode::NotAllowed));
+        assert!(DENIED.contains(&"session.goal.continue"));
+        let refused = check(&request("session.goal.continue", json!({"session": "s1"})))
+            .err()
+            .map(|failure| failure.code);
+        assert_eq!(refused, Some(ErrorCode::NotAllowed));
     }
 
     /// Rejects `session.btw`, `session.recap` and `session.aside.cancel` for a client of the host:

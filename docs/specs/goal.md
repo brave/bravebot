@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/goal.rs
   - crates/agent/src/preamble.rs
+  - crates/agent/src/goal/standing.rs
   - crates/tui/src/goals.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/turns.rs
@@ -15,6 +16,12 @@ governs:
   - crates/tui/src/state/queue.rs
   - crates/tui/src/state/entry.rs
   - crates/tui/src/command_table.rs
+  - crates/ui-bridge/src/goal.rs
+  - crates/ui-bridge/src/goal_tests.rs
+  - crates/ui-bridge/src/bridge.rs
+  - ui/src/shared/goal.ts
+  - ui/src/renderer/use-goal.ts
+  - ui/scripts/goal-command.test.mjs
 guards:
   - symbol: Session::start_goal
   - symbol: Session::goal_not_met
@@ -40,6 +47,14 @@ command at all, and that only a key press produces one, is [commands.md](command
 **A goal never gets ahead of the person.** A prompt they queued while a turn ran is sent before the
 judge is asked, so the condition is judged against an exchange holding everything they have said.
 
+**The desktop app takes the same steps when the window asks for them.** The bridge holds the goal
+for each open chat and never starts work nobody requested, and the window holds the queue. So once a
+turn under a goal ends and the prompts the person queued are sent, the window sends
+`session.goal.continue`. Where a check is due that request sends the check, and where the last
+verdict was not met it sends the work back. A goal goes no further while no window asks. Both
+methods, `session.goal` and `session.goal.continue`, are the window's alone: no host client or ACP
+client may send them.
+
 ## What is judged
 
 <a id="GOAL-1"></a>
@@ -56,6 +71,7 @@ sentence is what is judged.
 
 `verified-by: bravebot_tui::app::tests::commands_words::the_goal_command_carries_the_whole_condition`
 `verified-by: bravebot_agent::goal::the_condition_is_marked_as_one_rather_than_left_on_the_end_of_the_work`
+`verified-by: bravebot_ui_bridge::allowlist::the_goal_command_is_denied_to_a_client_of_the_host`
 
 <a id="GOAL-2"></a>
 ### GOAL-2: setting a goal starts no work
@@ -69,6 +85,8 @@ by this program, about work it had guessed at.
 
 `verified-by: bravebot_tui::state::setting_a_goal_starts_no_turn`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::the_goal_command_sets_a_condition_without_sending_anything`
+`verified-by: bravebot_ui_bridge::goal_tests::setting_a_goal_starts_no_turn_and_says_the_goal_changed`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/goal-command.test.mjs asserts that only /goal and /goal <condition> are the command, that exitOf routes the typed line to the goal and a longer word such as /goals to a prompt, and that the composer sends the line to session.goal before send, interject or the queue; make check-ui runs it)`
 
 <a id="GOAL-3"></a>
 ### GOAL-3: the judge is a separate request, with no tools, over a copy of the exchange
@@ -156,6 +174,7 @@ rather than one that spends a budget on a judge that has stopped answering.
 
 `verified-by: bravebot_tui::state::only_a_condition_not_met_yet_carries_the_work_on_and_every_other_outcome_ends_the_goal`
 `verified-by: bravebot_tui::state::a_verdict_against_no_goal_sends_nothing`
+`verified-by: bravebot_ui_bridge::goal_tests::a_goal_that_is_met_ends`
 
 <a id="GOAL-7"></a>
 ### GOAL-7: the work goes back as the driver's own sentence, naming the condition
@@ -171,6 +190,8 @@ holding the session open, or it treats the reason as the whole of the job.
 `verified-by: bravebot_agent::goal::the_work_is_sent_back_with_the_condition_and_not_only_the_reason`
 `verified-by: bravebot_agent::goal::work_sent_back_without_a_reason_says_nothing_about_one`
 `verified-by: bravebot_tui::state::a_goal_that_is_not_met_sends_the_work_back_with_the_condition_and_the_reason`
+`verified-by: bravebot_ui_bridge::goal_tests::a_goal_not_met_sends_the_work_back_as_the_drivers_sentence_naming_no_file`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/goal-command.test.mjs asserts that the prompt a goal.carried event announces is drawn as the driver's row and not as a line the person typed; make check-ui runs it)`
 
 <a id="GOAL-8"></a>
 ### GOAL-8: a path named in that sentence vouches for nothing
@@ -186,6 +207,7 @@ endorsement nobody gave, and it would do so on a path the person never saw.
 
 `verified-by: bravebot_tui::app::tests::loops_and_goals::a_path_named_in_a_sentence_the_driver_wrote_vouches_for_nothing`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::a_path_named_in_a_line_the_person_queued_still_names_a_file`
+`verified-by: bravebot_ui_bridge::goal_tests::a_goal_not_met_sends_the_work_back_as_the_drivers_sentence_naming_no_file`
 
 ## What ends one
 
@@ -204,6 +226,7 @@ pays for it.
 `verified-by: bravebot_tui::goals::the_reason_from_the_round_that_gave_up_is_still_kept`
 `verified-by: bravebot_tui::state::a_goal_that_runs_out_of_rounds_stops_rather_than_sending_the_work_back_again`
 `verified-by: bravebot_tui::state::a_goal_that_gives_up_says_what_the_last_check_said`
+`verified-by: bravebot_ui_bridge::goal_tests::the_eleventh_not_met_ends_the_goal_as_spent`
 
 <a id="GOAL-20"></a>
 ### GOAL-20: three rounds in a row with no tool call stop the work going back, and leave the goal set
@@ -224,6 +247,8 @@ on what a reply or a result said, so no untrusted byte decides it.
 `verified-by: bravebot_tui::goals::a_round_that_made_a_call_starts_the_count_again`
 `verified-by: bravebot_tui::state::rounds_that_make_no_tool_call_stop_the_goal_and_leave_it_set`
 `verified-by: bravebot_tui::state::rounds_that_make_a_call_are_not_a_stall`
+`verified-by: bravebot_ui_bridge::goal_tests::a_turn_under_a_goal_arms_no_watch_and_its_calls_are_counted`
+`verified-by: bravebot_ui_bridge::goal_tests::a_stalled_goal_is_an_open_loop`
 
 <a id="GOAL-10"></a>
 ### GOAL-10: four things end a goal besides a verdict, and each of them says so
@@ -266,6 +291,14 @@ and [terminal-input.md](terminal-input.md) have them do everywhere else, and the
 likeliest place to meet one: nothing closes a view when a turn ends, so one opened during the turn
 just judged is still standing there.
 
+**In the desktop app** the person asks with `/goal clear`, and the session moves on when the chat is
+closed or deleted. The window draws a check as a running turn, so the stop button and Escape during
+a check send `turn.cancel`, and the bridge, finding a check out, stops it and clears the goal with
+it. A verdict that crosses that stop is neither acted on nor reported. A turn the person stopped, or
+one that failed, is not judged and leaves the goal set, as in the terminal. A prompt the person
+sends before the window asks for the next step goes first: it clears the check that was due, and its
+own turn's end makes the check due again.
+
 `verified-by: bravebot_tui::state::clearing_a_goal_says_so_and_says_nothing_when_there_was_none`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::interrupting_takes_the_goal_off_before_it_leaves`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::a_stop_key_takes_the_goal_off_and_stops_the_check`
@@ -280,19 +313,29 @@ just judged is still standing there.
 `verified-by: bravebot_tui::state::a_verdict_after_the_goal_was_cleared_is_neither_acted_on_nor_announced`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::a_goal_is_not_judged_after_the_person_asked_to_leave`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::a_goal_is_not_judged_while_a_command_waits_in_the_queue`
+`verified-by: bravebot_ui_bridge::goal_tests::pause_resume_and_clear_say_when_they_changed_nothing`
+`verified-by: bravebot_ui_bridge::goal_tests::a_stop_during_the_check_takes_the_goal_off_and_no_verdict_follows`
+`verified-by: bravebot_ui_bridge::goal_tests::a_failed_turn_leaves_the_check_undue_and_the_goal_set`
+`verified-by: bravebot_ui_bridge::goal_tests::a_stopped_turn_leaves_the_check_undue_and_the_goal_set`
+`verified-by: bravebot_ui_bridge::goal_tests::a_prompt_the_person_sends_goes_before_the_check`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/goal-command.test.mjs asserts that the window asks for the next step only once nothing runs, no question waits and no queued prompt is waiting or on its way, that it asks once and clears the request first, that a check is drawn as a running turn so the stop key reaches it, and that the stop key sends turn.cancel; make check-ui runs it)`
 
 <a id="GOAL-11"></a>
 ### GOAL-11: a goal and a loop are never both running
 
 Whichever was asked for second stands, and the one it replaced is reported as stopped. A paused
 goal ([GOAL-18](#GOAL-18)) is not running, but it is still a goal: a person's `/loop` replaces it
-and says so, and a loop or watch a turn asks for is refused under it, as under a running one.
+and says so, and a loop or watch a turn asks for is refused under it, as under a running one. A desktop chat has
+no `/loop`, so there setting a goal ends the chat's live watches, each reported as ended by the
+goal, and a turn under a goal, paused or not, may arm none.
 
 **Why.** Both keep a session working without anybody typing, and together neither is the thing that
 was asked for: the interval stops meaning anything once a tick can be held open for ten more turns,
 and the condition is judged against a turn that was going to be repeated anyway.
 
 `verified-by: bravebot_tui::state::a_goal_and_a_loop_are_never_both_running`
+`verified-by: bravebot_ui_bridge::goal_tests::setting_a_goal_ends_the_watches`
+`verified-by: bravebot_ui_bridge::goal_tests::a_turn_under_a_goal_arms_no_watch_and_its_calls_are_counted`
 
 <a id="GOAL-12"></a>
 ### GOAL-12: a goal is never written down
@@ -304,7 +347,8 @@ process.
 opened to read and start working it, with nothing in the transcript to say why. The gesture that
 sets a goal is the gesture that keeps it: while this session is open.
 
-`verified-by: by-construction (the goal is a private field of the interface's session state and is not among the fields written to a session record)`
+`verified-by: by-construction (the goal is a private field of the interface's session state and is not among the fields written to a session record; in the desktop bridge it is a slot on the open chat beside its watches, outside the state the record is written from)`
+`verified-by: bravebot_ui_bridge::goal_tests::the_saved_record_says_nothing_of_the_goal`
 
 <a id="GOAL-13"></a>
 ### GOAL-13: what is holding the session open is on the screen
@@ -328,6 +372,8 @@ about to give up.
 `verified-by: bravebot_tui::state::the_goal_report_counts_what_the_turn_in_flight_has_spent`
 `verified-by: bravebot_tui::status::the_goal_spend_includes_the_turn_in_flight`
 `verified-by: bravebot_tui::goals::a_goal_counts_what_was_spent_and_how_long_from_the_moment_it_was_armed`
+`verified-by: bravebot_ui_bridge::goal_tests::the_status_report_says_the_goal_and_nothing_without_one`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/goal-command.test.mjs asserts that a check ends with its verdict as a row, that the goal panel shows the condition, rounds left, time set and tokens spent, and that a paused or stalled goal says so in words; make check-ui runs it)`
 
 ## What a turn is told
 
@@ -354,6 +400,7 @@ one copy of it in the conversation per round.
 `verified-by: bravebot_agent::preamble::a_turn_under_a_goal_is_told_it_cannot_change_the_condition`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::a_turn_under_a_paused_goal_is_told_nothing_about_a_condition`
 `verified-by: bravebot_tui::app::tests::loops_and_goals::the_task_a_turn_is_built_with_carries_the_goal_only_while_it_is_in_force`
+`verified-by: bravebot_ui_bridge::goal_tests::a_turn_under_a_goal_is_told_the_condition_and_a_paused_goals_is_not`
 
 <a id="GOAL-15"></a>
 ### GOAL-15: a turn is told to wait for the world inside the turn
@@ -442,6 +489,7 @@ for having been interrupted would punish the detour the pause exists for.
 `verified-by: bravebot_tui::app::tests::loops_and_goals::the_goal_command_pauses_and_resumes_the_goal_even_mid_turn`
 `verified-by: bravebot_tui::status::the_report_says_a_goal_is_paused`
 `verified-by: bravebot_tui::panel::a_paused_goal_is_drawn_and_says_it_is_paused`
+`verified-by: bravebot_ui_bridge::goal_tests::pause_resume_and_clear_say_when_they_changed_nothing`
 
 <a id="GOAL-19"></a>
 ### GOAL-19: the judge runs on the model `summaryModel` names

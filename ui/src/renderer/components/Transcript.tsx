@@ -49,6 +49,7 @@ import { showToast } from '../toasts'
 import { EMPTY_STAGING, named, pasteText, stageDrop, stagePaste, stageSummon, stageText, withoutMarker, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
+import { GOAL_COMMANDS, type GoalTone } from '../../shared/goal'
 import type { Paste, PastedText } from '../../shared/pastes'
 import { PastedTextPreview } from './PastedTextPreview'
 
@@ -64,6 +65,8 @@ interface Live {
   /** When a failed request waiting to be sent again will be, while the phase is `reconnecting` (VIEW-43). */
   retry?: RetryDue | null
   checking: Checking | null
+  /** Whether the running work is a check of the goal rather than a turn (GOAL-3). */
+  goalChecking?: boolean
   hook: Hook | null
   composing: string | null
   thinking: string
@@ -949,8 +952,9 @@ export function Transcript({
           <WorkingRow
             key={live.handle}
             bot={answering}
-            word={(now) => workingWord(live.phase, live.checking, live.composing, live.hook, live.retry ?? null, now)}
-            tokens={live.tokens}
+            // A goal's check has its own word, and writes no reply, so it shows no token count.
+            word={live.goalChecking ? () => GOAL_CHECK_WORD : (now) => workingWord(live.phase, live.checking, live.composing, live.hook, live.retry ?? null, now)}
+            tokens={live.goalChecking ? 0 : live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
             onAudit={onAudit}
             thinking={live.thinking}
@@ -1113,6 +1117,40 @@ function ExportMenu({
       ))}
     </IconMenu>
   )
+}
+
+/** The working row's word while the goal is out to the judge. */
+export const GOAL_CHECK_WORD = 'Checking whether the goal is met'
+
+/** The mark of each kind of goal notice (`GoalTone`). */
+export const GOAL_ICONS: Record<GoalTone, IconName> = {
+  plain: 'flag',
+  met: 'check-circle-filled',
+  warning: 'warning-triangle-outline',
+  paused: 'pause-circle',
+  refused: 'warning-triangle-outline',
+}
+
+/**
+ * A goal sentence with each whole command it names drawn as one code span, every time it appears.
+ * The commands are a fixed list, found where they stand, as `FailureSentence` finds its one.
+ */
+export function GoalSentence({ text }: { text: string }): React.JSX.Element {
+  const parts: React.ReactNode[] = []
+  let at = 0
+  while (at < text.length) {
+    let next = -1
+    let found = ''
+    for (const command of GOAL_COMMANDS) {
+      const index = text.indexOf(command, at)
+      if (index >= 0 && (next < 0 || index < next)) { next = index; found = command }
+    }
+    if (next < 0) break
+    parts.push(text.slice(at, next), <code key={next}>{found}</code>)
+    at = next + found.length
+  }
+  parts.push(text.slice(at))
+  return <>{parts}</>
 }
 
 function phaseWord(phase: Waiting): string {
@@ -2296,6 +2334,26 @@ function Card({
 
     case 'watch':
       return <div className="watch-turn"><Icon name="eye-on" /><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
+    case 'goal-turn':
+      // The prompt of a turn the goal started, which the person did not type: a line in the
+      // register of a watch's turn rather than their bubble. Reached only from `goal.carried`. The
+      // head is one line, and the sentence it sent waits under a collapsed Details, as on a card.
+      return (
+        <div className="watch-turn goal-turn" data-test="goal-turn">
+          <Icon name="flag" /><strong>Goal not met yet, so the work carries on</strong><span>Automatic turn · sent by /goal</span>
+          <div className="goal-turn-details">
+            <Collapse className="card-details" title="Details" isOpen={undefined}>
+              <p className="goal-turn-prompt">{entry.text}</p>
+            </Collapse>
+          </div>
+        </div>
+      )
+    case 'goal-notice':
+      return (
+        <div className={`goal-notice ${entry.tone}`} data-test="goal-notice">
+          <Icon name={GOAL_ICONS[entry.tone]} /><span><GoalSentence text={entry.text} /></span>
+        </div>
+      )
     case 'error':
       return <ErrorCard category={entry.category} accountMessage={entry.accountMessage} accountCommand={entry.accountCommand} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 

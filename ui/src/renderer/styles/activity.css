@@ -249,6 +249,52 @@
 .ask-settled-outcome { color: var(--ink-secondary); padding-inline-start: var(--leo-spacing-m); }
 .watch-turn { flex-wrap: wrap; }
 .watch-turn strong { font: var(--type-caption-strong); color: var(--ink-secondary); }
+/* A turn the goal sent starts a turn, so it takes a turn's space above it, and the same 24px below
+   it as the person's bubble has above its answer. The sentence it sent is folded under Details,
+   lined up with the head's text past the icon, with its paragraphs kept. */
+.goal-turn {
+  margin-block: calc(var(--turn-gap) - var(--part-gap)) calc(var(--leo-spacing-2xl) - var(--part-gap));
+}
+/* Its own line, and the fold only as wide as its words until it is opened, as on a card. */
+.goal-turn-details {
+  display: flex;
+  flex-basis: 100%;
+  min-width: 0;
+  padding-inline-start: calc(var(--icon-control) + var(--leo-spacing-m));
+}
+.goal-turn-prompt {
+  margin: 0;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* What /goal answered and what each check came to: a caption notice whose icon says which, on
+   the first line of a sentence that can wrap. One line is as tall as the working row it replaces.
+   A MET verdict takes the success ink on its mark and secondary ink on its words; a goal that
+   ended unmet, stalled or paused takes the warning ink on its mark; a failed check is refused. */
+.goal-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--leo-spacing-m);
+  min-width: 0;
+  padding: calc((var(--hit) - var(--icon-control)) / 2) var(--leo-spacing-s);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.goal-notice leo-icon { flex: none; }
+.goal-notice.met { color: var(--ink-secondary); --leo-icon-color: var(--status-success); }
+.goal-notice.warning,
+.goal-notice.paused { --leo-icon-color: var(--status-warning); }
+.goal-notice.refused { color: var(--status-error); --leo-icon-color: var(--status-error); }
+/* A whole command, at the size of the sentence around it. */
+.goal-notice code { font-family: var(--font-mono); font-size: inherit; line-height: inherit; }
 
 /* A message between two background sessions: a heading, then the words quoted. Line breaks are kept. */
 .session-message {

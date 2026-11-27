@@ -138,7 +138,7 @@ test('the answer is plain text, and the row kind is one no turn sends', () => {
   // Only the user's own rows and the lines sent into a turn are prompts; nothing in use-turn.ts
   // sends a narration, and an aside's answer is never passed to `send` or `turn.send`.
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
-  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const dequeuing = '))
+  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const planRun = '))
   assert.doesNotMatch(body, /turn\.send|turn\.interject|\bsend\(|interject\(/)
 })
 
@@ -164,7 +164,7 @@ test('the composer asks for the command from the typed line in each place it sen
 
 test('a /btw goes out at once while a turn runs and lines wait, and a mid-turn /recap waits (CMD-8, CMD-16)', () => {
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
-  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const dequeuing = '))
+  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const planRun = '))
   // Nothing reads the queue or the running flag before asking: the bridge decides.
   assert.doesNotMatch(body.slice(0, body.indexOf("call<AsideStarted>('session.btw'")), /\.queued|\.running/)
   // Only a recap the bridge refused with `turn_in_flight` is queued, marked as one, and never as a prompt.
@@ -180,7 +180,7 @@ test('a /btw goes out at once while a turn runs and lines wait, and a mid-turn /
 
 test('a /btw sends what was staged on its line with the request, and a recap sends none (CMD-5)', () => {
   const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
-  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const dequeuing = '))
+  const body = turn.slice(turn.indexOf('const askAside = '), turn.indexOf('const planRun = '))
   // The items the line still names, found on the folded draft by `exitOf`, used for a /btw only.
   assert.match(body, /const staged = kind === 'btw' \? onLine : \[\]/)
   assert.equal([...turn.matchAll(/askAside\(\w+(?:\.current)?, exit\.kind, exit\.question, exit\.line, exit\.staged\)/g)].length, 3, 'submit, the interject key and the queue key')
