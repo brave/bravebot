@@ -1696,7 +1696,8 @@ The Google line asks the Google Cloud CLI for a token and never for a login, so 
 asks only where a `google-vertex` block or `GOOGLE_CLOUD_PROJECT` names a project with no key that resolves,
 the state in which a turn asks the CLI too ([BACKEND-65](backends.md#BACKEND-65)); with none, no program
 is started. A CLI that does not answer is reported as unusable after the wait. The `gateway google-vertex` line
-for a project block with no key is unchanged and does not ask the CLI.
+for a block that states a project and names no key is signed in, as the paragraph on gateways says, and does not
+ask the CLI.
 
 No line carries a credential, a token, an account id, or content from the workspace: only
 counts, ids the person wrote in settings, and fixed sentences

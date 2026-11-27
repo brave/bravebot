@@ -11249,6 +11249,27 @@ fn gcloud_stand_in(scratch: &Scratch) -> String {
     format!("{}:/usr/bin:/bin", bin.display())
 }
 
+/// A `PATH` of one directory made under `scratch` that holds a link to each of `programs` and
+/// nothing else, so a case about a missing Google Cloud CLI depends on nothing the machine has
+/// installed. Each program is linked from the first directory of this process's own `PATH` that has
+/// it. The Google Cloud CLI's packages install it in `/usr/bin`, which a `PATH` of the system
+/// directories would find.
+#[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn path_holding_only(scratch: &Scratch, programs: &[&str]) -> String {
+    let only = scratch.path.join("no-gcloud-bin");
+    std::fs::create_dir_all(&only).expect("create the directory the path holds");
+    let ambient = std::env::var_os("PATH").unwrap_or_default();
+    for program in programs {
+        let found = std::env::split_paths(&ambient)
+            .map(|directory| directory.join(program))
+            .find(|candidate| candidate.is_file())
+            .expect("each program is on this process's PATH");
+        std::os::unix::fs::symlink(found, only.join(program)).expect("link the program");
+    }
+    only.display().to_string()
+}
+
 /// What the stand-in Google Cloud CLI was started with, one start a line.
 #[cfg(unix)]
 fn gcloud_starts(scratch: &Scratch) -> Vec<String> {
@@ -11417,13 +11438,17 @@ fn auth_login_google_records_nothing_when_the_login_fails_or_the_project_is_refu
 }
 
 /// CLI-18: with no Google Cloud CLI on `PATH` the command says so, names where to get it, asks for
-/// no project and writes nothing.
+/// no project and writes nothing. The `PATH` holds `script` and `sh` and no other program, so a
+/// machine with a `gcloud` of its own does not change the case. An implementation that asked for the
+/// project before looking for the CLI, or that ran a login with no program, fails the assertions on
+/// the transcript and the settings file.
 #[cfg(unix)]
 #[test]
 fn auth_login_google_says_where_to_get_the_cli_when_it_is_missing() {
     let scratch = Scratch::new("cli-running-auth-google-missing");
+    let path = path_holding_only(&scratch, &["script", "sh"]);
     let mut environment = NOTHING_CONFIGURED.to_vec();
-    environment.push(("PATH", "/usr/bin:/bin"));
+    environment.push(("PATH", path.as_str()));
     let cwd = checkout_in(&scratch);
 
     let output = in_a_terminal_answering_started_in(
@@ -11567,8 +11592,9 @@ fn auth_status_google_asks_the_cli_for_a_token_without_signing_in() {
 
     let missing = Scratch::new("cli-running-auth-status-google-missing")
         .with_settings(A_RECORDED_GOOGLE_BLOCK);
+    let path = path_holding_only(&missing, &[]);
     let mut environment = NOTHING_CONFIGURED.to_vec();
-    environment.push(("PATH", "/usr/bin:/bin"));
+    environment.push(("PATH", path.as_str()));
     let (code, stdout, stderr) = status_beside_the_stand_in(&missing, &environment, &["google"]);
     assert_eq!(code, Some(1), "{stdout}{stderr}");
     assert!(stdout.starts_with("google: unusable: "), "{stdout}");

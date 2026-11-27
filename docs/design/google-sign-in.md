@@ -43,7 +43,7 @@ result itself.
   token endpoint alone. The destination is a constant of the program and not a value from settings,
   a model or the workspace, which is what [ROUTE-2](../specs/routing.md#ROUTE-2) requires of a
   routing field: derived from trusted input only, and never from fetched content.
-- **The untrusted-content rule is unchanged.** The token, the code and the account answer are
+- **The untrusted-content rule applies.** The token, the code and the account answer are
   carried and written, and no branch of the driver is decided by them
   ([AGENTS.md](../../agents/AGENTS.md)).
 
@@ -64,7 +64,7 @@ this repository:
    verification it needs, is not recorded in this repository. In Testing, Google
    limits a client to a list of named test users.
 2. **The client of another Google program.** [connectors.md](connectors.md#compared-with-mcp-servers)
-   notes that the Gmail MCP server in use today signs in with Google's Gemini CLI client through a
+   notes that the Gmail MCP server signs in with Google's Gemini CLI client through a
    Google-run service that holds its secret and sees each refresh. Using the same client from bravebot
    would present bravebot to Google as that program.
 3. **The client of Antigravity (`agy`).** Antigravity is a candidate to weigh against option 2. Nothing

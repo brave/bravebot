@@ -5643,7 +5643,7 @@ cancel kills it rather than asking it to stop.
   terminal and the sign-in waits on a browser it cannot show ([BACKEND-74](#BACKEND-74)). The command
   records `global`, so a person who wants another location edits
   `options.location` in the block by hand, and `auth logout google` then leaves that block as it is,
-  because it is no longer what the sign-in writes. A list of ways that is drawn while a block names a
+  because it is not what the sign-in writes. A list of ways that is drawn while a block names a
   project asks the Google Cloud CLI for a token, which costs the CLI's start each time and at most five
   seconds where it does not answer.
 
