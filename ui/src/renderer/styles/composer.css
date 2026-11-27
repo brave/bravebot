@@ -273,6 +273,25 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.mention-definition-name {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  font: var(--type-body-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The row's gap is `m`; the description sits `l` from the name. */
+.mention-definition-name + .mention-description { margin-inline-start: calc(var(--leo-spacing-l) - var(--leo-spacing-m)); }
+.mention-description {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .mention-foot.summon { --leo-icon-color: var(--ink-tertiary); }
 .mention-foot {
   display: flex;
@@ -284,7 +303,10 @@
   --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--status-warning);
 }
-.mention-keys { margin-inline-start: auto; }
+/* Both hints in one grid cell, so the cell is as wide as the longer one whichever is shown. */
+.mention-keys { display: grid; margin-inline-start: auto; justify-items: end; }
+.mention-keys > span { grid-area: 1 / 1; }
+.mention-keys-hidden { visibility: hidden; }
 
 /* ---- context meter */
 

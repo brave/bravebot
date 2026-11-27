@@ -15,6 +15,12 @@ export interface MentionEntry {
   /** The path as it is written in a line: each whitespace character and backslash behind a backslash (NAME-8). From the bridge. */
   written: string
   directory: boolean
+  /** Which kind of thing the row names. A `definition` row is addressed for one turn and never written as an `@` name (ADDRESS-2). From the bridge. */
+  kind: 'file' | 'directory' | 'session' | 'definition'
+  /** A definition row's description, else `null`. From the bridge. */
+  description: string | null
+  /** A definition row's marker, the `[@name]` a pick writes into the draft, built by `bravebot_mentions::marker` as the terminal's is; else `null`. From the bridge. */
+  marker: string | null
 }
 
 /** The bridge's answer to `mentions.offer` for one line and one cursor row. */
@@ -26,6 +32,24 @@ export interface MentionOffer {
   entries: MentionEntry[]
   /** NAME-7: whether Enter on the cursor's row completes the name rather than sending the line. */
   completes: boolean
+}
+
+/** The bridge's answer to `mentions.offer`, or nothing offered when it is out of shape. Each row is kept as the bridge sent it, its `kind` and `description` with it. */
+export function offerOf(answer: Partial<MentionOffer> | undefined): MentionOffer {
+  return typeof answer?.typed === 'string' && Array.isArray(answer.entries)
+    ? { typed: answer.typed, word: typeof answer.word === 'string' ? answer.word : null, entries: answer.entries, completes: answer.completes === true }
+    : { typed: null, word: null, entries: [], completes: false }
+}
+
+/**
+ * The definition a row addresses when it is picked, with the marker the bridge built for it, or
+ * `null` for a row that is written as an `@` name (ADDRESS-2). A definition row with no marker is
+ * out of shape and picks nothing, so the window never makes a marker of its own.
+ */
+export function definitionOf(entry: MentionEntry): { name: string; description: string | null; marker: string } | null {
+  return entry.kind === 'definition' && typeof entry.marker === 'string'
+    ? { name: entry.path, description: entry.description ?? null, marker: entry.marker }
+    : null
 }
 
 /**

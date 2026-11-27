@@ -35,7 +35,9 @@ use std::path::{Path, PathBuf};
 /// from `definitions` ([ADDRESS-2](../../../docs/specs/addressing-a-definition.md#ADDRESS-2)), and
 /// the files after them. Every entry carries `kind` (`file`, `directory`, `session` or
 /// `definition`) and `description`, which is a definition's own words and null for the rest. The
-/// window draws both and decides nothing from either.
+/// window draws both and decides nothing from either. A definition row also carries `marker`, the
+/// `[@name]` a pick writes into the line, built by [`bravebot_mentions::marker`] as the terminal
+/// builds it, and null for the rest.
 ///
 /// `sources` and `definitions` are asked for only once a name is being typed, because they open the
 /// session's workspace and the window asks about every line, most of which name nothing.
@@ -64,6 +66,12 @@ pub fn offer(
                 "kind": entry.kind.as_str(),
                 "description": match entry.kind {
                     bravebot_mentions::Kind::Definition => entry.note.clone(),
+                    _ => None,
+                },
+                "marker": match entry.kind {
+                    bravebot_mentions::Kind::Definition => {
+                        Some(bravebot_mentions::marker(&entry.path, &entry.path))
+                    }
                     _ => None,
                 },
             })
@@ -208,8 +216,8 @@ mod tests {
         assert_eq!(answer["completes"], true);
     }
 
-    /// ADDRESS-2: the definitions come ahead of the files, each says what it is and what it is for,
-    /// and a file says neither more nor less than it did. The first row is the one the window's
+    /// ADDRESS-2: the definitions come ahead of the files, each says what it is, what it is for and
+    /// the marker a pick writes, and a file says neither more nor less than it did. The first row is the one the window's
     /// cursor starts on, so a definition is what Enter picks.
     #[test]
     fn definitions_are_offered_ahead_of_the_files_with_their_kind_and_description() {
@@ -236,9 +244,11 @@ mod tests {
         assert_eq!(rows[0]["path"], "reviewer");
         assert_eq!(rows[0]["kind"], "definition");
         assert_eq!(rows[0]["description"], "Reviews a diff.");
+        assert_eq!(rows[0]["marker"], "[@reviewer]");
         assert_eq!(rows[1]["path"], "review-notes.md");
         assert_eq!(rows[1]["kind"], "file");
         assert_eq!(rows[1]["description"], Value::Null);
+        assert_eq!(rows[1]["marker"], Value::Null);
         assert_eq!(answer["completes"], true, "Enter on a definition picks it");
     }
 

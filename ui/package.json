@@ -48,6 +48,7 @@
     "drive:ask": "pnpm run bridge && electron-vite build && node scripts/drive-ask.mjs",
     "drive:manifest": "pnpm run bridge && electron-vite build && node scripts/drive-manifest.mjs",
     "drive:at-mentions": "pnpm run bridge && electron-vite build && node scripts/drive-at-mentions.mjs",
+    "drive:address": "pnpm run bridge && electron-vite build && node scripts/drive-address.mjs",
     "drive:folders": "pnpm run bridge && electron-vite build && node scripts/drive-folders.mjs",
     "drive:project-questions": "pnpm run bridge && electron-vite build && node scripts/drive-project-questions.mjs",
     "package": "pnpm run bridge && electron-vite build && node scripts/package.mjs",

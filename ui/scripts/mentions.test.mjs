@@ -11,7 +11,7 @@ import { buildSync } from 'esbuild'
 const source = buildSync({ entryPoints: ['src/shared/mentions.ts'], bundle: true, write: false, platform: 'node', format: 'cjs' }).outputFiles[0].text
 const module = { exports: {} }
 new Function('module', 'exports', source)(module, module.exports)
-const { acceptMention } = module.exports
+const { acceptMention, definitionOf, offerOf } = module.exports
 
 const folder = { path: 'My Documents/', written: 'My\\ Documents/', directory: true }
 
@@ -33,4 +33,31 @@ test('a draft whose last word is no name is left as it is', () => {
   assert.equal(acceptMention('read @My', folder, null), 'read @My')
   // An offer that is out of date for the draft changes nothing rather than splicing at the wrong place.
   assert.equal(acceptMention('read @Other', folder, '@My'), 'read @Other')
+})
+
+// ADDRESS-2: the composer asks for definition rows, and a definition row is staged to answer the
+// message instead of being written as an `@` name. The faults these reject are the offer dropping
+// a row's kind or description on its way to the list, and a definition row read as a file.
+const definitionRow = { path: 'lantern', shownPath: 'lantern', written: 'lantern', directory: false, kind: 'definition', description: 'Keeps the lights.', marker: '[@lantern]' }
+const fileRow = { path: 'lantern.md', shownPath: 'lantern.md', written: 'lantern.md', directory: false, kind: 'file', description: null, marker: null }
+
+test('a definition row reaches the composer with its kind and description, ahead of the files', () => {
+  const offer = offerOf({ typed: 'lan', word: '@lan', entries: [definitionRow, fileRow], completes: true })
+  assert.deepEqual(offer.entries.map((row) => [row.path, row.kind, row.description]), [
+    ['lantern', 'definition', 'Keeps the lights.'],
+    ['lantern.md', 'file', null],
+  ])
+  assert.equal(offer.completes, true)
+})
+
+test('an offer out of shape offers nothing', () => {
+  assert.deepEqual(offerOf(undefined), { typed: null, word: null, entries: [], completes: false })
+  assert.deepEqual(offerOf({ typed: 'lan' }), { typed: null, word: null, entries: [], completes: false })
+})
+
+test('a definition row is addressed when picked, and a file row is written as a name', () => {
+  assert.deepEqual(definitionOf(definitionRow), { name: 'lantern', description: 'Keeps the lights.', marker: '[@lantern]' })
+  assert.equal(definitionOf({ ...definitionRow, marker: null }), null, 'a definition row with no marker picks nothing')
+  assert.equal(definitionOf(fileRow), null)
+  assert.equal(definitionOf({ ...fileRow, kind: 'directory', directory: true }), null)
 })

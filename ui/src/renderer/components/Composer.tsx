@@ -1,9 +1,9 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
-import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
+import { acceptMention, definitionOf, offerOf, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
-import { markerAt, type Staged, type SummonedBot } from '../staging'
+import { markerAt, type AddressedDefinition, type Staged, type SummonedBot } from '../staging'
 import type { Enhancement } from '../enhancing'
 import type { Handoff } from '../handoff'
 import type { Queued } from '../live'
@@ -20,12 +20,13 @@ import { VariantPicker } from './VariantPicker'
 import { typing } from '../avatar/clock'
 import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 
-/** The bridge's offer for `line`, or nothing offered when it cannot answer or answers out of shape. */
+/**
+ * The bridge's offer for `line`, or nothing offered when it cannot answer or answers out of shape.
+ * It lists the definitions this session resolves ahead of the files (ADDRESS-2).
+ */
 async function askOffer(session: string, line: string, cursor: number): Promise<MentionOffer> {
-  const { ok } = await window.bravebot.request<Partial<MentionOffer>>('mentions.offer', { session, line, cursor })
-  return typeof ok?.typed === 'string' && Array.isArray(ok.entries)
-    ? { typed: ok.typed, word: typeof ok.word === 'string' ? ok.word : null, entries: ok.entries, completes: ok.completes === true }
-    : { typed: null, word: null, entries: [], completes: false }
+  const { ok } = await window.bravebot.request<Partial<MentionOffer>>('mentions.offer', { session, line, cursor, definitions: true })
+  return offerOf(ok)
 }
 
 /**
@@ -120,6 +121,8 @@ export interface ComposerProps {
   summonable?: SummonedBot[]
   /** Stage a bot picked from the list, replacing the half-typed `word`. */
   onSummon?: (bot: SummonedBot, word: string | null) => void
+  /** Stage a definition picked from the list to answer this message, replacing the half-typed `word` (ADDRESS-2). */
+  onAddress?: (definition: AddressedDefinition, word: string | null) => void
   onPreview: (path: string) => void
   /** Open a folded paste whole, read-only, by its marker. Changes nothing in the draft (PASTE-13). */
   onPeek: (marker: string) => void
@@ -265,10 +268,19 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   /** The offer for exactly this line and row, waiting for it unless the last answer was for it. */
   const freshOffer = async (line: string, at: number): Promise<MentionOffer> =>
     at === 0 && offer?.session === session && offer.line === line ? offer.value : askOffer(session, line, at)
-  /** Writes the entry into the draft and says whether the draft changed. */
+  /**
+   * Writes the entry into the draft and says whether the draft changed. A definition is staged to
+   * answer the message instead, and never written as an `@` name (ADDRESS-2).
+   */
   const choose = (entry: MentionEntry, word: string | null): boolean => {
     setCursor(0)
     const draft = latest.current.draft
+    const definition = definitionOf(entry)
+    if (definition) {
+      if (word === null || !draft.endsWith(word) || !latest.current.onAddress) return false
+      latest.current.onAddress(definition, word)
+      return true
+    }
     const completed = acceptMention(draft, entry, word)
     if (completed === draft) return false
     latest.current.onDraft(completed)
@@ -413,7 +425,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         )}
         <div className={`composer-shell${footer ? ' with-footer' : ''}`}>
         <div className="composer-box">
-          {(attachments.length > 0 || staged.some((item) => item.via !== 'summon')) && (
+          {(attachments.length > 0 || staged.some((item) => item.via !== 'summon' && item.via !== 'address')) && (
             <div className="attachment-chips">
               {attachments.map((file) => (
                 <span className="attachment-chip" key={file.id}>
@@ -425,9 +437,9 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 </span>
               ))}
               {staged.map((item) => {
-                // A summoned bot is not a chip: its marker stays in the message and is drawn as
-                // the bot's label once the message is sent.
-                if (item.via === 'summon') return null
+                // A summoned bot or an addressed definition is not a chip: its marker stays in the
+                // message and is drawn as the reply's label once the message is sent.
+                if (item.via === 'summon' || item.via === 'address') return null
                 if (item.via === 'text') {
                   return (
                     <span className="attachment-chip dropped" key={item.marker} data-test="pasted-text-chip">

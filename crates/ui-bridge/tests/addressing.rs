@@ -771,3 +771,93 @@ fn the_at_list_offers_the_definitions_ahead_of_the_files() {
         "{none}"
     );
 }
+
+/// ADDRESS-2: the bridge offers only the definitions a per-turn `address` can name. One whose name
+/// is not a slug resolves for `/agent` but would be refused at send, so it is not listed.
+#[test]
+fn the_at_list_leaves_out_a_definition_whose_name_is_no_slug() {
+    let scratch = Scratch::new("bridge-addressing-offer-slug");
+    scratch.define("lantern");
+    scratch.define("Lantern-Big");
+    let (endpoint, _received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+    let session = window.session.clone();
+
+    let offered = window.call(
+        "mentions.offer",
+        json!({"session": session, "line": "ask @lan", "definitions": true}),
+    );
+    let names: Vec<&str> = offered["ok"]["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["kind"] == "definition")
+        .map(|row| row["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["lantern"], "{offered}");
+}
+
+/// ADDRESS-3: a per-turn `address` may name any definition that resolves, not only a bot's. The
+/// bridge knows nothing of bots, so a plain definition is addressed for that turn as a bot's is:
+/// its body is in the request, `turn.done` records it as not standing, and the next turn, which
+/// names nothing, runs as the session's own planner.
+#[test]
+fn an_address_to_a_definition_that_is_no_bot_runs_under_it_for_one_turn() {
+    let scratch = Scratch::new("bridge-addressing-any-definition");
+    scratch.define_for("lantern", OTHER_PURPOSE);
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let addressed = window.turn(json!({"prompt": "ADDRESSED-TURN", "address": "lantern"}));
+    assert_eq!(addressed["event"], "turn.done", "{addressed}");
+    assert_eq!(
+        addressed["data"]["address"],
+        json!({"definition": "lantern", "standing": false}),
+        "{addressed}"
+    );
+    let after = window.turn(json!({"prompt": "UNADDRESSED-TURN"}));
+    assert_eq!(after["event"], "turn.done", "{after}");
+    assert_eq!(after["data"]["address"], Value::Null, "{after}");
+
+    let asked = requests(&received);
+    let addressed = asked_with(&asked, "ADDRESSED-TURN");
+    assert!(
+        addressed.contains(OTHER_PURPOSE) && addressed.contains("addressed this turn to lantern"),
+        "the addressed turn did not run under its definition: {addressed}"
+    );
+    assert!(
+        !offers(addressed, "write_file"),
+        "the addressed turn held more than a reader does: {addressed}"
+    );
+    let after = asked_with(&asked, "UNADDRESSED-TURN");
+    assert!(
+        !after.contains(OTHER_PURPOSE)
+            && !after.contains("addressed this turn to")
+            && offers(after, "write_file"),
+        "the turn after an addressed one was still addressed: {after}"
+    );
+}
+
+/// ADDRESS-5: an `address` naming a definition that does not resolve runs nothing and ends in a
+/// `turn.error` naming it. The service is never asked, so the session's own planner did not take
+/// the turn in its place.
+#[test]
+fn an_address_naming_nothing_resolved_sends_nothing_and_names_it() {
+    let scratch = Scratch::new("bridge-addressing-address-gone");
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let ended = window.turn(json!({"prompt": "UNRESOLVED-TURN", "address": "no-such-definition"}));
+
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+    assert!(
+        ended.to_string().contains("no-such-definition"),
+        "the refusal does not name the definition: {ended}"
+    );
+    assert!(
+        requests(&received)
+            .iter()
+            .all(|body| !body.contains("UNRESOLVED-TURN")),
+        "a turn whose definition did not resolve was sent to the model anyway"
+    );
+}

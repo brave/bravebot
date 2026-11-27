@@ -9,7 +9,7 @@ import { type Answering, replyFolder, replyRules, reported } from './project-que
 import { declined, markersOf, mayGo, route, sentInto } from './interjecting'
 import { type Interjection, type Live, NEW_CHAT, liveKey } from './live'
 import { conversationPreferences, setConversation } from './experience'
-import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
+import { Unconfigurable, METHOD, call, callAddress, callBot, callSummon } from './rpc'
 import { RequestFailed } from './rewind'
 import type { ScheduleAnswer } from '../shared/schedule'
 import { LOOPS_CHANGED, type LoopAnswer, type LoopKind } from '../shared/loop'
@@ -18,7 +18,7 @@ import { manifestTask } from '../shared/manifest'
 import { planRun as startPlanRun } from './plan-run'
 import { planTask } from '../shared/plan'
 import { carryOutPlan } from './plan-line'
-import { exitOf, folded, grantsOf, named, sent, summonOf, type Staged } from './staging'
+import { exitOf, folded, grantsOf, named, sent, summonOf, withoutMarker, type Staged } from './staging'
 import * as t from './transcript'
 
 /** What `useTurn` takes from the component that owns the sessions and the composer. */
@@ -132,9 +132,8 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
     // that cannot go stops the send here, with the message still where it was written. The bridge
     // reads the names again at `turn.send`, and that check is the one that decides what goes.
-    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt: line })
-    if (!mentioned.ok) {
-      const refused = mentioned.error?.message ?? 'The files this message names could not be checked.'
+    // Nothing is sent: the message stays where it was written, or at the head of the queue.
+    const refuse = (refused: string) => {
       updateSession(handle, (old) => old ? {
         ...old,
         sendRefused: refused,
@@ -145,18 +144,34 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
         const key = liveKey(sending)
         if (!conversationPreferences(key).draft.trim()) setConversation(key, { draft: prompt })
       }
+    }
+    // The definition picked from the `@` list for this message, which answers this turn alone
+    // (ADDRESS-2). Its marker is no part of the task, and a line holding only the marker sends
+    // nothing and keeps the line (ADDRESS-5).
+    const addressed = staged.find((item) => item.via === 'address')
+    const task = addressed ? withoutMarker(prompt, addressed.marker).trim() : prompt
+    const taskShown = addressed ? withoutMarker(line, addressed.marker).trim() : line
+    if (addressed?.via === 'address' && !task) {
+      refuse(`${addressed.definition.name} needs a task. Write what it should do after ${addressed.marker}.`)
+      return
+    }
+    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt: line })
+    if (!mentioned.ok) {
+      refuse(mentioned.error?.message ?? 'The files this message names could not be checked.')
       return
     }
     const mentionedFiles = Array.isArray(mentioned.ok.files) ? mentioned.ok.files : []
     const reads = [...new Set([...attachments.map((file) => file.path), ...mentionedFiles])]
     // Made here rather than inside the update so its id can be remembered: the agent says where
     // this prompt landed when the turn ends, and that answer has to find the row it belongs to.
-    const said = t.userSaid(prompt, summoned?.slug)
+    // An addressed prompt is drawn as the bridge records it, the task alone, with the definition
+    // it was addressed to drawn as a label at its start, so a fork finds it by its text.
+    const said = t.userSaid(task, summoned?.slug, undefined, addressed?.via === 'address' ? addressed.definition.name : undefined)
     updateSession(handle, (old) =>
       old
         ? {
             ...old,
-            summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
+            summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: task.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
             sendRefused: null,
             staging: queued ? old.staging : sent(old.staging),
@@ -171,13 +186,17 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
             awaitingOrdinal: said.id,
             running: true,
             queuePaused: old.queued?.length ? old.queuePaused : false,
-            // A summoned turn carries no briefing of this conversation's bot.
-            bot: old.bot ? { ...old.bot, grounded: summoned ? old.bot.grounded : true } : null,
+            // A summoned or addressed turn carries no briefing of this conversation's bot.
+            bot: old.bot ? { ...old.bot, grounded: summoned || addressed ? old.bot.grounded : true } : null,
           }
         : old,
     )
     try {
-      if (summoned) {
+      if (addressed?.via === 'address') {
+        // The main process checks the name against the definitions the bridge resolves now and
+        // sends this turn alone addressed to it (ADDRESS-3).
+        await callAddress({ session: handle, name: addressed.definition.name, prompt: task, ...(taskShown === task ? {} : { shown: taskShown }), model, attachments: attachments.map((file) => file.id), ...grants })
+      } else if (summoned) {
         // The main process names the summoned bot's definition and sends it for this turn alone.
         await callSummon({ session: handle, slug: summoned.slug, prompt, ...shown, model, attachments: attachments.map((file) => file.id), ...grants })
       } else if (bot) {

@@ -100,6 +100,12 @@ export type Said =
        * anything after it is refused.
        */
       prompt?: number
+      /**
+       * The definition the driver recorded this prompt's turn as addressed to, where it was
+       * addressed (`wire::addressed_to`). `standing` is true for a definition the conversation
+       * keeps, such as a bot's own, and false for one that answered this turn alone.
+       */
+      address?: { definition: string; standing: boolean; at?: number } | null
     }
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; text: string; why: string }

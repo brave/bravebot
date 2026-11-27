@@ -83,7 +83,9 @@ summons a bot for. [MEMORY-10](definition-memory.md#MEMORY-10) specifies that ev
 desktop bot's conversation addresses the bot's definition, and the desktop does so for a bot that
 has one. [MEMORY-14](definition-memory.md#MEMORY-14) specifies that a turn a person summons a bot
 for, in a project's chat or in another bot's conversation, addresses that bot's definition for that
-turn alone.
+turn alone. A definition a person picks in the desktop composer's `@` list addresses that
+definition for one turn, as a `/agent` line does ([ADDRESS-2](#ADDRESS-2),
+[ADDRESS-3](#ADDRESS-3)).
 
 ## The comparison, and what it is worth
 
@@ -153,8 +155,13 @@ command, so `/agents are useful` stays a prompt.
 
 The `@` list is a second way to address a definition, and it costs the first alternative's
 ambiguity only in what the person sees. The terminal lists the definitions a message may be
-addressed to as rows above the files, each with its description, and the desktop lists its bots as
-rows of its own. The rows, how a typed word matches them and what Enter does on one are
+addressed to as rows above the files, each with its description. The desktop lists the same
+definition rows under an Agents heading, each with its description, and lists its bots as rows of
+its own. It lists only the definitions whose name is a slug, because the turn it sends names the
+definition as `address`, which takes only a slug, so a definition named otherwise is reached on the
+desktop by no row and in the terminal by `/agent`. A definition named exactly as typed is listed
+first, so the limit on how many rows are listed never leaves it out. The rows, how a typed word
+matches them and what Enter does on one are
 `bravebot-mentions`', and the bridge offers them to a client that asks, so a client that takes
 them cannot read a pick differently from the terminal
 ([MEMORY-14](definition-memory.md#MEMORY-14)). A pick is never written as an `@` name. It writes a
@@ -163,8 +170,12 @@ them cannot read a pick differently from the terminal
 line whose marker is still in it addresses the definition exactly as `/agent <name> <task>` would,
 with the marker taken out of the task. A line holds one pick: taking a second row takes the first
 marker out of the line, so the name sent is the second and the first marker is not left in the task.
+On the desktop this holds across the two kinds of row: picking a definition takes out a bot picked
+earlier on the line, and picking a bot takes out a definition. A desktop line holding only the
+marker sends nothing, says a task is needed, and keeps the line in the box
+([ADDRESS-5](#ADDRESS-5)).
 Shift-Enter starts a line in the box and does not send it, so it leaves the marker and the pick as
-they are. The row a person picks says which kind of thing it is, and
+they are. The heading over the rows a person picks from says which kind of thing they are, and
 the list is the cost: a person typing `@` is offered names that a directory's files do not
 contain, and has to read which kind each row is.
 
@@ -180,12 +191,15 @@ it already addresses the definition.
 `verified-by: bravebot_tui::app::tests::naming::a_stopped_turn_comes_back_naming_a_definition_only_where_the_session_would_not`
 `verified-by: bravebot_mentions::lib::a_typed_word_picks_the_definitions_whose_name_holds_it`
 `verified-by: bravebot_mentions::lib::the_marker_is_not_an_at_word_and_a_name_cannot_break_it`
+`verified-by: bravebot_mentions::lib::a_name_typed_in_full_is_offered_first_past_the_cap`
 `verified-by: bravebot_ui_bridge::addressing::the_at_list_offers_the_definitions_ahead_of_the_files`
+`verified-by: bravebot_ui_bridge::addressing::the_at_list_leaves_out_a_definition_whose_name_is_no_slug`
 `verified-by: bravebot_ui_bridge::mentions_running_tests::offering_definitions_during_a_turn_uses_the_last_list`
 `verified-by: bravebot_tui::app::tests::summoning::the_definitions_are_listed_ahead_of_the_files_with_what_each_is_for`
 `verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_addresses_the_line_as_the_agent_command_does`
 `verified-by: bravebot_tui::app::tests::summoning::a_second_definition_picked_replaces_the_first_and_only_it_is_sent`
 `verified-by: bravebot_tui::app::tests::summoning::shift_enter_on_a_picked_definition_starts_a_line_and_keeps_the_pick`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/addressing.test.mjs holds stageDefinition to replacing the half-typed word with the marker the bridge's row carries, which bravebot_mentions::marker builds and bravebot_mentions does not read as an @ name, a second definition pick to replacing the first, a bot pick and a definition pick to replacing each other, and addressOf to being null once the marker is deleted; ui/scripts/mentions.test.mjs holds a definition row's kind and description to reaching the composer's offer; make check-ui runs both)`
 
 <a id="ADDRESS-3"></a>
 ### ADDRESS-3: only a line a person typed into the box, or the command line that started the session
@@ -220,7 +234,8 @@ definition whose model needs a sign-in, or is written for a service that has no 
 refused, as at the start ([ADDRESS-11](#ADDRESS-11)), rather than replaced by the planner. A
 `--agent` on the command line that resumes names the definition for that session in place of the
 recorded one. A `/clear` opens a new record under the definition the session still works under. The
-desktop addresses no definition, so a session resumed there stops recording the name.
+desktop addresses a definition only for one turn and never works a whole session under one, so a
+session resumed there stops recording the name.
 
 [MEMORY-10](definition-memory.md#MEMORY-10) adds a second source: a
 turn in a desktop bot's conversation addresses that bot's definition. The name comes from the
@@ -229,6 +244,20 @@ what stands in for the keystroke is making the bot and opening its conversation.
 [MEMORY-14](definition-memory.md#MEMORY-14) adds a third: a bot a person picked in the desktop's
 `@` list for one message. The pick stands in for the keystroke, and the name lasts that turn, as a
 `/agent` line's does.
+
+A definition a person picked in the desktop's `@` list for one message is the last source
+([ADDRESS-2](#ADDRESS-2)). The pick stands in for the keystroke, as a bot's does, and the name lasts
+that turn. The window never names the definition on `turn.send` itself: the main process strips
+`address` from every request a window sends, and takes a pick only on its own channel,
+`bravebot:definitions:address`. There it checks the picked name against the set the bridge resolves
+for that session at the moment of sending, by asking `mentions.offer` for the definition rows, and
+sends the turn with `address` only when a definition row has exactly that name. A name the bridge
+did not list sends nothing, and the refusal names the definition and lists the definitions the
+bridge offers for a bare `@`. In a bot's conversation the bot's own definition stays standing, as it does for a summon. The
+bridge resolves the set again for the turn ([ADDRESS-5](#ADDRESS-5)), so a definition removed
+between the check and the turn ends in `turn.error` naming it, and nothing is sent. A line with a
+pick is never sent into a running turn: it is queued, keeps its pick and is addressed when it
+starts.
 
 `verified-by: bravebot_tui::app::tests::naming::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`
@@ -243,6 +272,9 @@ what stands in for the keystroke is making the bot and opening its conversation.
 `verified-by: bravebot_tui::app::tests::naming::a_cleared_session_records_the_definition_it_still_works_under`
 `verified-by: bravebot_cli::running::a_definition_named_on_a_continued_run_replaces_the_recorded_one`
 `verified-by: bravebot_ui_bridge::interop::resuming_a_session_started_under_a_definition_stops_recording_it`
+`verified-by: bravebot_ui_bridge::addressing::an_address_to_a_definition_that_is_no_bot_runs_under_it_for_one_turn`
+`verified-by: bravebot_ui_bridge::addressing::an_address_naming_nothing_resolved_sends_nothing_and_names_it`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles; ui/scripts/addressing.test.mjs holds sendAddressedTurn, given a fake request, to sending turn.send with address only for a name among the definition rows mentions.offer returned, to keeping a host bot's definition standing beside the pick, to sending nothing and returning no_such_definition, listing the definitions a bare @ offers, for a name absent from them or present only as a file row, to returning needs_a_task for an empty prompt and bad_request for a name that is not a slug; ui/scripts/sanitise.test.mjs holds address sent by a window on turn.send to being stripped; ui/scripts/addressing.test.mjs holds route to queueing a line with a definition picked while a turn runs; make check-ui runs both)`
 `verified-by: by-construction (in the interface a name reaches a turn only through Session::address or Session::work_under; the first's one caller settles the Action::Address that only the /agent branch of dispatch_command returns, and dispatch_command is reached from the input box's key handler and from the queue that handler filled; the second's one caller is the event loop before its first turn, with the name main took off the command line or the one the record carries, which only Handle::set_agent writes, from that same argument or the session's own standing definition; a session in lines and a one-shot run put a name on a Task only from that same argument; and the turn reads the name off the session as it starts, so nothing a turn produced sets one)`
 
 <a id="ADDRESS-4"></a>
@@ -581,11 +613,6 @@ reason in [ADDRESS-11](#ADDRESS-11).
   one planner to call is noise in the list a person reads. The argument against is that the set is
   small and a person reading a name they do not recognise loses nothing by it.
 
-- **What the desktop front end does with this.** [definition-memory.md](definition-memory.md)
-  proposes an answer: a definition keeps a memory, which is built, and each desktop bot becomes a
-  definition its conversation addresses, which is not, so until it is the desktop addresses
-  nothing.
-
 ## Known costs
 
 - **The name is typed in full, every time.** No completion and no history of names, so a person
@@ -611,8 +638,8 @@ reason in [ADDRESS-11](#ADDRESS-11).
 - **A resumed session is under the definition as it is now, not as it was.** The record keeps the
   name and nothing else, so an edit to the definition between the two sessions applies to the turns
   already in the transcript only as far as the next turn reads it. A definition that was deleted
-  leaves a session that goes on as the planner's, with the loss said once. The desktop addresses no
-  definition, so a session resumed there stops recording the name.
+  leaves a session that goes on as the planner's, with the loss said once. The desktop addresses a
+  definition only for one turn, so a session resumed there stops recording the name.
 
 - **A self-paced `/loop` in such a session stops after one tick.** The tick is addressed, so it
   cannot schedule the next one ([ADDRESS-8](#ADDRESS-8)). A `/loop` with an interval is scheduled

@@ -65,8 +65,12 @@ export type Entry = (
    *
    * `interjected` is set on a line the planner read in the middle of a running turn. It belongs to
    * that turn and starts none, so it does not change which bot the turn's reply is drawn as.
+   *
+   * `addressed` is the name of a definition that answered this message alone and is no bot
+   * (ADDRESS-3). Set from the pick when it is sent, and from the driver's record of the turn's
+   * address when a conversation is reopened. A summon recorded for the prompt wins over it.
    */
-  | { kind: 'user'; id: string; text: string; prompt?: number; summoned?: string; interjected?: true }
+  | { kind: 'user'; id: string; text: string; prompt?: number; summoned?: string; interjected?: true; addressed?: string }
   | { kind: 'assistant'; id: string; text: string }
   /** The bridge's line naming what a turn left open (OPEN-3), drawn as sent under that turn. */
   | { kind: 'open-loops'; id: string; text: string; turn: number }
@@ -259,8 +263,13 @@ export function fromSaid(said: Said[]): Entry[] {
       // Untagged, so somebody typed it, whatever it says. A prompt whose first line reads like
       // one of the rows below is still drawn with its words and its ordinal: the ordinal is what
       // a fork cuts on, and a prompt drawn as one of the interface's own rows loses both.
-      case 'user':
-        return { kind: 'user', id: nextId(), text: entry.text, prompt: entry.prompt } as const
+      // The definition a turn was addressed to for itself alone comes from the driver's record of
+      // the turn, never from the reply (ADDRESS-12). A standing one is the conversation's own.
+      case 'user': {
+        const addressed = entry.address && entry.address.standing === false && typeof entry.address.definition === 'string'
+          ? entry.address.definition : undefined
+        return { kind: 'user', id: nextId(), text: entry.text, prompt: entry.prompt, ...(addressed ? { addressed } : {}) } as const
+      }
       case 'assistant':
         return { kind: 'assistant', id: nextId(), text: entry.text } as const
       case 'tool':
@@ -307,13 +316,33 @@ export function fromSaid(said: Said[]): Entry[] {
   })
 }
 
-export const userSaid = (text: string, summoned?: string, interjected?: true): Entry => ({
+export const userSaid = (text: string, summoned?: string, interjected?: true, addressed?: string): Entry => ({
   kind: 'user',
   id: nextId(),
   text,
   ...(summoned ? { summoned } : {}),
   ...(interjected ? { interjected } : {}),
+  ...(addressed ? { addressed } : {}),
 })
+
+/**
+ * Which reply answers a prompt addressed to a definition for itself alone: the first after it, by
+ * entry id, with the definition's name. A prompt a summon claims is the summoned bot's, and is
+ * left to `summonedReplies`. Read off the name recorded on the prompt, never off any text.
+ */
+export function addressedReplies(entries: Entry[]): Map<string, string> {
+  const found = new Map<string, string>()
+  let waiting: string | null = null
+  for (const entry of entries) {
+    if (entry.kind === 'user') { if (!entry.interjected) waiting = entry.summoned === undefined ? entry.addressed ?? null : null }
+    else if (entry.kind === 'watch' || entry.kind === 'consolidation') waiting = null
+    else if (entry.kind === 'assistant' && waiting !== null) {
+      found.set(entry.id, waiting)
+      waiting = null
+    }
+  }
+  return found
+}
 
 /**
  * Which reply answers a summoned prompt: the first after it, by entry id, with the summoned bot's
@@ -344,6 +373,19 @@ export function summonedFor(entries: Entry[]): string | undefined {
     const entry = entries[index]!
     if (entry.kind === 'user' && !entry.interjected) return entry.summoned
     if (entry.kind === 'watch' || entry.kind === 'goal-turn' || entry.kind === 'loop-tick' || entry.kind === 'consolidation') return undefined
+  }
+  return undefined
+}
+
+/**
+ * The definition a person picked for the turn that runs now, or undefined where it is not an
+ * addressed one: the name on the prompt that started it, past any lines read into it since.
+ */
+export function addressedFor(entries: Entry[]): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!
+    if (entry.kind === 'user' && !entry.interjected) return entry.addressed
+    if (entry.kind === 'watch' || entry.kind === 'consolidation') return undefined
   }
   return undefined
 }

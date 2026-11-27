@@ -148,7 +148,9 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   // which this process makes from a bot's row and a window does not get to. A window that could
   // name a definition could address a turn to any definition on the machine. `address` is the
   // same claim for one turn (MEMORY-14), made from the bot a person summoned, and goes for the
-  // same reason.
+  // same reason. A definition picked from the `@` list (ADDRESS-3) does not come through here
+  // either: the window sends it on `bravebot:definitions:address`, where this process checks it
+  // against the definitions the agent resolves before it sets `address`.
   const {
     files: _files,
     dropped: _dropped,
