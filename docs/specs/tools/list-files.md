@@ -30,7 +30,10 @@ instruction, so the names are treated as content and not shown to the planner.
 A call with `read: true` has an untrusted listing released in the same result where the mode or a
 check answers `vet_content`, with the label and trail entry a `vet_content` call on it would give
 ([VET-6](vet-content.md#VET-6)). The names then reach the planner as a trusted listing's do, with
-the same sentences about a cap, a pattern, a directory that could not be opened and links.
+the same sentences about a cap, a pattern, a directory that could not be opened and links. A run not
+offered `vet_content`, which a delegate is, is offered no `read`
+([VET-6](vet-content.md#VET-6)); [LIST-2](#LIST-2) says how it reads a file an untrusted listing
+found.
 
 **The same bytes come back from a language server, and [LSP-3](lsp.md#LSP-3) treats them the same
 way.** An answer naming a file nobody vouched for is quarantined whole, because a location is a name
@@ -82,7 +85,21 @@ single reference does.
 What a reference to a file is for depends on the entry's label, which comes from the trust map when
 the entry is reserved and which the entry's line already shows. The header has one sentence for each
 label class among the listing's files, never one per entry. For files labelled untrusted it says
-that read_file has nothing to add, because the reference already is the file. For files labelled
+that the reference already is the file, and, where the run is offered read_file, that read_file has
+nothing to add; a run not offered read_file is not told its name
+([TOOL-6](tool-surface.md#TOOL-6)). A run offered
+read_file and not `vet_content`, which a delegate is ([VET-2](vet-content.md#VET-2)), is told
+instead that it reads such a file by naming the entry's reference as read_file's `path_ref` or by
+giving read_file a path it types, and that read_file offers to vouch for a file nobody vouched for
+and shows what it holds where the offer is accepted, a picture or a PDF still coming back as a
+reference. A `path_ref` is offered for a vouch whatever the name behind it
+([TRUST-8](../trust-map.md#TRUST-8)), and a delegate's offer is answered against the mode it was
+lent ([MODE-9](../permission-modes.md#MODE-9)). Where nobody can be asked and the mode does not
+answer the offer ([CLI-1](../cli.md#CLI-1)) the offer is refused, so that run is told read_file has
+nothing to add. An unattended run in bypass has nobody to ask, and its mode answers the offer, so
+it is told that read_file offers to vouch.
+The sentence names read_file and never `vet_content` ([TOOL-6](tool-surface.md#TOOL-6)), and names
+no mode, since a person and the bypass mode both answer the offer. For files labelled
 trusted it says that the label lets the planner read them, which is not always a person's vouch,
 and that read_file shows the file when the entry's reference is named as `path_ref`,
 and that a picture or a PDF still comes back as a reference ([READ-5](read-file.md#READ-5)), as
@@ -103,6 +120,10 @@ and a range keeps every one of those.
 leaves it unable to read a trusted file, since it holds a reference and no name, so it guesses names
 until a read works.
 
+**Why a run without `vet_content` is told of read_file.** It is offered no `read` and cannot call
+`vet_content`, so the vouch read_file offers is the one way it has to read a file the listing found.
+Told that read_file had nothing to add, delegates guessed what a file held instead of reading it.
+
 `verified-by: bravebot_agent::turn::a_large_quarantined_listing_says_what_its_references_are_once`
 `verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_run_of_files_and_one_per_run_of_directories`
 `verified-by: bravebot_core::reference::a_run_of_files_that_share_a_label_is_one_line_with_a_count`
@@ -118,6 +139,11 @@ until a read works.
 `verified-by: bravebot_core::reference::a_listing_of_one_label_says_only_that_labels_sentence`
 `verified-by: bravebot_core::reference::a_trusted_entry_names_read_file_only_where_the_run_is_offered_it`
 `verified-by: bravebot_agent::turn::a_trusted_entry_of_a_mixed_listing_is_read_through_its_reference`
+`verified-by: bravebot_core::reference::an_untrusted_entry_names_read_file_where_it_is_the_one_route_and_can_be_answered`
+`verified-by: bravebot_agent::turn::a_delegate_is_told_read_file_offers_to_vouch_for_a_file_its_walk_found`
+`verified-by: bravebot_agent::turn::a_delegate_whose_offer_to_vouch_nobody_answers_is_not_told_read_file_offers_one`
+`verified-by: bravebot_agent::turn::a_delegate_of_an_attended_run_that_asks_is_told_read_file_offers_to_vouch`
+`verified-by: bravebot_agent::turn::a_delegate_of_an_unattended_run_in_bypass_is_told_read_file_offers_to_vouch`
 `verified-by: bravebot_core::policy::an_entry_reference_names_its_directory_and_never_its_file`
 `verified-by: bravebot_core::policy::reserving_the_wrong_number_of_names_is_refused`
 `verified-by: bravebot_agent::tools::tests::editing::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`

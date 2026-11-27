@@ -99,6 +99,12 @@ pub struct Reference {
     /// a listing labelled trusted is read through its reference. Set by the policy that made the
     /// reference.
     pub read_file_offered: bool,
+    /// Whether an offer to vouch that `read_file` makes can be answered in the run this reference
+    /// is made for: somebody can be asked, or the mode answers the offer unasked. Where nobody can
+    /// be asked and the mode does not answer it (CLI-1), the offer is refused, so a reference does
+    /// not send the run to it. Set by the policy that made the reference, which the turn tells
+    /// from `LiveMode::answers_a_vouch` when its list is settled.
+    pub vouch_answerable: bool,
 }
 
 impl Reference {
@@ -122,6 +128,7 @@ impl Reference {
             writing_offered: true,
             reading_offered: true,
             read_file_offered: true,
+            vouch_answerable: true,
         }
     }
 
@@ -152,6 +159,12 @@ impl Reference {
     /// Say that the run this reference is made for is not offered `read_file`.
     pub fn without_read_file(mut self) -> Self {
         self.read_file_offered = false;
+        self
+    }
+
+    /// Say that an offer to vouch cannot be answered in the run this reference is made for.
+    pub fn without_an_answer_to_a_vouch(mut self) -> Self {
+        self.vouch_answerable = false;
         self
     }
 
@@ -211,6 +224,7 @@ impl Reference {
             writing_offered: true,
             reading_offered: true,
             read_file_offered: true,
+            vouch_answerable: true,
         }
     }
 
@@ -251,16 +265,26 @@ impl Reference {
         };
 
         // The move that names a tool is left out rather than offered and refused for each tool a
-        // run is not offered: `vet_content`, `spawn_processor`, `write_file` and `read_output`.
+        // run is not offered: `vet_content`, `spawn_processor`, `write_file`, `read_output` and
+        // `read_file`.
         let vet = self.vet_move();
         let can_process = self.spawning_offered;
         let next = match self.kind {
-            Kind::File => format!(
-                "Quarantined: you will not be shown what this file holds, and read_file has \
-                 nothing to add: {} already is the file.{}{vet}",
-                self.slot,
-                self.file_moves()
-            ),
+            Kind::File => match self.read_file_offered {
+                true => format!(
+                    "Quarantined: you will not be shown what this file holds, and read_file has \
+                     nothing to add: {} already is the file.{}{vet}",
+                    self.slot,
+                    self.file_moves()
+                ),
+                // A run not offered read_file is not told its name (TOOL-6).
+                false => format!(
+                    "Quarantined: you will not be shown what this file holds, and {} already is \
+                     the file.{}{vet}",
+                    self.slot,
+                    self.file_moves()
+                ),
+            },
             Kind::Content => format!(
                 "Quarantined: you will not be shown it.{}{vet}",
                 self.moves_with(&self.slot.to_string(), can_process)
@@ -360,11 +384,16 @@ impl Reference {
 /// A file's label decides which sentence covers it, one sentence for each class present and never
 /// one per entry. The label came from the trust map when the entry was reserved, so it is a fact
 /// the planner is already shown on the entry's line. A file labelled untrusted already is its
-/// reference, and read_file has nothing to add. A file labelled trusted is one the label lets the
-/// planner read, which read_file shows through its reference. Which entries are pictures would have
-/// to be read off the names, so the sentence says a picture still comes back as a reference instead
-/// of telling them apart. Where no file is labelled trusted, one sentence covers every file and
-/// names no label.
+/// reference. For a run offered `vet_content`, or one where nobody can be asked and the mode does
+/// not answer an offer to vouch (CLI-1), read_file has nothing to add, and a run not offered
+/// read_file is not told its name. A run offered read_file and not `vet_content`, which a delegate
+/// is, where the offer can be answered, is told that
+/// read_file offers to vouch for the file, through its reference as `path_ref` or a path it types
+/// (TRUST-8), since that is the one way it has to read the file. A file labelled trusted is one the
+/// label lets the planner read, which read_file shows through its reference. Which entries are
+/// pictures would have to be read off the names, so the sentence says a picture still comes back as
+/// a reference instead of telling them apart. Where no file is labelled trusted, one sentence covers
+/// every file and names no label.
 ///
 /// Empty for no references.
 pub fn describe_listing(references: &[Reference]) -> String {
@@ -383,16 +412,7 @@ pub fn describe_listing(references: &[Reference]) -> String {
         .iter()
         .any(|r| r.kind == Kind::File && r.label.is_trusted());
     if untrusted_files {
-        let lead = match trusted_files {
-            true => "A file labelled (U,...)",
-            false => "A file",
-        };
-        notes.push(format!(
-            "{lead}: you will not be shown what it holds, and read_file has nothing to add: its \
-             reference already is the file.{}{}",
-            first.file_moves(),
-            first.vet_move()
-        ));
+        notes.push(untrusted_files_sentence(first, trusted_files));
     }
     if trusted_files {
         notes.push(match first.read_file_offered {
@@ -469,6 +489,42 @@ pub fn describe_listing(references: &[Reference]) -> String {
     }
 
     format!("{}\n\n{}", notes.join(" "), lines.join("\n"))
+}
+
+/// The sentence of [`describe_listing`] for its files labelled untrusted, from what the run of
+/// `first`, which speaks for every entry, is offered. Where `trusted_files`, the listing also holds
+/// files labelled trusted, and the sentence names the label it covers.
+fn untrusted_files_sentence(first: &Reference, trusted_files: bool) -> String {
+    let lead = match trusted_files {
+        true => "A file labelled (U,...)",
+        false => "A file",
+    };
+    match (
+        first.read_file_offered,
+        !first.vetting_offered && first.vouch_answerable,
+    ) {
+        (true, true) => format!(
+            "{lead}: you will not be shown what it holds unless it is vouched for.{} To read it \
+             yourself, name its reference as read_file's path_ref, or give read_file a path you \
+             type: read_file offers to vouch for a file nobody vouched for, and shows you what it \
+             holds where the offer is accepted. A picture or a PDF still comes back as a \
+             reference.",
+            first.file_moves()
+        ),
+        (true, false) => format!(
+            "{lead}: you will not be shown what it holds, and read_file has nothing to add: its \
+             reference already is the file.{}{}",
+            first.file_moves(),
+            first.vet_move()
+        ),
+        // A run not offered read_file is not told its name (TOOL-6).
+        (false, _) => format!(
+            "{lead}: you will not be shown what it holds, and its reference already is the \
+             file.{}{}",
+            first.file_moves(),
+            first.vet_move()
+        ),
+    }
 }
 
 /// The number a slot id ends in, `7` for `ref:7`. Slot ids are minted by the driver.
@@ -1252,5 +1308,107 @@ mod tests {
         );
         assert!(!described.contains("vouch"), "{described}");
         assert!(described.contains("spawn_processor"), "{described}");
+    }
+
+    /// LIST-2, DELEGATE-12, TRUST-8, D3 and D4 of #4722: a run offered read_file and not
+    /// vet_content, which a delegate is, is told that an untrusted entry is read by naming its
+    /// reference as read_file's path_ref or a path it types, since read_file offers to vouch for
+    /// it. The sentence that read_file has nothing to add stays for a run offered vet_content and a
+    /// run where nobody can answer the offer to vouch. A run not offered read_file is told that the
+    /// reference already is the file and is not told read_file's name (TOOL-6). The faults it
+    /// rejects are the new sentence keyed on fewer than the three facts, the old one left beside
+    /// it, and read_file named to a run that is not offered it.
+    #[test]
+    fn an_untrusted_entry_names_read_file_where_it_is_the_one_route_and_can_be_answered() {
+        let delegate: Vec<Reference> = listing(1, 0)
+            .into_iter()
+            .map(Reference::without_vetting)
+            .collect();
+        let described = describe_listing(&delegate);
+        assert!(
+            described.contains(
+                "name its reference as read_file's path_ref, or give read_file a path you type"
+            ),
+            "{described}"
+        );
+        assert!(
+            described.contains("offers to vouch for a file"),
+            "{described}"
+        );
+        assert!(!described.contains("nothing to add"), "{described}");
+        assert!(!described.contains("vet_content"), "{described}");
+        assert!(described.contains("spawn_processor"), "{described}");
+
+        let without_read_file: Vec<Reference> = delegate
+            .iter()
+            .cloned()
+            .map(Reference::without_read_file)
+            .collect();
+        let described = describe_listing(&without_read_file);
+        assert!(!described.contains("read_file"), "{described}");
+        assert!(
+            described.contains(
+                "A file: you will not be shown what it holds, and its reference already is the \
+                 file."
+            ),
+            "{described}"
+        );
+        assert!(described.contains("spawn_processor"), "{described}");
+        assert!(!described.contains("offers to vouch"), "{described}");
+
+        let parent = describe_listing(&listing(1, 0));
+        let unattended: Vec<Reference> = delegate
+            .iter()
+            .cloned()
+            .map(Reference::without_an_answer_to_a_vouch)
+            .collect();
+        for (case, described) in [
+            ("offered vet_content", parent),
+            ("nobody answers a vouch", describe_listing(&unattended)),
+        ] {
+            assert!(
+                described.contains("read_file has nothing to add"),
+                "{case}: {described}"
+            );
+            assert!(
+                !described.contains("offers to vouch"),
+                "{case}: {described}"
+            );
+        }
+    }
+
+    /// TOOL-6: a reference to one file made for a run not offered read_file says that the
+    /// reference already is the file and does not name read_file, and keeps the other moves the
+    /// run is offered. A run offered read_file reads the same text as before. The fault it rejects
+    /// is the file sentence naming read_file to a run that cannot call it.
+    #[test]
+    fn a_file_reference_names_read_file_only_where_the_run_is_offered_it() {
+        let entry = || {
+            Reference::unread(
+                SlotId::new("ref:2"),
+                "an entry in \".\"",
+                None,
+                Label::untrusted_private(),
+            )
+        };
+        assert_eq!(
+            entry().describe(),
+            "[ref:2] an entry in \".\" (U,priv). Quarantined: you will not be shown what this file \
+             holds, and read_file has nothing to add: ref:2 already is the file. Give it to \
+             spawn_processor to work on, and name it as write_file's path_ref to put the result \
+             back. Where you have to read it yourself, vet_content is how to ask for it."
+        );
+        let described = entry().without_read_file().describe();
+        assert_eq!(
+            described,
+            "[ref:2] an entry in \".\" (U,priv). Quarantined: you will not be shown what this file \
+             holds, and ref:2 already is the file. Give it to spawn_processor to work on, and name \
+             it as write_file's path_ref to put the result back. Where you have to read it \
+             yourself, vet_content is how to ask for it."
+        );
+        assert!(!described.contains("read_file"), "{described}");
+        let delegate = entry().without_vetting().without_read_file().describe();
+        assert!(!delegate.contains("read_file"), "{delegate}");
+        assert!(delegate.contains("ref:2 already is the file"), "{delegate}");
     }
 }

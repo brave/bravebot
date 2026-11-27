@@ -3218,6 +3218,12 @@ where
     if task.permission_mode.nobody_to_ask() {
         policy.without_anybody_to_ask();
     }
+    // Whether the offer to vouch that read_file makes can be answered: somebody can be asked, or
+    // the mode answers it unasked. Read once here, and the listing and the search result both
+    // read this one value from the policy.
+    if !task.permission_mode.answers_a_vouch() {
+        policy.without_an_answer_to_a_vouch();
+    }
     if !offers_read_output {
         policy.without_reading();
     }
@@ -5297,9 +5303,19 @@ where
                                 .bytes
                                 .is_some_and(|bytes| bytes != 0 && bytes <= output_cap),
                         );
+                        // A run offered read_file and not vet_content, which a delegate is, has
+                        // read_file's offer to vouch as its one way to read a file a search found,
+                        // and is told so where the offer can be answered. The sentence is decided
+                        // from the tool's name, the offered list and the policy's answer to
+                        // whether the offer can be answered, which the listing also reads.
+                        let read_by_name = sentences::read_file_would_vouch(
+                            &output.tool,
+                            plan.beside,
+                            policy.vouch_is_answerable(),
+                        );
                         let composed = |described: &str, advice: &str| {
                             format!(
-                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{timed_out}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{read_instead}{history}",
+                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{timed_out}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{read_instead}{read_by_name}{history}",
                                 output.tool,
                             )
                         };

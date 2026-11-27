@@ -345,6 +345,7 @@ without naming a tool to fetch them with.
 `verified-by: bravebot_agent::turn::an_addressed_reader_reads_a_read_git_that_names_no_run`
 `verified-by: bravebot_agent::turn::an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run`
 `verified-by: bravebot_core::reference::a_reference_made_for_a_run_without_spawning_or_writing_names_only_the_tools_it_has`
+`verified-by: bravebot_core::reference::a_file_reference_names_read_file_only_where_the_run_is_offered_it`
 `verified-by: bravebot_core::policy::a_reference_names_spawn_processor_and_write_file_exactly_when_the_run_is_offered_them`
 `verified-by: bravebot_agent::turn::a_reference_an_addressed_turn_is_handed_names_spawn_processor_and_write_file_only_if_offered`
 `verified-by: bravebot_agent::tools::tests::tool_descriptions::a_list_holding_every_tool_gets_the_processor_and_read_output_descriptions_it_always_had`

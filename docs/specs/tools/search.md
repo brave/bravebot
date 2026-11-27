@@ -98,6 +98,16 @@ result rather than one per hit, so its hits are not addresses. A call with `read
 reference released in the same result where the mode or a check answers `vet_content`, with the
 label and trail entry a `vet_content` call on it would give ([VET-6](vet-content.md#VET-6)).
 
+A run offered `read_file` and not `vet_content`, which a delegate is, is offered no `read`
+([VET-6](vet-content.md#VET-6)). Its quarantined search result says that read_file of a path it
+gives offers to vouch for a file nobody vouched for and shows what it holds where the offer is
+accepted ([TRUST-8](../trust-map.md#TRUST-8)); a delegate's offer is answered against the mode it
+was lent ([MODE-9](../permission-modes.md#MODE-9)). Where nobody can be asked and the mode does not
+answer the offer ([CLI-1](../cli.md#CLI-1)) the offer is refused and the sentence is left out; an
+unattended run in bypass has the offer answered by its mode and is told the sentence. It names
+read_file and never `vet_content` ([TOOL-6](tool-surface.md#TOOL-6)), and no mode. Without it a
+delegate holds a reference with no move that reads it, and guesses what the file holds.
+
 The label comes from the paths the walk reached, before any file is opened, each asked about under
 every name the file has, as a read of it is ([TRUST-2](../trust-map.md#TRUST-2)). What a file holds does
 not change it: an unvouched file with no matching line, or one that is not valid text, taints the
@@ -112,6 +122,11 @@ known costs, with what an attacker who owns the file gains.
 `verified-by: bravebot_agent::turn::a_search_touching_one_unvouched_file_is_quarantined_whole`
 `verified-by: bravebot_agent::turn::untrusted_search_results_never_reach_the_model`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_search_or_listing_that_asks_to_read_is_handed_it_in_the_same_result`
+`verified-by: bravebot_agent::turn::sentences::a_search_names_read_file_only_where_it_is_the_one_route_and_can_be_answered`
+`verified-by: bravebot_agent::turn::a_delegate_is_told_read_file_offers_to_vouch_for_a_file_its_walk_found`
+`verified-by: bravebot_agent::turn::a_delegate_whose_offer_to_vouch_nobody_answers_is_not_told_read_file_offers_one`
+`verified-by: bravebot_agent::turn::a_delegate_of_an_attended_run_that_asks_is_told_read_file_offers_to_vouch`
+`verified-by: bravebot_agent::turn::a_delegate_of_an_unattended_run_in_bypass_is_told_read_file_offers_to_vouch`
 
 <a id="SEARCH-3"></a>
 ### SEARCH-3: a truncated search tells the planner it is incomplete

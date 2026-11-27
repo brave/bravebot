@@ -93915,6 +93915,267 @@ fn a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer() {
     assert!(offered.lock().unwrap().is_empty());
 }
 
+/// MODE-4, MODE-9, TRUST-8: under bypass a delegate's `read_file` of a file outside the workspace,
+/// named by the path it typed, is offered for a vouch, the mode answers it, and the delegate is
+/// shown the text. A delegate's quarantined walk result tells it that a read offers to vouch for
+/// the file, and this is that claim for a file a walk outside the workspace found. The regression
+/// it rejects is a read outside the workspace that is refused or stays quarantined under bypass,
+/// which would make that sentence false there.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn under_bypass_a_delegates_read_of_a_file_outside_the_workspace_is_vouched_and_shown() {
+    let places = PathPlaces::new("delegate-outside-read");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "NOTES-CONTENT\n").expect("a file beside the session");
+    let scratch = Scratch::new("delegate-outside-read");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let read = serde_json::json!({ "path": target.display().to_string() }).to_string();
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-OUTSIDE-READ",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"READ-BESIDE"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "READ-BESIDE",
+            vec![tool_request_2("read_file", &read), reply_with("read it")],
+        ),
+    ]);
+    let mut inner = VouchesForFiles::new(false);
+    let offered = inner.offered.clone();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-THE-OUTSIDE-READ")
+            .with_profile(Some(places.home.clone()))
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .as_ref()
+    .expect("the turn runs");
+
+    let delegate: Vec<String> = every_request(&received)
+        .into_iter()
+        .filter(|body| !body.contains("DELEGATE-THE-OUTSIDE-READ"))
+        .collect();
+    let read = newest_tool_result_text(delegate.last().expect("the delegate made requests"));
+    assert!(
+        read.contains("NOTES-CONTENT"),
+        "the delegate was not shown the file it named: {read}"
+    );
+    assert!(
+        !trail_entries(&sink, "trust", "bypass mode answered the offer to vouch").is_empty(),
+        "the read was not vouched for by the mode: {:?}",
+        sink.events()
+    );
+    assert!(offered.lock().unwrap().is_empty(), "a person was asked");
+}
+
+/// The tool results a delegate was handed for a `search` and then a `list_files` of a directory
+/// nobody vouched for, under `mode`, and the last request the delegate sent.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn what_a_delegate_is_told_of_a_quarantined_walk(
+    name: &str,
+    mode: bravebot_agent::LiveMode,
+) -> (String, String, String) {
+    let scratch = Scratch::new(name);
+    std::fs::create_dir_all(scratch.path.join("include")).unwrap();
+    std::fs::write(
+        scratch.path.join("include/cb.h"),
+        "typedef void (*on_done_cb)(int code, void *ctx);\n",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("main.c"), "int main(void){return 0;}\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "LOOK-FOR-THE-DECL",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"FIND-THE-DECL"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "FIND-THE-DECL",
+            vec![
+                tool_request(
+                    "search",
+                    r#"{"pattern":"on_done_cb","directory":"include"}"#,
+                ),
+                tool_request("list_files", r#"{"directory":"include"}"#),
+                reply_with("reported"),
+            ],
+        ),
+    ]);
+    let mut inner = VouchesForFiles::new(false);
+    let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode.clone(), false);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("LOOK-FOR-THE-DECL").with_permission_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .as_ref()
+    .expect("the turn runs");
+
+    let delegate: Vec<String> = every_request(&received)
+        .into_iter()
+        .filter(|body| !body.contains("LOOK-FOR-THE-DECL"))
+        .collect();
+    let result_of = |tool: &str| {
+        let wanted = format!("{tool} could not be shown to you");
+        delegate
+            .iter()
+            .flat_map(|body| {
+                let parsed: serde_json::Value = serde_json::from_str(body).expect("a request");
+                parsed["messages"]
+                    .as_array()
+                    .expect("messages")
+                    .iter()
+                    .filter(|message| message["role"] == "tool")
+                    .filter_map(|message| message["content"].as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .find(|told| told.contains(&wanted))
+            .unwrap_or_else(|| panic!("the delegate was handed no quarantined {tool} result"))
+    };
+    (
+        result_of("search"),
+        result_of("list_files"),
+        delegate.last().expect("the delegate made requests").clone(),
+    )
+}
+
+/// The search result and the listing a delegate was handed both say that `read_file` offers to
+/// vouch for a file, name no `vet_content`, and hold none of the file's text.
+fn assert_told_read_file_offers_to_vouch(search: &str, listing: &str) {
+    for (tool, told) in [("search", search), ("list_files", listing)] {
+        assert!(names(told, "read_file"), "{tool}: {told}");
+        assert!(told.contains("offers to vouch for"), "{tool}: {told}");
+        assert!(
+            !told.contains("read_file has nothing to add"),
+            "{tool}: {told}"
+        );
+        assert!(!names(told, "vet_content"), "{tool}: {told}");
+        assert!(
+            !told.contains("typedef"),
+            "{tool}: the file reached the delegate"
+        );
+    }
+    assert!(
+        listing.contains("name its reference as read_file's path_ref"),
+        "the listing did not name the entry's reference as a route: {listing}"
+    );
+}
+
+/// SEARCH-2, LIST-2, DELEGATE-12, TRUST-8: a delegate is offered `read_file` and not
+/// `vet_content`, so its quarantined `search` result and listing say that `read_file` of a path it
+/// typed, or of a listed file's reference as `path_ref`, offers to vouch for the file. Its
+/// `search` and `list_files` keep no `read` argument. The regression it rejects is a delegate
+/// handed a reference with no move that reads it, told that `read_file` has nothing to add,
+/// which sent delegates to guess a declaration instead of reading it (#4722).
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_delegate_is_told_read_file_offers_to_vouch_for_a_file_its_walk_found() {
+    let (search, listing, last) = what_a_delegate_is_told_of_a_quarantined_walk(
+        "delegate-walk-bypass",
+        bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Bypass),
+    );
+    assert_told_read_file_offers_to_vouch(&search, &listing);
+    let parsed: serde_json::Value = serde_json::from_str(&last).expect("a request");
+    for tool in ["search", "list_files"] {
+        let schema = parsed["tools"]
+            .as_array()
+            .expect("tools offered")
+            .iter()
+            .find(|offered| offered["function"]["name"] == tool)
+            .unwrap_or_else(|| panic!("{tool} was not offered"));
+        assert!(
+            schema["function"]["parameters"]["properties"]["read"].is_null(),
+            "{tool} offered the delegate a read argument: {schema}"
+        );
+    }
+}
+
+/// SEARCH-2, LIST-2, DELEGATE-12: in a run a person watches under the ask mode, a delegate's offer
+/// to vouch is put to that person, so its quarantined search and listing say that read_file offers
+/// to vouch for a file. The regression it rejects is the sentence keyed on the bypass mode alone,
+/// which leaves a delegate of an attended run that asks with no move that reads a file.
+#[test]
+fn a_delegate_of_an_attended_run_that_asks_is_told_read_file_offers_to_vouch() {
+    let (search, listing, _) = what_a_delegate_is_told_of_a_quarantined_walk(
+        "delegate-walk-attended-ask",
+        bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask),
+    );
+    assert_told_read_file_offers_to_vouch(&search, &listing);
+}
+
+/// SEARCH-2, LIST-2, DELEGATE-12, CLI-1, MODE-4: in an unattended run under bypass nobody can be
+/// asked, and the mode answers a delegate's offer to vouch, so its quarantined search and listing
+/// say that read_file offers to vouch for a file. The regression it rejects is the sentence keyed
+/// on whether somebody can be asked alone, which tells a delegate of
+/// `--dangerously-skip-permissions` that read_file has nothing to add where it would vouch for the
+/// file and show it.
+#[test]
+fn a_delegate_of_an_unattended_run_in_bypass_is_told_read_file_offers_to_vouch() {
+    let (search, listing, _) = what_a_delegate_is_told_of_a_quarantined_walk(
+        "delegate-walk-unattended-bypass",
+        bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::Bypass),
+    );
+    assert_told_read_file_offers_to_vouch(&search, &listing);
+}
+
+/// D3 of #4722, CLI-1: in an unattended run whose mode does not answer a vouch, the offer
+/// read_file makes is refused, so a delegate is not told a read offers one, and its listing keeps
+/// saying read_file has nothing to add. The regression it rejects is the sentence said wherever
+/// read_file is offered and vet_content is not, which in such a run sends the delegate to a
+/// refusal.
+#[test]
+fn a_delegate_whose_offer_to_vouch_nobody_answers_is_not_told_read_file_offers_one() {
+    let (search, listing, _) = what_a_delegate_is_told_of_a_quarantined_walk(
+        "delegate-walk-unattended",
+        bravebot_agent::LiveMode::unattended(bravebot_agent::PermissionMode::Ask),
+    );
+    for (tool, told) in [("search", &search), ("list_files", &listing)] {
+        assert!(!told.contains("offers to vouch for"), "{tool}: {told}");
+        assert!(
+            !told.contains("typedef"),
+            "{tool}: the file reached the delegate"
+        );
+    }
+    assert!(
+        listing.contains("read_file has nothing to add"),
+        "the listing lost the sentence for a run that cannot answer a vouch: {listing}"
+    );
+}
+
 /// The other end of the same round trip. A caller carrying the answer in puts no question at all,
 /// which is what makes the field on the outcome worth having: a turn that took the list and
 /// ignored it would pass the test above and still ask on every message.

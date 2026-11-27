@@ -228,7 +228,12 @@ way to what is inside it is another listing with a greater depth.
 
 What a reference to a file is for depends on the label its line shows, and the result says it once
 for each label among the files. A file labelled untrusted is one nobody vouched
-for, and its reference already is the file, so `read_file` has nothing to add. A file labelled
+for, and its reference already is the file, so `read_file` has nothing to add. A delegate, which is
+not offered `vet_content` or `read`, is told instead to name the entry's reference as `read_file`'s
+`path_ref` or to give `read_file` a path: the read offers to vouch for the file, which bypass mode
+accepts without asking, and shows what it holds where the offer is accepted. Where nobody can be
+asked and the mode does not answer the offer, as in a one-shot run that is not in bypass, the
+delegate is told that `read_file` has nothing to add. A file labelled
 trusted is one its label lets the planner read, which is usually a file you vouched for, and
 `read_file` shows its lines when the planner names its reference
 as `path_ref`. A picture or a PDF still comes back as a reference, as
@@ -328,6 +333,9 @@ A result touching several files is trusted only if **every one of them** is. Whe
 for make the result quarantined and a mode or a check answers `vet_content` for you, the result says that
 repeating the same search with `read: true` returns it in one call. It says nothing of this where you
 answer `vet_content`, where the call already asked, or where the result is empty or past the output cap.
+A delegate is not offered `read`, and its quarantined result says instead that `read_file` of a path
+offers to vouch for a file nobody vouched for, except where nobody can be asked and the mode does
+not answer the offer.
 A truncated search tells
 the planner it is incomplete. A search that found nothing says which kind of nothing it is: no
 matching lines in the files it read, or an `include` that selected no files at all. Those are
