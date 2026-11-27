@@ -99,6 +99,7 @@ fn take_turn_in(
             actors: Default::default(),
             published: Default::default(),
             scope_watch: None,
+            locally: None,
         })
     });
     let mut seen = Vec::new();

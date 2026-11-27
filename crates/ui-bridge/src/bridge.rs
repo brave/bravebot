@@ -331,6 +331,9 @@ pub struct Bridge {
     /// Told of each moment a session may have come to reach more, by a host that holds connections
     /// to a ceiling. None for a bridge with no such connection.
     scope_watch: Option<crate::widening::ScopeWatch>,
+    /// Asked whether a connection that is not a device can answer a question devices are not
+    /// offered. None for a bridge with no device.
+    locally: Option<crate::device_view::Locally>,
 }
 
 impl Bridge {
@@ -353,7 +356,15 @@ impl Bridge {
             acting: None,
             background_reader: bravebot_session::listing::Reader::new(),
             scope_watch: None,
+            locally: None,
         }
+    }
+
+    /// Ask `locally` whether a connection that is not a device can answer a question devices are not
+    /// offered, before it is asked, and refuse it where none can.
+    pub fn with_local_answering(mut self, locally: crate::device_view::Locally) -> Self {
+        self.locally = Some(locally);
+        self
     }
 
     /// Tell `watch` of each moment a session may have come to reach more: when a turn starts, when
@@ -2428,6 +2439,7 @@ impl Bridge {
         let session = handle.clone();
         let answerers = self.answerers_of(&handle);
         let scope_watch = self.scope_watch.clone();
+        let locally = self.locally.clone();
 
         let worker_model = model.clone();
 
@@ -2516,6 +2528,7 @@ impl Bridge {
                 actors: actors.clone(),
                 published,
                 scope_watch,
+                locally,
             });
         });
 
@@ -5326,6 +5339,9 @@ struct Work {
     published: crate::turn::Published,
     /// Told when the person approves for this turn a grant no ceiling holds.
     scope_watch: Option<crate::widening::ScopeWatch>,
+    /// Asked whether a connection that is not a device can answer a question devices are not
+    /// offered.
+    locally: Option<crate::device_view::Locally>,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -5443,6 +5459,7 @@ fn work(work: Work) {
         actors,
         published,
         scope_watch,
+        locally,
     } = work;
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
@@ -5503,7 +5520,8 @@ fn work(work: Work) {
     .answerable_by(answerers)
     .remembering(Arc::clone(&state.question_answers))
     .taking_interjections(interjections)
-    .watched_by(scope_watch);
+    .watched_by(scope_watch)
+    .answered_locally_by(locally);
 
     // The session's MCP servers (SERVERS-9), started by its first turn or first plan run and held
     // until it closes. Here rather than when the session opened, so that the questions about them

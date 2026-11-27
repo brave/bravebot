@@ -297,7 +297,7 @@ impl Link {
             opened.lifetime.as_secs()
         ));
         said.push(Said::Line(format!(
-            "typing the code also approves these limits for {name}; a session that goes past them stops reaching {name} until you approve it again:"
+            "typing the code also approves these limits for {name}, and agrees {name} may show what a session there shows you, with what came from somewhere nobody vouched for shown as a placeholder; a session that goes past the limits stops reaching {name} until you approve it again:"
         )));
         said.extend(
             shown
@@ -916,6 +916,10 @@ mod tests {
         let text = said.join("\n");
         assert!(
             text.contains("typing the code also approves these limits for kitchen-phone"),
+            "{text}"
+        );
+        assert!(
+            text.contains("agrees kitchen-phone may show what a session there shows you"),
             "{text}"
         );
         assert!(text.contains("  the programs vouched for: key-4"), "{text}");

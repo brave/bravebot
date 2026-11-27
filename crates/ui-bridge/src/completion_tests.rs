@@ -114,6 +114,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             actors: Default::default(),
             published: Default::default(),
             scope_watch: None,
+            locally: None,
         })
     });
     let result = received.recv_timeout(Duration::from_secs(10));

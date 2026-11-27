@@ -870,6 +870,8 @@ pub struct BridgeConfirmer {
     plan_title: Option<String>,
     /// Told when the person approves a grant no ceiling holds. See [`Self::watched_by`].
     scope_watch: Option<crate::widening::ScopeWatch>,
+    /// Whether a connection that is not a device can answer. See [`Self::answered_locally_by`].
+    locally: Option<crate::device_view::Locally>,
 }
 
 impl BridgeConfirmer {
@@ -895,7 +897,19 @@ impl BridgeConfirmer {
             reused: Vec::new(),
             plan_title: None,
             scope_watch: None,
+            locally: None,
         }
+    }
+
+    /// Ask `locally`, before a question devices are not offered is put, whether a connection that
+    /// is not a device can answer it, and refuse it unasked where none can, so it does not wait on a
+    /// device that is not shown it (decision 19).
+    pub(crate) fn answered_locally_by(
+        mut self,
+        locally: Option<crate::device_view::Locally>,
+    ) -> Self {
+        self.locally = locally;
+        self
     }
 
     /// Tell `watch` when the person approves a fetch or a line run with no sandbox, before the
@@ -1226,6 +1240,16 @@ impl Confirmer for BridgeConfirmer {
     }
 
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+        // A body nobody vouched for is not shown to a device, so the question waits only on a
+        // connection that is not one.
+        if request.untrusted
+            && self
+                .locally
+                .as_ref()
+                .is_some_and(|locally| !locally(&self.session, Kind::Write))
+        {
+            return WriteDecision::reject();
+        }
         match self.ask(Kind::Write, "confirm.request", |id| {
             wire::write_request(id, request)
         }) {

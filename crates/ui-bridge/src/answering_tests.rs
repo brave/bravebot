@@ -826,3 +826,68 @@ fn an_approved_unconfined_run_tells_the_scope_watch_and_a_confined_one_does_not(
         assert_eq!(*told.lock().unwrap(), told_of, "unconfined: {unconfined}");
     }
 }
+
+/// Decision 19: a write whose body nobody vouched for is not shown to a device, so where no
+/// connection that is not a device can answer, it is refused before it is asked, with nothing shown
+/// and no question number used, rather than left waiting on a device that is not offered it. Where
+/// one can answer, and for a body somebody vouched for, it is asked as before.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_untrusted_write_is_refused_unasked_where_only_a_device_could_answer_it() {
+    use bravebot_agent::confirm::{Intent, WriteRequest};
+    use bravebot_agent::diff::Diff;
+    let a_write = |untrusted: bool| WriteRequest {
+        written_since_checkout: false,
+        path: "notes.md".to_string(),
+        contents: "new\n".to_string(),
+        existing: None,
+        diff: Diff::compute("", "new\n"),
+        intent: Intent::Create,
+        untrusted,
+        remark: None,
+        protected: false,
+        credentials: Vec::new(),
+        may_always: false,
+        record: None,
+        may_edit: false,
+    };
+    for (untrusted, local, asked) in [
+        (true, false, false),
+        (true, true, true),
+        (false, false, true),
+    ] {
+        let answerers = Answerers::default();
+        let mut turn = a_turn(&answerers);
+        let locally: crate::device_view::Locally = Arc::new(move |session: &str, kind: Kind| {
+            assert_eq!((session, kind), ("s1", Kind::Write));
+            local
+        });
+        let mut confirmer = turn
+            .confirmer
+            .take()
+            .expect("the confirmer is free")
+            .answered_locally_by(Some(locally));
+        let (done, decided) = mpsc::channel();
+        std::thread::spawn(move || {
+            done.send(confirmer.confirm_write(&a_write(untrusted))).ok();
+        });
+        if asked {
+            let shown = turn.the_question_shown_as("confirm.request");
+            let request = shown["request"].as_u64().expect("a number");
+            assert!(
+                turn.running
+                    .answer(request, Reply::Write(Decision::Approve))
+            );
+            decided
+                .recv_timeout(PATIENCE)
+                .expect("the write was left waiting");
+        } else {
+            let decision = decided
+                .recv_timeout(PATIENCE)
+                .expect("the write was left waiting");
+            assert!(!decision.approved(), "untrusted {untrusted}, local {local}");
+            assert!(turn.nothing_was_published(), "the question was shown");
+            assert_eq!(turn.ids.load(Ordering::SeqCst), 0);
+        }
+    }
+}
