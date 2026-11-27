@@ -119,7 +119,8 @@ known costs, with what an attacker who owns the file gains.
 A complete one makes no such claim, so the planner can tell the difference between "nothing more"
 and "nothing more shown".
 
-Every cap counts: one that stopped at the limit on matches, one that stopped before it had opened
+Every cap counts: one that stopped at the limit on matches, one that stopped at the size of the
+result ([SEARCH-14](#SEARCH-14)), one that stopped before it had opened
 every file, and one that ran out of time are equally partial. The last two are the more dangerous,
 because with nothing found there is nothing to look incomplete. The claim reaches the planner
 whether or not it may read the result, since a notice written inside a body the planner is never
@@ -468,6 +469,44 @@ walk from above would skip its directory ([SEARCH-7](#SEARCH-7)), as a directory
 `verified-by: bravebot_agent::turn::a_search_may_name_one_file_as_its_target_through_the_tool`
 `verified-by: bravebot_agent::workspace::a_file_named_outright_is_searched_where_a_walk_from_above_would_skip_its_directory`
 `verified-by: bravebot_agent::workspace::a_file_vouched_under_a_link_spelling_outside_every_opened_directory_keeps_that_trust_in_a_search`
+
+<a id="SEARCH-14"></a>
+### SEARCH-14: a search result is held to a size in characters beside the caps in lines
+
+The lines of one result, matches and context together, come to at most 20,000 characters. Each line
+counts its path, the line number, its separators, its text and the newline after it, and a `--`
+line between groups of context counts as well. The first line is always kept, so a search that found
+something does not come back empty because of the size.
+
+The result keeps a prefix of what it would have written, in file and line order. A result that
+reached the size says it did, in the sentence that states the limit, whether or not the planner may
+read the result ([SEARCH-3](#SEARCH-3)), and names `output` `files` or `count`, less `context` or a
+narrower directory as ways to see more.
+
+A match the size dropped is left behind as one past the match cap is ([SEARCH-8](#SEARCH-8)): it
+is not in the count of matches, and the offset the result names asks for it, so a page after it
+returns the dropped match first and no match is skipped or shown twice. A dropped context line is
+not a match and has no offset ([SEARCH-10](#SEARCH-10)); a result that lost only context says it is
+incomplete and offers none. `output` `files` and `count` write no matching line, so the size does
+not apply to them ([SEARCH-12](#SEARCH-12)).
+
+The size is decided from the lengths of lines the workspace already holds. The driver carries the
+result and the two booleans that say it was cut, and does not branch on what the lines say.
+
+**Why.** The caps on matches (200), on context lines (1,000) and on a line (500 characters) count
+lines and not their total length, and together they allow results of several hundred thousand
+characters. A turn sends every result again with each later request until the conversation is
+compacted, so a search over a common identifier with context cost the planner that result on every
+round: in one recorded session eight searches of over 20,000 characters, the largest 120,463, were
+sent again about 21 million times in token terms. The match cap and the paging of
+[SEARCH-8](#SEARCH-8) already give a way to read the rest, so the size makes a large result cost
+the planner a page and a sentence. 20,000 characters is about 5,000 tokens at four characters a
+token.
+
+`verified-by: bravebot_agent::workspace::a_result_past_the_character_budget_is_cut_and_names_the_offset_that_continues_it`
+`verified-by: bravebot_agent::workspace::context_past_the_character_budget_is_cut_without_dropping_a_match`
+`verified-by: bravebot_agent::turn::a_released_search_over_the_character_budget_says_so_and_keeps_to_it`
+`verified-by: bravebot_agent::turn::a_search_over_the_character_budget_kept_back_after_asking_to_read_says_it_is_incomplete`
 
 <a id="SEARCH-12"></a>
 ### SEARCH-12: a search may return the files that match, or a count, instead of the lines

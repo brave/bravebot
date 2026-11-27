@@ -138,8 +138,11 @@ pub use results::{
 use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
     MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES, MIN_SEARCH_READS,
+    keep_within_budget,
 };
-pub(crate) use results::{MAX_ENTRIES, MAX_FILES_PER_DIRECTORY, MAX_SUBDIRECTORIES_PER_DIRECTORY};
+pub(crate) use results::{
+    MAX_ENTRIES, MAX_FILES_PER_DIRECTORY, MAX_SEARCH_CHARS, MAX_SUBDIRECTORIES_PER_DIRECTORY,
+};
 pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub(crate) use tree_mark::TreeMark;
@@ -3976,14 +3979,22 @@ impl Workspace {
                 }
             }
 
-            let truncated = matches.len() > MAX_MATCHES;
+            let at_the_match_cap = matches.len() > MAX_MATCHES;
             matches.truncate(MAX_MATCHES);
-            if truncated {
+            if at_the_match_cap {
                 // The match collected one past the cap is what detects the cap rather than part of the
                 // answer, so it is no part of the tally either: what was counted is what was returned
                 // plus what an offset passed over.
                 matched -= 1;
             }
+            // The caps above bound how many lines come back and not how long they are together, so
+            // the result is cut to a size of its own last. A match it drops is left behind exactly
+            // as one past the match cap is: it leaves the tally, and `first_match` plus what was
+            // returned is the offset that asks for it.
+            let returned = matches.len();
+            let (size_truncated, matches_dropped) = keep_within_budget(&mut matches, &mut around);
+            matched -= returned - matches.len();
+            let truncated = at_the_match_cap || matches_dropped;
 
             // No bytes of these were taken, so there is no pairing of bytes and label for a
             // boundary to keep (TRUST-4), and none is held while the event is emitted.
@@ -4003,6 +4014,7 @@ impl Workspace {
                     tallies,
                     tallies_truncated,
                     truncated,
+                    size_truncated,
                     unvisited,
                     timed_out,
                     considered,

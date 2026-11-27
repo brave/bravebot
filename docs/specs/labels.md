@@ -1042,17 +1042,24 @@ arrives at all.
   that buys them is on this list:
 
   - **Set the result's line and byte counts.** Within the caps the search keeps, which are 200
-    matches, 1,000 context lines and 200 files in a tally, with a line cut at 500 bytes. The
+    matches, 1,000 context lines and 200 files in a tally, with a line cut at 500 bytes and the
+    lines of one result held to 20,000 characters. The
     planner is shown both numbers for any quarantined content ([LABEL-3](#LABEL-3)), and an attacker
     who owns a file already sets them for a read of it.
   - **Make the search report itself incomplete.** By filling the cap on matches, the cap on context
-    lines or the cap on files in a tally, or by making files slow enough to read that the time cap
+    lines, the cap on files in a tally or the 20,000 characters of a result, or by making files slow
+    enough to read that the time cap
     stops the walk before it reaches the rest. The planner is told the result is incomplete and,
-    where the cap on matches was the reason, is given the offset for the next page, which is the
-    offset it asked for plus the cap. Being given that offset also tells it which cap was reached.
-    That is the fact of being cut short, which cap did it, and a number made of the offset the
-    planner supplied and the cap. It can cost the planner searches, since each page reads the tree
-    again, and nothing else.
+    where the cap on matches or the size of the result was the reason, is given the offset for the
+    next page, which is the offset it asked for plus the number of matches that were returned.
+    Where the cap on matches was the reason that number is the cap, and where the size was it is how
+    many matched lines of the lengths the attacker chose fit in 20,000 characters, so the offset
+    also tells the planner roughly how long those lines were. Being given that offset also tells it
+    which cap was reached.
+    That is the fact of being cut short, which cap did it, the rough length of the lines that
+    matched, and a number made of the offset the
+    planner supplied and the number returned. It can cost the planner searches, since each page reads
+    the tree again, and nothing else.
   - **Tell the planner how many matches there are.** Only when the planner asks for a page past the
     last match, and then as one number, which the caps above do not bound.
   - **Choose which matches fall on which page, and make one of their own files contribute

@@ -9262,11 +9262,13 @@ fn context_does_not_count_toward_the_match_cap_or_the_offset() {
 fn a_search_with_more_context_than_the_cap_allows_says_it_is_incomplete() {
     let scratch = Scratch::new("grep-context-cap");
     // Matches far enough apart that no two share a neighbour: 200 matches, 20 lines around each.
+    // The filler is one character, so the 1,000 context lines and the 200 matches come to well
+    // under the character budget and it is the cap on context lines that stops the result.
     let mut body = String::new();
     for n in 0..200 {
         body.push_str(&format!("needle {n}\n"));
-        for filler in 0..20 {
-            body.push_str(&format!("filler {n} {filler}\n"));
+        for _ in 0..20 {
+            body.push_str("f\n");
         }
     }
     std::fs::write(scratch.path.join("a.txt"), body).unwrap();
@@ -9274,6 +9276,10 @@ fn a_search_with_more_context_than_the_cap_allows_says_it_is_incomplete() {
     let found = search_around(&scratch.path, "needle", 1, 10);
     assert_eq!(found.matches.len(), 200);
     assert!(!found.truncated, "the matches themselves were complete");
+    assert!(
+        !found.size_truncated,
+        "the character budget stopped a result this test means the cap on context lines to stop"
+    );
     assert!(found.context_truncated);
     assert_eq!(found.context.len(), 1_000);
 
@@ -9282,6 +9288,109 @@ fn a_search_with_more_context_than_the_cap_allows_says_it_is_incomplete() {
         !small.context_truncated,
         "a result under the cap made the claim"
     );
+}
+
+/// The counts the caps hold say nothing about size: 150 matches is under the match cap, and 150
+/// lines of 400 characters is over 60,000 characters that the turn re-sends with every later
+/// request. The result stops at its budget, says where it stopped, and the offset it names asks for
+/// the next match, so nothing is skipped or shown twice.
+///
+/// A wrong implementation has no budget (the whole 150 come back), cuts the result without saying
+/// so, or cuts it without taking the dropped matches out of the count, so the offset skips them.
+#[test]
+fn a_result_past_the_character_budget_is_cut_and_names_the_offset_that_continues_it() {
+    let scratch = Scratch::new("grep-budget-matches");
+    let body: String = (1..=150)
+        .map(|n| format!("needle {n:03} {}\n", "x".repeat(400)))
+        .collect();
+    std::fs::write(scratch.path.join("a.txt"), body).unwrap();
+
+    let found = search_around(&scratch.path, "needle", 1, 0);
+    let kept = found.matches.len();
+    assert!(
+        found.size_truncated,
+        "a 60,000 character result made no claim"
+    );
+    assert!(
+        found.truncated,
+        "matches were left behind and the result does not say so"
+    );
+    assert!(
+        (1..150).contains(&kept),
+        "the budget kept {kept} of 150 matches"
+    );
+    let drawn: usize = found
+        .matches
+        .iter()
+        .map(|m| format!("{}:{}:{}\n", m.path, m.line, m.text).len())
+        .sum();
+    // 20,000 is the figure SEARCH-14 states.
+    assert!(drawn <= 20_000, "{kept} matches drew {drawn} characters");
+    assert_eq!(
+        found.matched, kept,
+        "a match left behind by the budget stayed in the count of those passed over"
+    );
+    assert_eq!(found.paging(), Some(Paging::Continue(kept + 1)));
+
+    let next = search_around(&scratch.path, "needle", kept + 1, 0);
+    assert_eq!(
+        next.matches.first().map(|m| m.line),
+        Some(found.matches[kept - 1].line + 1),
+        "the offset the cut result named skipped or repeated a match"
+    );
+
+    let small = search_around(&scratch.path, "needle 001", 1, 0);
+    assert!(!small.size_truncated && !small.truncated);
+}
+
+/// The budget counts the lines around a match as it counts the match, since the planner is sent
+/// both. Here every match is kept and the lines around the last one are not, so the result is
+/// incomplete while the matches are complete, and no offset is offered because none is needed.
+///
+/// A wrong implementation budgets matches alone (all 50 context lines of 480 characters come
+/// back, 24,000 characters), or drops a match whose context did not fit.
+#[test]
+fn context_past_the_character_budget_is_cut_without_dropping_a_match() {
+    let scratch = Scratch::new("grep-budget-context");
+    for name in ["a", "b", "c", "d", "e"] {
+        let mut body = String::from("needle\n");
+        for n in 0..10 {
+            body.push_str(&format!("{n:02}{}\n", "y".repeat(478)));
+        }
+        std::fs::write(scratch.path.join(format!("{name}.txt")), body).unwrap();
+    }
+
+    let found = search_around(&scratch.path, "needle", 1, 10);
+    assert_eq!(
+        found.matches.len(),
+        5,
+        "a match was dropped for its context"
+    );
+    assert!(
+        found.size_truncated,
+        "context past the budget made no claim"
+    );
+    assert!(
+        !found.truncated && found.paging().is_none(),
+        "only context was dropped, and an offset was offered for it"
+    );
+    assert!(
+        (40..50).contains(&found.context.len()),
+        "the budget kept {} of 50 context lines",
+        found.context.len()
+    );
+    let drawn: usize = found
+        .matches
+        .iter()
+        .map(|m| format!("{}:{}:{}\n", m.path, m.line, m.text).len())
+        .chain(
+            found
+                .context
+                .iter()
+                .map(|c| format!("{}-{}-{}\n", c.path, c.line, c.text).len()),
+        )
+        .sum();
+    assert!(drawn <= 20_000, "the result drew {drawn} characters");
 }
 
 /// A planner asking for the moon gets the largest context there is, on each side.
@@ -9907,6 +10016,7 @@ fn a_search_that_ran_out_of_time_offers_no_page_and_no_count() {
         tallies: Vec::new(),
         tallies_truncated: false,
         truncated,
+        size_truncated: false,
         unvisited: false,
         timed_out: true,
         considered: 3,
