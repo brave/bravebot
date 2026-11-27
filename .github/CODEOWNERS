@@ -73,12 +73,12 @@
 /ui/scripts/check-windows-install.mjs @bbondy
 /ui/scripts/windows-installer.mjs @bbondy
 
-# The Verus definitions, the contract ledger, the mutations each contract has to refuse, the copies
-# of fixed defects, and the scripts that check them. A contract is checked against these, so an
-# edit to one can weaken what `make check-verus` and `make check` hold every contract to
+# The Verus definitions and the scripts that check them. A contract is checked against these, so an
+# edit to one can weaken what `make check-verus` and `make check` hold every contract to. `verify/`
+# has no owner here: the `Proof weakened` workflow asks for a review of a change that weakens its
+# ledger, mutations or survivors, or edits its copies of fixed defects
 # (docs/development/verification.md).
 /crates/core/src/spec.rs @bbondy @darkdh
-/verify/ @bbondy @darkdh
 /contrib/check-verus.py @bbondy @darkdh
 /contrib/check-verus-contracts.py @bbondy @darkdh
 /contrib/check-verus-sweep.py @bbondy @darkdh
