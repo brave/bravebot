@@ -453,6 +453,15 @@ const api = {
   addFolder(session: string): Promise<null | { ok: unknown } | { error: { code: string; message: string } }> {
     return ipcRenderer.invoke('bravebot:folders:add', session) as Promise<null | { ok: unknown } | { error: { code: string; message: string } }>
   },
+  /**
+   * Ask the person for a plugin folder, natively, and ask the agent to install it (PLUGIN-1).
+   * `null` when nothing was picked; otherwise the agent's answer to `plugins.add`, `{ job }`, or its
+   * refusal. The job's questions and end arrive through `onEvent` as `plugins.question` and
+   * `plugins.ended`. There is no way to name the folder from here.
+   */
+  choosePluginFolder(): Promise<null | { ok: unknown } | { error: { code: string; message: string } }> {
+    return ipcRenderer.invoke('bravebot:plugins:choose-folder') as Promise<null | { ok: unknown } | { error: { code: string; message: string } }>
+  },
   chooseAttachments(session: string): Promise<FileAttachment[]> {
     return ipcRenderer.invoke('bravebot:files:choose-attachments', session) as Promise<FileAttachment[]>
   },

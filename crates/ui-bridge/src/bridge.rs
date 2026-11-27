@@ -315,6 +315,8 @@ pub struct Bridge {
     front_end: bravebot_agent::FrontEnd,
     /// The ChatGPT or xAI sign-in the window started, while it runs.
     sign_ins: crate::accounts::SignIns,
+    /// The plugin add or update the window started, while it runs.
+    plugin_jobs: crate::plugins::Jobs,
     /// Whether a session puts the questions about its checkout's settings once trust is answered
     /// (PERM-15). A client that has no way to answer them is built with
     /// [`Bridge::not_putting_project_questions`], and its sessions grant and open none of it.
@@ -348,6 +350,7 @@ impl Bridge {
             refuse_until_set: false,
             opening_in_ask: false,
             sign_ins: crate::accounts::SignIns::default(),
+            plugin_jobs: crate::plugins::Jobs::default(),
             putting_project_questions: true,
             project_questions: 0,
             acting: None,
@@ -626,6 +629,14 @@ impl Bridge {
             "connectors.disconnect" => crate::connectors::disconnect(request),
             "connectors.remove" => crate::connectors::remove(request),
             "hooks.inspect" => crate::hooks::inspect(),
+            "plugins.list" => crate::plugins::list(),
+            "plugins.enable" => crate::plugins::set_enabled(request, true),
+            "plugins.disable" => crate::plugins::set_enabled(request, false),
+            "plugins.remove" => crate::plugins::remove(request),
+            "plugins.add" => self.plugin_jobs.add(request, &self.emitter),
+            "plugins.update" => self.plugin_jobs.update(request, &self.emitter),
+            "plugins.reply" => self.plugin_jobs.reply(request),
+            "plugins.cancel" => self.plugin_jobs.cancel(request),
             "effort.get" => {
                 let directory = request.optional_string("directory").map(PathBuf::from);
                 let settings =
@@ -2097,6 +2108,7 @@ impl Bridge {
         self.emitter.go_quiet();
         self.stop_all();
         self.sign_ins.stop_running();
+        self.plugin_jobs.stop_running();
         crate::workers::Workers::all_end_within(&self.closing, limit)
     }
 

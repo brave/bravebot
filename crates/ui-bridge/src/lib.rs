@@ -77,6 +77,7 @@ pub mod mentions;
 pub mod models;
 mod open_loops;
 pub mod opener_names;
+pub mod plugins;
 mod project_questions;
 pub mod protocol;
 pub mod reports;

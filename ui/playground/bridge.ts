@@ -13,6 +13,7 @@ import type { Appearance } from '../src/shared/theme'
 import { parseHidden } from '../src/shared/panels'
 import type { Bot } from '../src/shared/bots'
 import type { EffortLevel, LogLevel } from '../src/shared/protocol'
+import type { InstallListing, PluginList, PluginRow, PluginsEnded, UpdateListing } from '../src/shared/plugins'
 import type {
   BridgeEvent, EventMap, EventName, ForkedSession, OpenedSession, RewindPoint, RewoundSession, Said, SessionSummary,
 } from '../src/shared/protocol'
@@ -87,6 +88,79 @@ const sessionBegan: EffortLevel | null = 'medium'
 let appearance: Appearance = (localStorage.getItem('playground:theme') as Appearance | null) ?? 'system'
 let requests = 100
 let created = 0
+
+// Plugins, as `plugins.list` reports them, and the one job the playground runs at a time. A job
+// puts its question as `plugins.question` and ends with `plugins.ended` when it is answered.
+const PLUGIN_STATE = '/Users/example/.bravebot'
+const PLUGIN_COMMIT = '4f1c2a9e0b7d3c5a6e8f9d0b1a2c3e4f5a6b7c8d'
+// A digest is 64 hex digits, as `/plugin add` records it.
+const pluginDigest = (seed: string): string => seed.repeat(Math.ceil(64 / seed.length)).slice(0, 64)
+let plugins: PluginRow[] = [
+  { name: 'review-kit', version: '1.2.0', source: 'https://github.com/example/review-kit.git', requestedRef: 'v1.2.0', commit: PLUGIN_COMMIT, digest: pluginDigest('9a8b7c6d5e4f'), enabled: true },
+  { name: 'notes', version: '0.3.1', source: '/Users/example/plugins/notes', requestedRef: null, commit: null, digest: pluginDigest('1b2c3d4e5f6a'), enabled: false },
+]
+let pluginJob: { job: string; question: number; kind: 'install' | 'update'; name: string; source: string } | null = null
+let pluginJobs = 0
+const pluginList = (): PluginList => ({ state: PLUGIN_STATE, writable: true, plugins })
+const pluginHook = (name: string) => ({
+  timeoutSecs: 30,
+  untrusted: { moment: 'turn-started', tool: null, watches: null, argv: [`${PLUGIN_STATE}/plugins/${name}/hooks/greet.sh`, '--quiet', 'two words'] },
+  reaches: [{ kind: 'command' as const, untrusted: `${PLUGIN_STATE}/plugins/${name}/hooks/greet.sh` }],
+})
+const pluginServer = {
+  usable: true, reachable: true, tooLong: false, neverStarted: false,
+  untrusted: { alias: 'search', transport: 'stdio', argv: ['node', 'server/index.js'], url: null, variables: ['SEARCH_TOKEN'], stored: ['MODE=fast'] },
+  reaches: [{ kind: 'command' as const, untrusted: 'node' }],
+}
+function installListing(name: string, source: string): InstallListing {
+  return {
+    git: false,
+    untrusted: { name, version: '2.3.4', source, requestedRef: null, commit: null, skipped: [] },
+    skills: [
+      { untrusted: { name: 'greet', description: 'Says hello in the language the person writes in.' }, shadowedBy: null },
+      { untrusted: { name: 'review', description: 'Reviews a diff.' }, shadowedBy: '~/.bravebot/skills/review' },
+    ],
+    definitions: [{ kind: 'worker', untrusted: { name: 'helper' }, shadowedBy: null }],
+    hooks: { rows: [pluginHook(name)], fault: null, passedOver: { entries: 0, keys: 0 } },
+    servers: { rows: [pluginServer], fault: null },
+    homeSourcesOnly: true,
+  }
+}
+function updateListing(plugin: PluginRow): UpdateListing {
+  const before = { untrusted: { name: 'greet', description: 'Says hello.' }, shadowedBy: null }
+  const after = { untrusted: { name: 'greet', description: 'Says hello in the language the person writes in.' }, shadowedBy: null }
+  return {
+    git: plugin.commit !== null,
+    enabled: plugin.enabled,
+    installedDigest: plugin.digest,
+    newDigest: pluginDigest('f0e1d2c3b4a5'),
+    untrusted: {
+      name: plugin.name, installedVersion: plugin.version, newVersion: '2.4.0', source: plugin.source, installedSource: plugin.source,
+      requestedRef: plugin.requestedRef, installedCommit: plugin.commit, newCommit: plugin.commit === null ? null : '7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6b5a4', skipped: [],
+    },
+    before: { readable: true, skills: [before], definitions: [], hooks: null, servers: null },
+    skills: [{ change: 'changed', was: before, now: after }],
+    definitions: [],
+    hooks: { deltas: [{ change: 'added', now: pluginHook(plugin.name) }], installedFault: null, newFault: null, passedOver: { entries: 0, keys: 0 } },
+    servers: null,
+    files: [{ change: 'changed', untrusted: 'skills/greet/SKILL.md' }, { change: 'added', untrusted: 'hooks/greet.sh' }, { change: 'added', untrusted: 'hooks.json' }],
+    homeSourcesOnly: true,
+  }
+}
+/** Start an add of `source`: answer with the job, then put the install question. */
+function addPlugin(source: string): { ok: { job: string } } | { error: { code: string; message: string } } {
+  if (pluginJob) return failed('bad_request', 'A plugin is already being installed or updated.')
+  if (!source.startsWith('/') && !source.includes('://')) return failed('bad_request', `${source} is not an absolute path.`)
+  const name = source.replace(/\/+$/, '').split('/').pop()?.replace(/\.git$/, '') || 'plugin'
+  const job = String(++pluginJobs)
+  pluginJob = { job, question: 1, kind: 'install', name, source }
+  setTimeout(() => emit('plugins.question', { job, question: 1, kind: 'install', listing: installListing(name, source) }), 300)
+  return ok({ job })
+}
+function endPlugins(job: string, outcome: PluginsEnded['outcome'], sentence: string): void {
+  pluginJob = null
+  setTimeout(() => emit('plugins.ended', { job, outcome, sentence, plugins }), 200)
+}
 
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
   if (signal?.aborted) return reject(new Cancelled())
@@ -432,6 +506,40 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     case 'watches.list': return ok({ busy: false, watches: [{ number: 1, path: 'src/cache.ts', state: 'watching', remainingSeconds: 86_400, armedBy: null }] })
     case 'watches.add': case 'watches.stop': return ok({ busy: false, watches: [] })
     case 'connectors.list': return ok({ connectors: [] })
+    case 'plugins.list': return ok(pluginList())
+    case 'plugins.enable': case 'plugins.disable': case 'plugins.remove': {
+      const name = params.name
+      if (!plugins.some((plugin) => plugin.name === name)) return failed('bad_request', `No plugin named ${String(name)} is installed.`)
+      plugins = method === 'plugins.remove'
+        ? plugins.filter((plugin) => plugin.name !== name)
+        : plugins.map((plugin) => (plugin.name === name ? { ...plugin, enabled: method === 'plugins.enable' } : plugin))
+      return ok(pluginList())
+    }
+    case 'plugins.add': return addPlugin(typeof params.source === 'string' ? params.source : '')
+    case 'plugins.update': {
+      const plugin = plugins.find((each) => each.name === params.name)
+      if (!plugin) return failed('bad_request', `No plugin named ${String(params.name)} is installed.`)
+      if (pluginJob) return failed('bad_request', 'A plugin is already being installed or updated.')
+      const job = String(++pluginJobs)
+      pluginJob = { job, question: 1, kind: 'update', name: plugin.name, source: plugin.source }
+      setTimeout(() => emit('plugins.question', { job, question: 1, kind: 'update', listing: updateListing(plugin) }), 300)
+      return ok({ job })
+    }
+    case 'plugins.reply': case 'plugins.cancel': {
+      const running = pluginJob
+      if (!running || running.job !== params.job) return ok({})
+      const yes = method === 'plugins.reply' && params.question === running.question && params.yes === true
+      if (running.kind === 'install') {
+        if (!yes) { endPlugins(running.job, 'declined', `Did not install ${running.name}.`); return ok({}) }
+        plugins = [...plugins, { name: running.name, version: '2.3.4', source: running.source, requestedRef: null, commit: null, digest: pluginDigest('c0ffee123456'), enabled: true }]
+        endPlugins(running.job, 'installed', `Installed ${running.name} from ${running.source}.`)
+      } else {
+        if (!yes) { endPlugins(running.job, 'declined', `Kept ${running.name} as it was.`); return ok({}) }
+        plugins = plugins.map((plugin) => (plugin.name === running.name ? { ...plugin, version: '2.4.0', digest: pluginDigest('f0e1d2c3b4a5') } : plugin))
+        endPlugins(running.job, 'updated', `Updated ${running.name}.`)
+      }
+      return ok({})
+    }
     case 'settings.inspect': return ok({
       build: '0.19.0 (playground)', configured: playground.configured, problem: playground.configured ? null : 'No model service is configured.', model: 'sample/fast', brave: false, bedrock: false,
       providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] },
@@ -532,6 +640,7 @@ const bridge: BravebotApi = {
   chooseDirectory: async () => DIRECTORY,
   // The playground has no picker, so a folder is never added.
   addFolder: async () => null,
+  choosePluginFolder: async () => addPlugin('/Users/example/plugins/greeter'),
   exportSession: async () => ({ status: 'saved', where: '/Users/example/Desktop/conversation.md' }),
   composeBugReport: async () => ({ available: true, text: 'Bravebot playground report\n\nNothing here is real.', log: null }),
   saveBugReport: async () => ({ status: 'saved', where: '/Users/example/Desktop/report.txt' }),

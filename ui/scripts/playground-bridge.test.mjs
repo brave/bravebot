@@ -148,3 +148,40 @@ test('background.list answers with a session in each state, as the bridge words 
     assert.equal(row.held !== null, row.state === 'needs-input')
   }
 })
+
+test('the plugin stubs answer as the bridge does, in shapes the shared parsers read', async () => {
+  const p = load('src/shared/plugins.ts')
+  const listed = p.parsePluginList((await request('plugins.list', {})).ok)
+  assert.ok(listed && listed.plugins.length > 0)
+  const events = []
+  const stop = window.bravebot.onEvent((event) => events.push(event))
+  const next = async (name) => {
+    const until = Date.now() + 5000
+    while (!events.some((event) => event.event === name)) {
+      if (Date.now() > until) throw new Error(`no ${name} event`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    return events.splice(events.findIndex((event) => event.event === name), 1)[0].data
+  }
+  try {
+    const job = p.parseJob((await request('plugins.add', { source: '/Users/example/plugins/greeter' })).ok)
+    const asked = p.parsePluginQuestion(await next('plugins.question'))
+    assert.equal(asked?.kind, 'install')
+    await request('plugins.reply', { job, question: asked.question, yes: true })
+    const ended = p.parsePluginsEnded(await next('plugins.ended'))
+    assert.equal(ended?.outcome, 'installed')
+    assert.ok(ended.plugins.some((plugin) => plugin.name === 'greeter'))
+
+    const update = p.parseJob((await request('plugins.update', { name: 'greeter' })).ok)
+    assert.equal(p.parsePluginQuestion(await next('plugins.question'))?.kind, 'update')
+    await request('plugins.cancel', { job: update })
+    assert.equal(p.parsePluginsEnded(await next('plugins.ended'))?.outcome, 'declined')
+
+    const disabled = p.parsePluginList((await request('plugins.disable', { name: 'greeter' })).ok)
+    assert.equal(disabled.plugins.find((plugin) => plugin.name === 'greeter').enabled, false)
+    const removed = p.parsePluginList((await request('plugins.remove', { name: 'greeter' })).ok)
+    assert.ok(!removed.plugins.some((plugin) => plugin.name === 'greeter'))
+  } finally {
+    stop()
+  }
+})

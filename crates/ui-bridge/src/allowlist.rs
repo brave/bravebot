@@ -302,6 +302,16 @@ pub const DENIED: &[&str] = &[
     "connectors.connect",
     "connectors.disconnect",
     "connectors.remove",
+    // Installed plugins. Only a person at the window installs, turns on or off, or removes one
+    // (PLUGIN-1, PLUGIN-11), so a client of the host may not reach any of them.
+    "plugins.list",
+    "plugins.enable",
+    "plugins.disable",
+    "plugins.remove",
+    "plugins.add",
+    "plugins.update",
+    "plugins.reply",
+    "plugins.cancel",
     "bot.define",
     "bot.list",
     "bot.migrate",

@@ -1,8 +1,9 @@
 //! The plugin update prompt (PLUGIN-9): what a fetch of the recorded source changed, as each part
 //! added, removed or changed in full, and one yes or no.
 //!
-//! The listing is built from two readings of data: the installed copy as [`Before`] holds it and the
-//! staged tree. Each part is drawn as the install prompt draws it (the same row builders), so a
+//! The listing is built in `bravebot_agent::plugin_listing`, which the desktop bridge lists from
+//! too, from two readings of data: the installed copy as `Before` holds it and the staged tree. Each
+//! part is drawn as the install prompt draws it (the same row builders), so a
 //! hook, a server, a skill or a definition reads the same wherever it is listed. Nothing here decides
 //! what runs or what is replaced: the comparison produces rows and nothing else, and a part that
 //! cannot be read is said in words, never listed as absent.
@@ -11,12 +12,7 @@
 //! `skip_permissions`, a yes is taken only from a typed y, and none is taken while any text of the
 //! plugin is cut or before every row has been drawn (`ask_drawing`).
 
-use bravebot_agent::plugin_source::Source;
-use bravebot_agent::plugins::{self, Before, Change, FileChange, Installed, Staged};
-use bravebot_agent::skills::Catalogue;
-use bravebot_config::hooks::Unkept;
-use bravebot_config::plugin::FileFault;
-use bravebot_core::delegate::Definitions;
+use bravebot_agent::plugins::{Change, FileChange};
 use bravebot_i18n::t;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -29,179 +25,10 @@ use crate::theme;
 use super::super::chrome::{answer_keys, centred, indented, panel};
 use super::super::pinned::{self, Drawn, Question, Seen};
 use super::super::{Next, next_press};
-use super::parts::{self, HookRow, Listed, Pen, ServerRow};
-use super::{
-    DefinitionRow, SkillRow, ask_drawing, definition_body, fact_list, skill_body, untrusted,
-};
+use super::parts::{self, Pen};
+use super::{ask_drawing, definition_body, fact_list, skill_body, untrusted};
 
-/// One part of the plugin that differs between the installed copy and the staged one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Delta<T> {
-    /// The staged tree has it and the installed copy does not.
-    Added(T),
-    /// The installed copy has it and the staged tree does not.
-    Removed(T),
-    /// Both have it and it differs.
-    Changed { was: T, now: T },
-}
-
-/// The difference in a hooks or servers file, and what could not be read of either side.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PartDeltas<T> {
-    pub deltas: Vec<Delta<T>>,
-    /// Why the installed copy's file could not be read, where it could not. What it held is then
-    /// not known, so every row of the new file shows as added and the listing says so.
-    pub installed_fault: Option<FileFault>,
-    /// Why the staged file could not be read, and what its reader passed over.
-    pub new_fault: Option<FileFault>,
-    pub new_unkept: Unkept,
-}
-
-/// The rows only a git source has: the commit installed and the one the recorded ref resolves to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpdateGit {
-    pub requested_ref: Option<String>,
-    pub installed_commit: String,
-    pub new_commit: String,
-}
-
-/// What the update prompt shows, built from the parts of the two trees and not from a field the
-/// manifest wrote about itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpdateRequest {
-    pub name: String,
-    pub installed_version: String,
-    pub new_version: String,
-    pub source: String,
-    /// `None` for a local path, which has no commit.
-    pub git: Option<UpdateGit>,
-    /// Whether the installed copy's manifest could be read. Where it could not, every part shows
-    /// as added and the listing says that.
-    pub installed_readable: bool,
-    pub skills: Vec<Delta<SkillRow>>,
-    pub definitions: Vec<Delta<DefinitionRow>>,
-    pub hooks: Option<PartDeltas<HookRow>>,
-    pub servers: Option<PartDeltas<ServerRow>>,
-    /// Every file that differs, so a change to a script the parts do not name is on the screen too.
-    /// `None` where the two trees could not be compared, and the listing says so.
-    pub files: Option<Vec<FileChange>>,
-}
-
-/// The deltas turning `old` into `new`. An item that is equal (by `same`) on both sides is not a
-/// delta. Of what is left, an item of `new` with the same `key` as one of `old` is changed, one with
-/// no partner is added, and an item of `old` with none is removed. Added and changed come in the
-/// order of `new`, then removed in the order of `old`.
-fn deltas<T: Clone>(
-    old: &[T],
-    new: &[T],
-    same: impl Fn(&T, &T) -> bool,
-    key: impl Fn(&T) -> String,
-) -> Vec<Delta<T>> {
-    let mut left: Vec<Option<&T>> = old.iter().map(Some).collect();
-    let mut unmatched: Vec<&T> = Vec::new();
-    for item in new {
-        let equal = left
-            .iter()
-            .position(|held| held.is_some_and(|held| same(held, item)));
-        match equal {
-            Some(at) => left[at] = None,
-            None => unmatched.push(item),
-        }
-    }
-    let mut found = Vec::new();
-    for item in unmatched {
-        let partner = left
-            .iter()
-            .position(|held| held.is_some_and(|held| key(held) == key(item)));
-        found.push(match partner.and_then(|at| left[at].take()) {
-            Some(was) => Delta::Changed {
-                was: was.clone(),
-                now: item.clone(),
-            },
-            None => Delta::Added(item.clone()),
-        });
-    }
-    found.extend(left.into_iter().flatten().cloned().map(Delta::Removed));
-    found
-}
-
-/// The difference between two readings of a hooks or servers file, `None` where neither names one.
-fn part_deltas<T: Clone + PartialEq>(
-    old: Option<&Listed<T>>,
-    new: Option<&Listed<T>>,
-    key: impl Fn(&T) -> String,
-) -> Option<PartDeltas<T>> {
-    if old.is_none() && new.is_none() {
-        return None;
-    }
-    let rows = |listed: Option<&Listed<T>>| listed.map_or_else(Vec::new, |some| some.rows.clone());
-    Some(PartDeltas {
-        deltas: deltas(&rows(old), &rows(new), |a, b| a == b, key),
-        installed_fault: old.and_then(|listed| listed.fault),
-        new_fault: new.and_then(|listed| listed.fault),
-        new_unkept: new.map_or_else(Unkept::default, |listed| listed.unkept),
-    })
-}
-
-impl UpdateRequest {
-    /// The difference between the installed plugin `installed`, as `before` read it, and `staged`.
-    /// `catalogue` and `definitions` are what discovery found for this session, so a name a
-    /// higher-ranked source takes is marked as shadowed.
-    pub fn from_parts(
-        staged: &Staged,
-        installed: &Installed,
-        before: &Before,
-        catalogue: &Catalogue,
-        definitions: &Definitions,
-    ) -> Self {
-        let (old_skills, old_definitions) =
-            super::offer_rows(&before.offers, catalogue, definitions);
-        let (new_skills, new_definitions) =
-            super::offer_rows(&plugins::staged_offers(staged), catalogue, definitions);
-        let git = match (installed.source.commit(), staged.source.commit()) {
-            (Some(old), Some(new)) => Some(UpdateGit {
-                requested_ref: match &staged.source {
-                    Source::Git { requested_ref, .. } => requested_ref.clone(),
-                    Source::Local(_) => None,
-                },
-                installed_commit: old.to_string(),
-                new_commit: new.to_string(),
-            }),
-            _ => None,
-        };
-        Self {
-            name: staged.manifest.name.clone(),
-            installed_version: installed.version.clone(),
-            new_version: staged.manifest.version.clone(),
-            source: staged.source.to_string(),
-            git,
-            installed_readable: before.readable,
-            skills: deltas(
-                &old_skills,
-                &new_skills,
-                |a, b| a.name == b.name && a.description == b.description,
-                |skill| skill.name.clone(),
-            ),
-            definitions: deltas(
-                &old_definitions,
-                &new_definitions,
-                |a, b| a.name == b.name && a.kind == b.kind,
-                |definition| definition.name.clone(),
-            ),
-            hooks: part_deltas(
-                parts::hooks_from(before.hooks.as_ref()).as_ref(),
-                parts::hooks_of(staged).as_ref(),
-                |hook| format!("{}\0{:?}\0{:?}", hook.moment, hook.tool, hook.watches),
-            ),
-            servers: part_deltas(
-                parts::servers_from(&installed.name, before.servers.as_ref()).as_ref(),
-                parts::servers_of(staged).as_ref(),
-                |server| server.alias.clone(),
-            ),
-            files: plugins::file_changes(staged, before),
-        }
-    }
-}
+pub use bravebot_agent::plugin_listing::{Delta, PartDeltas, UpdateRequest};
 
 /// Put the update question to the person, blocking until answered. Only a yes returns true.
 pub fn ask_update<B: Backend>(terminal: &mut Terminal<B>, request: &UpdateRequest) -> bool {
@@ -483,6 +310,9 @@ pub(super) fn draw_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_agent::plugin_listing::{HookRow, SkillRow, UpdateGit, deltas};
+    use bravebot_config::hooks::Unkept;
+    use bravebot_config::plugin::FileFault;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::collections::VecDeque;

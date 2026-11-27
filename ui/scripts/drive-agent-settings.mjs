@@ -173,7 +173,7 @@ try {
   assert.deepEqual((await app.evaluate(() => globalThis.agentSettingsFixture.state)).levels, ['debug', 'error'])
   // The model service and the accounts are the Providers page, the second in the list.
   assert.deepEqual(await dialog.locator('[data-test^="settings-page-"]').evaluateAll((items) => items.map((item) => item.dataset.test)),
-    ['settings-page-general', 'settings-page-providers', 'settings-page-connectors', 'settings-page-agent'])
+    ['settings-page-general', 'settings-page-providers', 'settings-page-connectors', 'settings-page-plugins', 'settings-page-agent'])
   assert.equal(await dialog.getByText('Model service configured', { exact: true }).count(), 0, 'the model service is not on Agent settings')
   await dialog.locator('[data-test="settings-page-providers"]').click()
   await dialog.getByRole('heading', { name: 'Model service configured', exact: true, level: 2 }).waitFor()

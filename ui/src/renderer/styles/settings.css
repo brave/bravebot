@@ -255,6 +255,73 @@ code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow
 .connector-variable leo-input { flex: 1; }
 .connector-warnings { margin: 0 0 var(--leo-spacing-s); padding-left: var(--leo-spacing-xl); }
 
+/* ------------------------------------------------------------ plugins
+
+   The plugins page of the settings. Each installed plugin is a block of the card: its name, version
+   and controls on one line, then its record as the settings table. */
+
+.plugins-alerts { display: flex; flex-direction: column; gap: var(--leo-spacing-m); margin-bottom: var(--leo-spacing-xl); padding: 0 var(--leo-spacing-2xl); }
+.plugins-alerts .settings-error { margin-bottom: 0; }
+.plugin-rows { margin: 0; padding: 0; list-style: none; }
+.plugin-row { gap: var(--leo-spacing-l); }
+.plugin-head { display: flex; align-items: center; gap: var(--leo-spacing-m); min-width: 0; min-height: var(--hit); }
+.plugin-name { min-width: 0; font: var(--type-title); color: var(--ink-primary); overflow-wrap: anywhere; }
+.plugin-head > leo-label { flex: none; font-variant-numeric: tabular-nums; }
+.plugin-actions { display: flex; flex: none; align-items: center; gap: var(--leo-spacing-m); margin-left: auto; }
+.plugin-record code { font: var(--type-code); color: var(--ink-primary); }
+.plugins-empty, .plugins-foot { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+.plugins-foot { padding: var(--leo-spacing-xl) var(--leo-spacing-2xl) 0; }
+.plugin-add { gap: var(--leo-spacing-m); }
+.plugin-add-help { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+.plugin-add-actions { display: flex; justify-content: flex-end; gap: var(--leo-spacing-m); }
+
+/* The questions an install or an update puts. The plugin's own text sits inside the untrusted
+   margin of `.confirm.untrusted`, one fact to a row; bravebot's own words sit under it. Each row
+   ends in a marker whose being on screen counts the row as read. */
+.plugin-question .confirm { box-shadow: none; }
+/* The host question's evidence box: no paragraph margin inside it, so its top and bottom padding
+   match, and the explanation under "Talking to" in meta type. */
+.modal .plugin-host p { margin: 0; }
+.plugin-host .plugin-host-note { font: var(--type-meta); }
+/* The sheet's body scrolls inside the dialog, so the dialog keeps its margin from the window and
+   its head and answers stay put. The bottom padding keeps the last line off the footer. */
+.plugin-sheet-scroll { max-height: 50vh; overflow-y: auto; padding-bottom: var(--leo-spacing-xl); }
+.plugin-sheet-section { display: flex; flex-direction: column; gap: var(--leo-spacing-s); min-width: 0; }
+.plugin-sheet-section h3 { margin: 0; font: var(--type-body-strong); color: var(--ink-primary); }
+.plugin-sheet-rows { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.plugin-sheet-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--leo-spacing-s) var(--leo-spacing-m); min-width: 0; overflow-wrap: anywhere; }
+/* A label and its value: the label in a fixed column, the value wrapping in the column beside it. */
+.plugin-sheet-row.plugin-sheet-pair { display: grid; grid-template-columns: 7em minmax(0, 1fr); gap: 0 var(--leo-spacing-m); }
+.plugin-sheet-value { min-width: 0; color: var(--ink-primary); }
+.plugin-sheet-row code, .plugin-argv code { font: var(--type-code); color: var(--ink-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.plugin-sheet-row-end { display: block; flex-basis: 100%; grid-column: 1 / -1; height: 1px; margin-top: -1px; }
+.plugin-sheet-label { color: var(--ink-secondary); }
+.plugin-sheet-note { color: var(--ink-secondary); }
+.plugin-sheet-words { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-s) var(--leo-spacing-m); }
+.plugin-change { display: flex; flex-direction: column; }
+.plugin-sheet-description { padding-left: var(--leo-spacing-xl); }
+.plugin-sheet-text { white-space: pre-wrap; color: var(--ink-primary); }
+/* Show more starts at the description's left edge: no padding, and Leo's small-button label inset
+   (its icon gap, `--leo-spacing-s`) taken back. */
+.plugin-show-more { --leo-button-padding: var(--leo-spacing-s) 0; margin-inline-start: calc(-1 * var(--leo-spacing-s)); }
+.plugin-sheet-fault { color: var(--leo-color-systemfeedback-warning-text); }
+/* Numbered inside the value column, so each word starts on the edge "On" and "Starts" values do. */
+.plugin-argv { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin: 0; padding: 0; list-style-position: inside; }
+.plugin-argv li::marker { font-variant-numeric: tabular-nums; color: var(--ink-tertiary); }
+.plugin-delta { display: flex; flex-direction: column; gap: var(--leo-spacing-s); padding-left: var(--leo-spacing-m); border-left: 2px solid var(--border-hairline); }
+.plugin-delta-word { font: var(--type-caption-strong); color: var(--ink-secondary); }
+.plugin-file-change, .plugin-delta-side { font: var(--type-caption); color: var(--ink-tertiary); }
+.plugin-delta-now { margin-top: var(--leo-spacing-m); }
+.plugin-delta-added { border-left-color: var(--leo-color-systemfeedback-success-icon); }
+.plugin-delta-removed { border-left-color: var(--leo-color-systemfeedback-error-icon); }
+.plugin-file-change { min-width: 6em; }
+.plugin-file-change.plugin-delta-added { color: var(--leo-color-systemfeedback-success-text); }
+.plugin-file-change.plugin-delta-removed { color: var(--leo-color-systemfeedback-error-text); }
+.plugin-sheet-after { display: flex; flex-direction: column; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-l); }
+.modal .plugin-sheet-after p { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+/* The hint takes what room the answers leave and wraps in it, so the answers stay on one line. */
+.plugin-sheet-progress { flex: 1 1 0; min-width: 0; margin-right: auto; font: var(--type-meta); color: var(--ink-secondary); align-self: center; text-wrap: pretty; }
+
 @media (max-width: 640px) {
   .settings-card dl, .settings-row { grid-template-columns: 1fr; }
   .settings-card dd { border-top: 0; padding-top: 0; padding-left: var(--leo-spacing-l); }

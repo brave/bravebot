@@ -10,6 +10,8 @@
 //! default: it fails while the bridge has a method the allowlist does not mention, and while the
 //! allowlist mentions one the bridge no longer has.
 
+#![allow(clippy::expect_used, reason = "a test fails by panicking")]
+
 use bravebot_ui_bridge::allowlist::{BY_THE_HOST, DENIED, OFFERED};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -72,6 +74,43 @@ fn the_allowlist_classifies_every_method_the_bridge_answers() {
         stale.is_empty(),
         "the host allowlist names methods the bridge does not answer: {stale:?}"
     );
+}
+
+/// PLUGIN-1, PLUGIN-11: only a person at the window installs, changes or removes a plugin, so
+/// every `plugins.*` method the bridge answers is denied to a client of the host and none is
+/// offered. The faults this rejects are a plugin method moved to the offered list and the methods
+/// dropped from the dispatch, which would leave the loop below with nothing to check.
+#[test]
+fn every_plugin_method_is_denied_to_a_client_of_the_host() {
+    let source =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bridge.rs"))
+            .expect("the bridge source");
+    let plugins: Vec<String> = dispatched(&source)
+        .into_iter()
+        .filter(|method| method.starts_with("plugins."))
+        .collect();
+    for method in [
+        "plugins.list",
+        "plugins.enable",
+        "plugins.disable",
+        "plugins.remove",
+        "plugins.add",
+        "plugins.update",
+        "plugins.reply",
+        "plugins.cancel",
+    ] {
+        assert!(
+            plugins.iter().any(|m| m == method),
+            "{method} is not answered"
+        );
+    }
+    for method in &plugins {
+        assert!(DENIED.contains(&method.as_str()), "{method} is not denied");
+        assert!(
+            OFFERED.iter().all(|operation| operation.method != method),
+            "{method} is offered"
+        );
+    }
 }
 
 #[test]

@@ -15,10 +15,6 @@
 mod parts;
 mod update;
 
-use bravebot_agent::plugin_source::Source;
-use bravebot_agent::plugins::{self, Offered, Staged};
-use bravebot_agent::skills::Catalogue;
-use bravebot_core::delegate::Definitions;
 use bravebot_i18n::t;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -34,7 +30,6 @@ use super::chrome::{answer_keys, centred, indented, panel};
 use super::pinned::{self, Approving, Drawn, Question, Seen};
 use super::{Next, next_press};
 
-pub use parts::{HookRow, Listed, ServerRow};
 #[cfg(test)]
 pub(crate) use update::ask_update_reading;
 pub use update::{Delta, UpdateRequest, ask_update};
@@ -42,111 +37,7 @@ pub use update::{Delta, UpdateRequest, ask_update};
 /// How many rows of one description are drawn before `e` is pressed.
 const DESCRIPTION_ROWS: usize = 3;
 
-/// A skill the plugin offers, as the prompt lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillRow {
-    pub name: String,
-    pub description: String,
-    /// What takes the name instead, where a source above a plugin offers it.
-    pub shadowed_by: Option<String>,
-}
-
-/// A definition the plugin offers, as the prompt lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DefinitionRow {
-    pub name: String,
-    pub kind: String,
-    pub shadowed_by: Option<String>,
-}
-
-/// The rows only a git source has (PLUGIN-4, PLUGIN-14).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitRows {
-    /// The ref the person typed after `#`, or `None` where they named none.
-    pub requested_ref: Option<String>,
-    /// The full 40-digit commit the clone resolved to.
-    pub commit: String,
-}
-
-/// What the install prompt shows. Built from the parts of the staged tree, not from a field the
-/// manifest wrote about itself (PLUGIN-4).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InstallRequest {
-    pub name: String,
-    pub version: String,
-    /// The source directory. A local path has no commit, so none is shown.
-    pub source: String,
-    /// What a git source adds to the listing. `None` for a local path, which has no commit, so
-    /// neither row is drawn for it.
-    pub git: Option<GitRows>,
-    pub skills: Vec<SkillRow>,
-    pub definitions: Vec<DefinitionRow>,
-    /// The hooks the plugin's hooks file declares, `${PLUGIN_ROOT}` already replaced. `None` where
-    /// the manifest names no hooks file.
-    pub hooks: Option<Listed<HookRow>>,
-    /// The servers the plugin's servers file declares, `${PLUGIN_ROOT}` already replaced. `None`
-    /// where the manifest names no servers file.
-    pub servers: Option<Listed<ServerRow>>,
-}
-
-impl InstallRequest {
-    /// The listing of `staged`, with each name a higher-ranked source offers marked as shadowed.
-    /// `catalogue` and `definitions` are what discovery found for this session.
-    pub fn from_staged(staged: &Staged, catalogue: &Catalogue, definitions: &Definitions) -> Self {
-        let (skills, kinds) = offer_rows(&plugins::staged_offers(staged), catalogue, definitions);
-        Self {
-            name: staged.manifest.name.clone(),
-            version: staged.manifest.version.clone(),
-            source: staged.source.to_string(),
-            git: git_rows(&staged.source),
-            skills,
-            definitions: kinds,
-            hooks: parts::hooks_of(staged),
-            servers: parts::servers_of(staged),
-        }
-    }
-}
-
-/// The skill and definition rows of `offers`, each name a higher-ranked source offers marked as
-/// shadowed. Shared by the install listing and the update difference.
-pub(super) fn offer_rows(
-    offers: &[plugins::Offer],
-    catalogue: &Catalogue,
-    definitions: &Definitions,
-) -> (Vec<SkillRow>, Vec<DefinitionRow>) {
-    let mut skills = Vec::new();
-    let mut kinds = Vec::new();
-    for mark in plugins::shadow_marks(offers, catalogue, definitions) {
-        match mark.offer.what {
-            Offered::Skill { description } => skills.push(SkillRow {
-                name: mark.offer.name,
-                description,
-                shadowed_by: mark.by,
-            }),
-            Offered::Definition { kind } => kinds.push(DefinitionRow {
-                name: mark.offer.name,
-                kind: kind.to_string(),
-                shadowed_by: mark.by,
-            }),
-        }
-    }
-    (skills, kinds)
-}
-
-/// The rows only a git source has, or `None` for a local path, which has no commit.
-pub(super) fn git_rows(source: &Source) -> Option<GitRows> {
-    match source {
-        Source::Local(_) => None,
-        Source::Git {
-            requested_ref,
-            commit,
-            ..
-        } => Some(GitRows {
-            requested_ref: requested_ref.clone(),
-            commit: commit.to_string(),
-        }),
-    }
-}
+pub use bravebot_agent::plugin_listing::{DefinitionRow, GitRows, InstallRequest, SkillRow};
 
 /// What a key at the prompt did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -507,6 +398,7 @@ fn shadow_rows(lines: &mut Vec<Line<'static>>, by: Option<&str>, width: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_core::delegate::Definitions;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::KeyEvent;
     use std::collections::VecDeque;

@@ -1168,6 +1168,32 @@ except `connectors.preview` returns what `connectors.list` returns.
 - `connectors.disconnect` takes `alias` and takes the request out of the home settings file,
   keeping the declaration and its approval. `connectors.remove` also deletes those.
 
+#### Plugins
+
+The plugins installed under `~/.bravebot/plugins`, managed from the window's settings
+(docs/specs/plugins.md). The bridge refuses every `plugins.*` method to a host client. With no
+state directory each answers `no_home`. `ui/src/shared/plugins.ts` parses every answer and event
+below, and refuses a payload of the wrong shape whole.
+
+- `plugins.list` takes nothing and returns `{ state, writable, plugins }`. Each plugin is
+  `{ name, version, source, requestedRef, commit, digest, enabled }` from its record, with
+  `requestedRef` and `commit` null for a local source. Nothing is hashed (PLUGIN-9).
+- `plugins.enable` and `plugins.disable` take `name` and set the record's `enabled`.
+  `plugins.remove` takes `name` and deletes the plugin and its record. Each returns what
+  `plugins.list` returns, asks nothing (PLUGIN-11), and refuses a bad or unknown name with
+  `bad_request` and the sentence `/plugin` says.
+- `plugins.add` takes `source`, an absolute path or a git URL with an optional `#ref`, and
+  `plugins.update` takes `name`. Each returns `{ job }` at once and runs the shared install or
+  update in the background, one job at a time. A relative path, and a second job while one runs,
+  are refused with `bad_request`. In the app, `source` is what the person typed into the add form,
+  or the folder the main process's native picker returned (`bravebot:plugins:choose-folder`, which
+  calls `plugins.add` itself), so nothing in a transcript can name it (PLUGIN-1).
+- Each question a job puts is a `plugins.question` event. `plugins.reply` takes
+  `{ job, question, yes }` and answers it. Only `yes: true` with the number of the open question
+  is a yes. A reply to another number, `plugins.cancel { job }`, the window closing and the bridge
+  ending are each a no. A reply to a job that has ended answers `{}`.
+- A job ends with one `plugins.ended` event.
+
 #### `trust.reply`
 
 ```json
@@ -1301,6 +1327,8 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `enhance.done` | `{ status, text?, removed?, limit?, message? }` | what a `session.enhance` came back with: `ready` (`text`, and `removed` characters that draw as nothing taken out), `untrusted`, `unusable` (empty or past `limit` characters), `stopped`, or `failed` (`message`) |
 | `aside.done` | `{ status, question, recap, answer?, kept?, message? }` | what a `session.btw` or `session.recap` came back with: `answered` (`answer`, and `kept`, whether the record keeps it), `stopped`, or `failed` (`message`). `question` is the row's label: the person's question, or `/recap` for a recap |
 | `schedule.ran` | `{ lines, refused, running }`, as `schedule.command` answers | the end of a `/schedule run-now` started by `schedule.command`: the line saying how the run ended, never the run's captured result |
+| `plugins.question` | `{ job, question, kind, listing }`, `question` numbered from 1 within the job, `kind` one of `host` (`listing` is `{ host, url }`), `install` (the install listing) or `update` (the update difference); every string the plugin wrote sits under an `untrusted` key and is drawn inside the untrusted margin | a `plugins.add` or `plugins.update` job asking the person (PLUGIN-3, PLUGIN-4, PLUGIN-9), no `session` |
+| `plugins.ended` | `{ job, outcome, sentence, plugins }`, `outcome` one of `installed`, `updated`, `unchanged`, `declined`, `nobody`, `refused`, and `plugins` as `plugins.list` lists them | the end of a plugin job, no `session` |
 | `phase` | `{ phase, retry }`, where `retry` is `{ attempt, in_ms, gives_up_in_ms }` while a failed request waits to be sent again and `null` otherwise | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |

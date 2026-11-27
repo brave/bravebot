@@ -354,13 +354,13 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 `drive-bot-summon`, `drive-bot-turn`, `drive-bots`, `drive-close-chat`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
-`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`,
+`drive-permission-mode`, `drive-plugins`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-spend-limit`, `drive-shown`, `drive-turn-details`,
 `drive-ux-acceptance`, `drive-vetting`, `drive-visual`, `drive-window-lifecycle` and `drive-perf`.
 
 `drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
 `drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-menu`, `drive-note-changelog-awake`, `drive-paste`,
-`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`, `drive-spend-limit` and `drive-vetting`
+`drive-permission-mode`, `drive-plugins`, `drive-remembered-trust`, `drive-rewind`, `drive-rule-check`, `drive-rules`, `drive-sandbox-mode`, `drive-spend-limit` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
 the temporary profile its caller made. `drive-manual-walkthrough`, `drive-note-changelog-awake`, `drive-remembered-trust`,
 `drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the
