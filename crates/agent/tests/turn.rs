@@ -67903,6 +67903,7 @@ fn apply_after_a_worker_wrote_files(
     let home = Scratch::new(&format!("{tag}-home"));
     repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let writes_before_count = writes_before.len();
     let mut planner: Vec<String> = writes_before
         .into_iter()
         .map(|call| tool_request("write_file", call))
@@ -67923,22 +67924,34 @@ fn apply_after_a_worker_wrote_files(
             .map(|call| tool_request("apply_checkout", call)),
     );
     planner.push(reply_with("applied"));
-    let (endpoint, received) = serve_by_marker(vec![
-        ("HAVE-A-DELEGATE-WRITE-TO-APPLY", planner),
-        (
-            "WRITE-OUT-TO-APPLY",
-            worker_writes
-                .iter()
-                .map(|(path, contents)| {
-                    tool_request(
-                        "write_file",
-                        &format!(r#"{{"path":"{path}","contents":"{contents}"}}"#),
-                    )
-                })
-                .chain([reply_with("wrote it")])
-                .collect(),
-        ),
-    ]);
+    // The worker's replies are held until the planner's request answered "waiting" has arrived.
+    // That request is made after the turn last looked for finished delegates, so the worker is
+    // still outstanding when the planner answers and the turn waits for it. A worker back sooner
+    // would be joined into that request, and "waiting" would end the turn before any apply.
+    let waiting_request = writes_before_count + 2;
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            ("HAVE-A-DELEGATE-WRITE-TO-APPLY", planner),
+            (
+                "WRITE-OUT-TO-APPLY",
+                worker_writes
+                    .iter()
+                    .map(|(path, contents)| {
+                        tool_request(
+                            "write_file",
+                            &format!(r#"{{"path":"{path}","contents":"{contents}"}}"#),
+                        )
+                    })
+                    .chain([reply_with("wrote it")])
+                    .collect(),
+            ),
+        ],
+        Order::After {
+            held: "WRITE-OUT-TO-APPLY",
+            after: "HAVE-A-DELEGATE-WRITE-TO-APPLY",
+            asked: waiting_request,
+        },
+    );
     let (asked, confirmer, sink) = run_in_a_repository_answering(
         &workspace,
         &home.path,
@@ -67946,6 +67959,10 @@ fn apply_after_a_worker_wrote_files(
         &received,
         "HAVE-A-DELEGATE-WRITE-TO-APPLY",
         confirmer,
+    );
+    assert!(
+        held.load(Ordering::SeqCst),
+        "{tag}: the worker had ended before the planner answered \"waiting\""
     );
     (asked, confirmer, scratch, sink)
 }
