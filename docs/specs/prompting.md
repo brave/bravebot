@@ -449,7 +449,9 @@ card with, are not counted. The planner's own questions approve nothing and wait
 the rows have been on screen the row of answers says how many are left and an approval refuses a
 press, and a refusal is taken at once. Nothing counts before the card is first measured, a press is
 measured again when it lands, and a change in the card's width, or in how many rows an element
-draws, starts the count again.
+draws, starts the count again. While a card waits, a scroll the window makes on its own is done in
+one step and is not animated, because an animated scroll passes every row of the card across the
+screen and those rows would count as read though nobody scrolled the card.
 
 **Why.** Reviewing a whole file body on a terminal is not review, which is why `edit_file` exists
 on a passage rather than a whole body. A prompt that scrolled the question away would be collecting a keypress, not a decision. A card
@@ -491,7 +493,7 @@ in a window is the same question asked with a mouse, so it owes the same.
 `verified-by: bravebot_tui::trust_prompt::paging_through_a_list_on_a_short_terminal_reads_every_rule`
 `verified-by: bravebot_tui::trust_prompt::a_question_a_small_terminal_cuts_off_takes_no_answer`
 `verified-by: bravebot_tui::trust_prompt::a_question_that_fits_its_box_says_nothing_of_scrolling`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs pins that every row an approval rests on is marked as deciding for each kind of card and that the count opens, resets and stays shut as described, and make check-ui runs it; ui/scripts/drive-shown.mjs draws each card too tall for a 900x560 window and checks, independently of the card's own count, that no approval opens or is taken before those rows have been on screen, and that rows swept through under the overlay drawn while a file is dragged over the transcript, which takes no pointer, count for nothing until the drag ends; ui/scripts/shown-name.test.mjs renders the window's startup question and asserts that the directory, the rows saying what an answer does and the row naming the file are marked as deciding and that its yes is held shut under both labels and its no is not, and ui/scripts/drive-shown.mjs asks that question in the real window with a directory too long for it and checks that its yes is refused until those rows have been on screen, and that it opens once they have, although the composer's fade lies under the window's dialog and not over it)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs pins that every row an approval rests on is marked as deciding for each kind of card and that the count opens, resets and stays shut as described, and make check-ui runs it; ui/scripts/drive-shown.mjs draws each card too tall for a 900x560 window and checks that the window starts no smooth scroll while the card waits and that the transcript does not pass through more than two positions as it comes to the card, and, independently of the card's own count, that no approval opens or is taken before those rows have been on screen, and that rows swept through under the overlay drawn while a file is dragged over the transcript, which takes no pointer, count for nothing until the drag ends; ui/scripts/shown-name.test.mjs renders the window's startup question and asserts that the directory, the rows saying what an answer does and the row naming the file are marked as deciding and that its yes is held shut under both labels and its no is not, and ui/scripts/drive-shown.mjs asks that question in the real window with a directory too long for it and checks that its yes is refused until those rows have been on screen, and that it opens once they have, although the composer's fade lies under the window's dialog and not over it)`
 
 ## What an answer means
 

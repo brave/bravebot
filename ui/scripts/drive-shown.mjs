@@ -46,6 +46,8 @@ try {
       if (method === 'agent.info') return { ok: info }
       if (method === 'session.list') return { ok: { sessions: [row] } }
       if (method === 'models.list') return { ok: models }
+      if (method === 'session.limit') return { ok: { limit: null, spent: 0 } }
+      if (method === 'session.variant') return { ok: { model: p.model ?? null, offered: [], variant: null } }
       if (method === 'session.open') return { ok: { ...opened, session: 's-' + id, record: { ...row, ...opened.record } } }
       return { ok: {} }
     })
@@ -80,9 +82,26 @@ try {
   const DIALOG = { card: '.modal.trust', actions: '.trust-answers', approve: '.trust-answers .approve', reject: '.trust-answers [data-test="trust-decline"]' }
   const watch = (found, where = CARD) => page.evaluate(({ tokens, standing, where }) => {
     const all = [...tokens, ...standing]
-    const state = { card: null, seen: new Set(), width: null, quiet: 0, violations: [], stopped: false }
+    const state = { card: null, seen: new Set(), width: null, quiet: 0, violations: [], smooth: [], tops: new Set(), stopped: false }
     globalThis.oracle?.stop()
-    globalThis.oracle = { state, stop: () => { state.stopped = true }, seen: () => [...state.seen], unseen: () => all.filter((token) => !state.seen.has(token)) }
+    const find = () => [...document.querySelectorAll(where.card)].find((card) => all.every((token) => card.textContent?.includes(token))) ?? null
+    // A smooth scroll the window starts while a card in the transcript waits carries the card's
+    // rows across the screen, so each call asking for one is recorded, however few frames it takes.
+    const smooth = (name) => {
+      const card = find()
+      if (!state.stopped && card?.closest('.entries') && card.querySelector(where.actions)) state.smooth.push(name)
+    }
+    globalThis.oracle = { state, stop: () => { state.stopped = true }, smooth, seen: () => [...state.seen], unseen: () => all.filter((token) => !state.seen.has(token)) }
+    if (!globalThis.smoothWatched) {
+      globalThis.smoothWatched = true
+      for (const name of ['scrollIntoView', 'scrollTo']) {
+        const original = Element.prototype[name]
+        Element.prototype[name] = function (...args) {
+          if (args[0]?.behavior === 'smooth') globalThis.oracle?.smooth(name)
+          return original.apply(this, args)
+        }
+      }
+    }
     const closed = (button) => button.hasAttribute('disabled') || button.getAttribute('aria-disabled') === 'true'
     const occurrence = (token) => {
       const walker = document.createTreeWalker(state.card, NodeFilter.SHOW_TEXT)
@@ -116,9 +135,12 @@ try {
     }
     const tick = () => {
       if (state.stopped) return
-      state.card ??= [...document.querySelectorAll(where.card)].find((card) => all.every((token) => card.textContent?.includes(token))) ?? null
+      state.card ??= find()
       if (state.card?.isConnected && state.card.querySelector(where.actions)) {
         const width = state.card.getBoundingClientRect().width
+        // The trust dialog is not in the transcript, so it has no transcript position to record.
+        const entries = state.card.closest('.entries')
+        if (entries) state.tops.add(Math.round(entries.scrollTop))
         // The card's count is a frame behind what is on screen, so after a change of width the
         // buttons are left a few frames to close before an open one is held against it.
         if (state.width !== null && Math.abs(width - state.width) > 0.5) { state.seen.clear(); state.quiet = 6 }
@@ -201,6 +223,13 @@ try {
     await emit(found.event, found.request)
     const card = page.locator('.confirm', { hasText: found.tokens[0] })
     await card.waitFor()
+    // The window comes to a waiting card at once. A scroll animated across it would carry every row
+    // past the reader and count it read: the frames are given for such a scroll to show.
+    await frames(8)
+    const smooth = await page.evaluate(() => globalThis.oracle.state.smooth)
+    assert.deepEqual(smooth, [], `${name}: the window started a smooth scroll while the card waited: ${smooth.join(', ')}`)
+    const tops = await page.evaluate(() => [...globalThis.oracle.state.tops])
+    assert.ok(tops.length <= 2, `${name}: the transcript scrolled across the card by itself, through ${tops.length} positions: ${tops.join(', ')}`)
     await toBottom(card)
 
     // Too tall for the window, so at the bottom of the transcript some of it is above the fold.
@@ -239,6 +268,7 @@ try {
     assert.equal(reply.request, found.request.request, `${name}: answered the right question`)
     assert.equal(reply.decision, 'approve', `${name}: the answer`)
     assert.deepEqual(await violations(), [], `${name}: an approval was open early`)
+    assert.deepEqual(await page.evaluate(() => globalThis.oracle.state.smooth), [], `${name}: the window started a smooth scroll while the card waited`)
     assert.deepEqual(await app.evaluate(() => globalThis.shown.thrown), [], `${name}: the main process threw`)
     await page.evaluate(() => globalThis.oracle.stop())
     answered.push(name)
