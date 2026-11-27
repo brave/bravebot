@@ -14004,7 +14004,7 @@ fn an_openai_key_is_in_no_file_a_run_writes_and_nothing_it_prints() {
                 "the refused run never asked the gateway: {stderr}"
             );
             assert!(
-                stderr.contains("returned HTTP 401"),
+                stderr.contains("the service would not accept the credentials (HTTP 401)"),
                 "the refused run did not report the refusal: {stderr}"
             );
         }
@@ -14019,6 +14019,73 @@ fn an_openai_key_is_in_no_file_a_run_writes_and_nothing_it_prints() {
                 !text.contains(KEY),
                 "the key is in {path:?} after the {case} run"
             );
+        }
+    }
+}
+
+/// CLI-12, BACKEND-37: a one-shot run whose credentials the service refuses reports it as the
+/// terminal does, in text and in `--json`: that the service would not accept the credentials, with
+/// the status, and the commands that show the sign-in or key in use and the endpoint. The address of
+/// the service and the words it wrote are not in either, and the request is not a premium one, so
+/// the premium key's commands are not named. The status of the run is the failure status and the
+/// result object carries its identifier.
+///
+/// The regressions it rejects are the report that names the address and the status and no command
+/// (`<url> returned HTTP 401`), a remedy that is dropped for one of the two statuses, the premium
+/// key's commands named for a request that carried none, and the service's own words in the report.
+#[test]
+fn a_refused_credential_is_reported_by_the_one_shot_run_as_the_terminal_says_it() {
+    for status in [401u16, 403] {
+        for json in [false, true] {
+            let gateway = a_gateway(r#"["tools"]"#, move |_| {
+                http(status, r#"{"error": {"message": "WORDS-OF-THE-SERVICE"}}"#)
+            });
+            let settings = format!(
+                r#"{{"provider": {{"openrouter": {{"env": ["OPENROUTER_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}}}}}},
+                    "model": "openrouter/reasons-only"}}"#,
+                gateway.port
+            );
+            let scratch = Scratch::new(&format!("cli-running-refused-credential-{status}-{json}"))
+                .with_settings(&settings);
+            let mut environment = NOTHING_CONFIGURED.to_vec();
+            environment.push(("OPENROUTER_API_KEY", "placeholder-variable-key"));
+            let mut arguments = vec!["-p", "say something"];
+            if json {
+                arguments.push("--json");
+            }
+
+            let output = bravebot(&scratch.path, &environment, &arguments);
+
+            let (stdout, stderr) = said(&output);
+            let case = format!("{status}, json {json}: {stdout}{stderr}");
+            assert_eq!(output.status.code(), Some(1), "{case}");
+            let sentence = format!(
+                "the service would not accept the credentials (HTTP {status}). Run \
+                 `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` \
+                 to see the endpoint"
+            );
+            assert!(
+                stderr
+                    .lines()
+                    .any(|found| found == format!("BB1001: {sentence}")),
+                "{case}"
+            );
+            if json {
+                let result: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+                assert_eq!(result["message"], sentence.as_str(), "{case}");
+                assert_eq!(result["identifier"], "BB1001", "{case}");
+            }
+            for said in [&stdout, &stderr] {
+                for left_out in [
+                    "returned HTTP",
+                    "127.0.0.1",
+                    "WORDS-OF-THE-SERVICE",
+                    "auth login brave",
+                ] {
+                    assert!(!said.contains(left_out), "{left_out} in {case}");
+                }
+            }
         }
     }
 }
