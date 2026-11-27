@@ -173,6 +173,8 @@ mod tests {
                 data: json!({"request": 9, "path": SENTINEL, "untrusted": true}),
             }),
         );
+        // A question kind a device is offered, so only the flag withholds it.
+        update.rows[4].event = Some("confirm.request".into());
         let kept: Vec<(u64, u64, RowKind, Option<String>, bool)> = update
             .rows
             .iter()

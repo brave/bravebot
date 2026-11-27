@@ -137,16 +137,22 @@ impl Attached {
 /// later ones while it takes an earlier one:
 ///
 /// 1. [`Served`], the lock a request is answered under;
-/// 2. the bridge's emitter lock, which every event and snapshot is sent under;
-/// 3. a session's answerers, which [`crate::answerers::Answerers::set_by`] holds while it calls
+/// 2. a session's pending question, which a turn's thread holds while it calls
+///    [`answered_locally`] through [`crate::device_view::Locally`] and while it sends the question,
+///    and which [`Served::lose`] takes to refuse a question only a local connection may answer;
+/// 3. the bridge's emitter lock, which every event and snapshot is sent under;
+/// 4. a session's answerers, which [`crate::answerers::Answerers::set_by`] holds while it calls
 ///    the scope watch;
-/// 4. [`Owners`], which [`on_widening`] holds from start to end and a join's hand-over takes;
-/// 5. [`Latest`], then this sink, then [`Viewed`], each taken under the owners and let go quickly.
+/// 5. [`Owners`], which [`on_widening`] holds from start to end and a join's hand-over takes;
+/// 6. [`Latest`], then this sink, then [`Viewed`], each taken under the owners and let go quickly.
+///    [`answered_locally`] takes [`Viewed`], the owners and this sink one at a time, each let go
+///    before the next.
 ///
 /// A turn's thread never takes [`Served`], and the scope watch never takes the emitter, the
 /// answerers or a session's pending question. A new path that holds the owners, this sink, the
-/// latest scopes or the viewed sessions and then takes the emitter or the answerers would make a
-/// cycle, and so would one that calls the scope watch while it holds the emitter.
+/// latest scopes or the viewed sessions and then takes a pending question, the emitter or the
+/// answerers would make a cycle, and so would one that calls the scope watch while it holds the
+/// emitter.
 type Sink = Arc<Mutex<HashMap<u64, Attached>>>;
 
 /// The connection whose request is being answered, or 0 for none. An event that names no session,
