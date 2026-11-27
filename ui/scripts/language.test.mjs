@@ -23,14 +23,27 @@ test('a bridge that fails leaves the window in English', async () => {
   assert.equal(await askLocale(async () => ({ ok: { inUse: 7 } })), 'en-US')
 })
 
+// A call that has not returned by the deadline fails with the message. The deadline bounds a call
+// that waits on a bridge that never answers, and a loaded machine has to stall for all of it.
+const DEADLINE_MS = 30000
+function within(promise, message) {
+  let timer
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), DEADLINE_MS) })
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer))
+}
+
 test('a bridge that answers late leaves the window in English rather than blank', async () => {
   assert.equal(LANGUAGE_WAIT_MS, 3000)
-  const slow = () => new Promise((resolve) => setTimeout(() => resolve({ ok: { inUse: 'fr' } }), 200))
-  const started = Date.now()
-  assert.equal(await askLocale(slow, 20), 'en-US')
-  assert.ok(Date.now() - started < 150, 'the wait was not cut short')
-  assert.equal(await askLocale(() => new Promise(() => {}), 20), 'en-US')
-  assert.equal(await askLocale(slow, 1000), 'fr')
+  // The bridge answers when the test says so, which is after the wait has ended, so how late a
+  // loaded machine runs the wait's timer does not decide whether the answer was late.
+  let answerNow
+  const silent = () => new Promise((resolve) => { answerNow = () => resolve({ ok: { inUse: 'fr' } }) })
+  assert.equal(await within(askLocale(silent, 20), 'the window waited on a bridge that had not answered'), 'en-US')
+  answerNow()
+  assert.equal(await within(askLocale(() => new Promise(() => {}), 20), 'the window waited on a bridge that never answers'), 'en-US')
+  // An answer inside a wait too long for a loaded machine to outlast is read.
+  const prompt = () => new Promise((resolve) => setTimeout(() => resolve({ ok: { inUse: 'fr' } }), 20))
+  assert.equal(await within(askLocale(prompt, DEADLINE_MS), 'the window did not read an answer that arrived in time'), 'fr')
 })
 
 test('a restart waits for every running turn, since quitting would end it', () => {

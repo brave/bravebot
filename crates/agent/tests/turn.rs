@@ -1513,6 +1513,12 @@ fn serve_rounds_slowing_the_checks(
 /// What a request holds once the turn has told the planner that job:1 finished.
 const JOB_1_FINISHED: &str = "The background job you started as job:1 has finished";
 
+/// The deadline of a wait for a background job to start and do what a test is gated on, such as
+/// writing its pid or a file. A job is confined before it runs, which takes seconds on a loaded
+/// machine, and the wait ends as soon as the file exists, so the figure bounds a job that never
+/// starts and costs a run that passes nothing.
+const JOB_PROGRESS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// The command a planner stand-in runs in the foreground while it waits to hear about a job.
 const SOMETHING_ELSE: &str = "sleep 0.2";
 
@@ -25047,7 +25053,7 @@ fn a_kept_job_that_writes_after_its_turn_is_counted_in_the_turn_that_learns_of_i
         "the job wrote before its turn ended, so nothing here was tested"
     );
     std::fs::write(&opened, "").unwrap();
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let until = std::time::Instant::now() + JOB_PROGRESS_DEADLINE;
     while !scratch.path.join("made.txt").exists() {
         assert!(
             std::time::Instant::now() < until,
@@ -25214,7 +25220,7 @@ fn a_job_stopped_with_the_turn_counts_what_it_wrote_before_the_stop() {
         Some(Some(match step {
             1 => tool_request("run", r#"{"command":"sh ./lingers","background":true}"#),
             2 => {
-                let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let until = std::time::Instant::now() + JOB_PROGRESS_DEADLINE;
                 while !made.exists() && std::time::Instant::now() < until {
                     thread::sleep(std::time::Duration::from_millis(20));
                 }
@@ -77545,6 +77551,10 @@ fn one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_p
 /// bound runs out is reported as running, with the window the call watched, so a planner that
 /// asked for two seconds can tell a job that was watched for two seconds from one that was
 /// looked at once. A wait that output ended would report a window well short of the bound.
+///
+/// The planner's wait is not made until the job has printed its first line and written `started`.
+/// A job is confined before it runs, and one that took longer than the bound to begin would
+/// otherwise spend the whole window starting and print nothing in it.
 #[test]
 fn a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing() {
     let scratch = Scratch::new("background-until-exit-bound");
@@ -77553,7 +77563,7 @@ fn a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_pr
     let endless = scratch.path.join("endless");
     std::fs::write(
         &endless,
-        "#!/bin/sh\ni=0\nwhile [ $i -lt 150 ]; do echo tick-$i; i=$((i + 1)); sleep 0.2; done\n",
+        "#!/bin/sh\necho tick-0\n: > started\ni=1\nwhile [ $i -lt 150 ]; do echo tick-$i; i=$((i + 1)); sleep 0.2; done\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -77563,14 +77573,26 @@ fn a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_pr
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_sequence(vec![
-        tool_request("run", r#"{"command":"./endless","background":true}"#),
-        tool_request(
-            "job_output",
-            r#"{"job":"job:1","wait_seconds":2,"until_exit":true}"#,
-        ),
-        reply_with("done"),
-    ]);
+    let started = scratch.path.join("started");
+    let mut step = 0;
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |_| {
+        step += 1;
+        Some(Some(match step {
+            1 => tool_request("run", r#"{"command":"./endless","background":true}"#),
+            2 => {
+                let until = std::time::Instant::now() + JOB_PROGRESS_DEADLINE;
+                while !started.exists() && std::time::Instant::now() < until {
+                    thread::sleep(std::time::Duration::from_millis(20));
+                }
+                tool_request(
+                    "job_output",
+                    r#"{"job":"job:1","wait_seconds":2,"until_exit":true}"#,
+                )
+            }
+            3 => reply_with("done"),
+            _ => return None,
+        }))
+    });
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -78798,7 +78820,7 @@ impl StopsItsJob {
     }
 
     fn ask(&self) {
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let until = std::time::Instant::now() + JOB_PROGRESS_DEADLINE;
         while !std::fs::read_to_string(&self.pid).is_ok_and(|pid| pid.ends_with('\n')) {
             assert!(std::time::Instant::now() < until, "the job wrote no pid");
             std::thread::sleep(std::time::Duration::from_millis(10));
