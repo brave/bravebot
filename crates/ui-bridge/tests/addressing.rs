@@ -789,8 +789,8 @@ fn the_at_list_leaves_out_a_definition_whose_name_is_no_slug() {
     );
     let names: Vec<&str> = offered["ok"]["entries"]
         .as_array()
-        .expect("rows")
-        .iter()
+        .into_iter()
+        .flatten()
         .filter(|row| row["kind"] == "definition")
         .map(|row| row["path"].as_str().unwrap())
         .collect();
