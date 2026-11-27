@@ -10,6 +10,8 @@ says there is none. Contracts sit on the code that ships, so an edit that breaks
 | Item | Contract |
 |---|---|
 | `Integrity::meet`, `Confidentiality::join` | Each returns the pessimistic answer |
+| `sandbox_rules::quote::seatbelt_literal` | A path written into a Seatbelt profile reads back, by Seatbelt's rules for a string literal, as exactly the path, and nothing after the literal's closing quotation mark is read as part of it, so no path writes profile syntax (SANDBOX-4) |
+| `sandbox_rules::quote::quoted` | An argument written onto a Windows command line reads back, by `CommandLineToArgvW`'s rules for a quoted argument, as exactly the argument, ending at its closing quotation mark, so no argument splits into two or runs into the next (SANDBOX-4). Which arguments `command_line` quotes, and what `cmd.exe` does with its line, are not proved |
 | `Capability::output_label`, `Policy::observe`, `Policy::before_fetch`, `Policy::before_search` | Whatever a capability observes is labelled untrusted: a fetch and a search public, every other read private, and a write has no label |
 | `CapabilitySet::contains`, `CapabilitySet::within`, `CapabilitySet::revoke_mcp_call`, `Policy::before_capability` | A capability is used exactly where the run holds it. A set narrowed by a parent holds only what both hold, so a delegate and a turn addressed to a definition hold nothing their parent lacks, and withdrawing a server's grant takes that grant and no other |
 | `Label::degrades_to` | It is the axis-by-axis order taint travels in, which `crates/core/src/spec.rs` proves a lattice with `(T,priv)` and `(U,pub)` incomparable, in which the taint of two labels is their least upper bound |

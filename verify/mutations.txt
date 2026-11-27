@@ -801,3 +801,19 @@ replace: q = (q - t) / (BASE - t); => q = (q - t) / 2;
 mutation: digits_of stops at a threshold of 36 or more, so the last digit it pushes can be past z9
 file: crates/core/src/punycode.rs
 replace: } else if k >= bias + T_MAX { => } else if k >= bias + T_MAX + 20 {
+
+mutation: seatbelt_literal leaves a quotation mark in a path unescaped, so the path can end the literal and write profile syntax
+file: crates/sandbox-rules/src/quote.rs
+replace: let escapes = character == '\\' || character == '"'; => let escapes = character == '\\';
+
+mutation: seatbelt_literal leaves a backslash in a path unescaped, so it cancels the escape of a quotation mark after it
+file: crates/sandbox-rules/src/quote.rs
+replace: let escapes = character == '\\' || character == '"'; => let escapes = character == '"';
+
+mutation: quoted writes a quotation mark in an argument without doubling the backslashes before it, so the argument ends early
+file: crates/sandbox-rules/src/quote.rs
+replace: push_backslashes(&mut quoted, backslashes + 1); => push_backslashes(&mut quoted, 1);
+
+mutation: quoted does not double the backslashes before the closing quotation mark, so they escape it and the argument runs on
+file: crates/sandbox-rules/src/quote.rs
+replace: push_backslashes(&mut quoted, backslashes); => push_backslashes(&mut quoted, 0);

@@ -24,3 +24,5 @@
 use vstd::prelude::*;
 
 pub mod quote;
+#[cfg(verus_keep_ghost)]
+mod spec;
