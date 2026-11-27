@@ -613,15 +613,15 @@ impl Confinement {
     /// SANDBOX-28). The grant is still held, so a move back gives the write again.
     fn reach_in_force(&self) -> Rules {
         let held = self.reach_held();
-        let read_only = self.mode == SandboxMode::ReadOnly;
+        let writes = self.mode.writes_what_was_granted();
         let read: Vec<PathBuf> = held
             .iter()
-            .filter(|row| read_only || !row.write)
+            .filter(|row| !writes || !row.write)
             .map(|row| row.path.clone())
             .collect();
         let write: Vec<PathBuf> = held
             .iter()
-            .filter(|row| !read_only && row.write)
+            .filter(|row| writes && row.write)
             .map(|row| row.path.clone())
             .collect();
         Rules::granted(&read, &write)
@@ -671,7 +671,8 @@ impl Confinement {
     /// platform with a home directory but Windows, where a grant is an access-control entry written
     /// onto each directory and so cannot be made for the entries of the home directory.
     pub fn writes_without_a_request(&self) -> bool {
-        self.unasked_writes && self.mode == SandboxMode::WorkspaceWrite && self.reads_the_machine()
+        self.mode
+            .writes_without_a_request(self.unasked_writes, self.reads_the_machine())
     }
 
     /// The entries of the person's filesystem lists, each with what became of it, for a report.
@@ -701,7 +702,7 @@ impl Confinement {
     /// Whether `scope` is lent to a stage. The remote scope is not under `read-only`: it is how a
     /// stage pushes, and it writes `~/.ssh/known_hosts` (SANDBOX-22).
     fn lends(&self, scope: Scope) -> bool {
-        !(self.mode == SandboxMode::ReadOnly && scope == Scope::Remote)
+        scope != Scope::Remote || self.mode.lends_the_remote_scope()
     }
 
     /// Whether a stage carrying or asked for `scope` is lent the agent socket the stage starts
@@ -725,7 +726,7 @@ impl Confinement {
     fn egress_reason(&self, step: &Step) -> Option<&'static str> {
         // `network()` already closes it, but `egress()` and `network_for_the_trail` would hand a
         // read-only stage the network back through a reason (SANDBOX-22).
-        if self.mode == SandboxMode::ReadOnly {
+        if !self.mode.keeps_the_network_for_a_reason() {
             return None;
         }
         // Every reason below is read from the file name, so a file the plan could have written
@@ -850,9 +851,7 @@ impl Confinement {
     /// runs unasked. It is held to the same sandbox as the line that wrote it, which is what this
     /// answer relies on.
     pub fn holds(&self, steps: &[&Step], directory: &Path) -> Containment {
-        let held = !matches!(self.mode, SandboxMode::Off)
-            && self.prelude == Prelude::MacOs
-            && !steps.is_empty();
+        let held = self.mode.confines() && self.prelude == Prelude::MacOs && !steps.is_empty();
         if !held {
             return Containment::Unknown;
         }
@@ -1405,7 +1404,8 @@ impl Confinement {
     /// held to the listed rows instead. So is every step in the strict mode, which is that choice
     /// made by a person where the other is made by a missing home (SANDBOX-22).
     fn reads_the_machine(&self) -> bool {
-        self.prelude != Prelude::Windows && self.home.is_some() && self.mode != SandboxMode::Strict
+        self.mode
+            .reads_the_machine(self.prelude == Prelude::Windows, self.home.is_some())
     }
 
     /// The toolchain list and the credential scope a step brings to its profile.
@@ -1583,9 +1583,9 @@ impl Confinement {
         policy: SandboxPolicy,
         home: &Path,
     ) -> SandboxPolicy {
-        match self.mode {
-            SandboxMode::ReadOnly => toolchain.grant_reads(policy, home, self.state()),
-            _ => toolchain.grant(policy, self.prelude, home, self.state()),
+        match self.mode.writes_a_toolchain_cache() {
+            true => toolchain.grant(policy, self.prelude, home, self.state()),
+            false => toolchain.grant_reads(policy, home, self.state()),
         }
     }
 
@@ -1791,7 +1791,7 @@ impl Confinement {
 
         if let Some(home) = self.home.as_deref() {
             // The caches are written, which `read-only` does not do (SANDBOX-22).
-            if self.reads_the_machine() && self.mode != SandboxMode::ReadOnly {
+            if self.mode.writes_every_cache(self.reads_the_machine()) {
                 policy = Toolchain::grant_every_cache(policy, self.prelude, home, self.state());
             }
             // A step with an assignment in front carries no scope, so this is the socket the
@@ -1846,7 +1846,7 @@ impl Confinement {
 
         // The session's directories are read in every mode and written in every mode but
         // `read-only` (SANDBOX-22). What a person's yes adds below is theirs to widen.
-        let writes_the_session = self.mode != SandboxMode::ReadOnly;
+        let writes_the_session = self.mode.writes_the_session();
         for root in &self.roots {
             policy = policy.allow_read(root);
             if writes_the_session {
@@ -3227,15 +3227,13 @@ fn cannot_keep_from_sockets(
     mode: SandboxMode,
     capabilities: &bravebot_sandbox::policy::Capabilities,
 ) -> Option<String> {
-    (matches!(mode, SandboxMode::Strict | SandboxMode::ReadOnly)
-        && !capabilities.governs_sockets_with_a_path)
-        .then(|| {
-            format!(
-                "the sandbox mode is {mode} (sandbox.mode) and this kernel cannot keep a program \
+    (mode.needs_sockets_governed() && !capabilities.governs_sockets_with_a_path).then(|| {
+        format!(
+            "the sandbox mode is {mode} (sandbox.mode) and this kernel cannot keep a program \
                  from a unix socket that has a path, such as the user's D-Bus, the SSH agent or \
                  docker.sock; {mode} needs Landlock ABI 9, which is Linux 7.1 or newer"
-            )
-        })
+        )
+    })
 }
 
 /// What a local server's policy becomes under the session's decision about the network

@@ -9,39 +9,7 @@
 use crate::programs::program_name;
 use std::path::Path;
 
-/// What a session decided about the network for the programs it starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Network {
-    /// Every stage keeps the egress the base grants.
-    #[default]
-    Open,
-    /// A stage has no egress unless it carries a reason to.
-    Closed,
-}
-
-impl Network {
-    /// The word a settings file, a flag and a report spell it with.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Closed => "closed",
-        }
-    }
-
-    /// The setting a word names, or `None` for a word that names neither.
-    pub fn parse(word: &str) -> Option<Self> {
-        match word.trim() {
-            "open" => Some(Self::Open),
-            "closed" => Some(Self::Closed),
-            _ => None,
-        }
-    }
-
-    /// Whether this is the setting that removes reach.
-    pub fn is_closed(self) -> bool {
-        self == Self::Closed
-    }
-}
+pub use bravebot_sandbox_rules::mode::Network;
 
 /// Whether the program a stage resolved to exists to talk to a remote host.
 ///
