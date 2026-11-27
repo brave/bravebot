@@ -60695,28 +60695,40 @@ fn the_token_total_moves_while_a_delegate_works_and_counts_it_once() {
     std::fs::write(scratch.path.join("a.txt"), "one line").expect("written");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, _received) = serve_by_marker(vec![
-        (
-            "DELEGATE-SOMETHING",
-            vec![
-                tool_request_with_usage(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
-                    1000,
-                    10,
-                ),
-                reply_with_usage("waiting", 1100, 10),
-                reply_with_usage("relayed", 1200, 10),
-            ],
-        ),
-        (
-            "SAY-SOMETHING-SHORT",
-            vec![
-                tool_request_with_usage("read_file", r#"{"path":"a.txt"}"#, 200, 20),
-                reply_with_usage("REPORTED BACK", 300, 30),
-            ],
-        ),
-    ]);
+    // The delegate's replies are held until the planner's second request has arrived. That request
+    // is made after the turn last looked for finished delegates, so the planner's "waiting" is
+    // answered with the delegate still outstanding and the turn asks a third time once it is
+    // joined. A delegate back before the second request would be joined into it, and "waiting"
+    // would end the turn after two requests.
+    let (endpoint, _received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-SOMETHING",
+                vec![
+                    tool_request_with_usage(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                        1000,
+                        10,
+                    ),
+                    reply_with_usage("waiting", 1100, 10),
+                    reply_with_usage("relayed", 1200, 10),
+                ],
+            ),
+            (
+                "SAY-SOMETHING-SHORT",
+                vec![
+                    tool_request_with_usage("read_file", r#"{"path":"a.txt"}"#, 200, 20),
+                    reply_with_usage("REPORTED BACK", 300, 30),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "SAY-SOMETHING-SHORT",
+            after: "DELEGATE-SOMETHING",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -60735,6 +60747,10 @@ fn the_token_total_moves_while_a_delegate_works_and_counts_it_once() {
     )
     .expect("turn runs");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate had ended before the planner answered \"waiting\""
+    );
     assert_eq!(outcome.tokens, 3880, "the turn's own count changed");
     assert_eq!(reporter.finished, 1, "the delegate was never joined");
 
