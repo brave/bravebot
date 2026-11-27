@@ -478,6 +478,16 @@ times a second, so the stream is never quiet, and the step ends as soon as it go
 each step longer than the slowest reply you expect and the script will still run at the speed of
 the model.
 
+A step that types keys ends only once the interface has written something after its last key and
+then gone still. An interface that is busy writes nothing, and the next step's keys typed then
+would wait on the terminal beside this step's and be read with them, which the interface does not
+take as a press. A step whose keys draw nothing therefore runs for its whole timeout.
+
+Before a step's last key, the driver reads what the earlier keys drew until the interface has been
+quiet for 0.3 seconds, for at most 2 seconds, and that output does not count. An interface that is
+still drawing after 2 seconds, or that draws an earlier key more than 0.3 seconds late, can still
+end the step while it is busy.
+
 ### Asserting against the output
 
 Pass `--squash`, and search for text with the spaces taken out:

@@ -17,7 +17,10 @@ land in the box and the Enter at the end of it would not send. See `PACE` below.
 Waiting is by silence rather than by clock. While a turn runs the spinner animates several times
 a second, so the stream is never quiet; the moment it stops, the turn is over. So each step names
 the longest it will wait and returns as soon as the screen has been still for a moment, which is
-both quicker and far less brittle than sleeping for a guess.
+both quicker and far less brittle than sleeping for a guess. A step that types keys waits for the
+interface to write something after its last key before the stillness counts, since an interface
+that is busy is as still as one waiting for a key. What the earlier keys drew is read off first,
+within `DRAIN_QUIET` and `DRAIN_LIMIT`; output later than that still counts.
 
 What this is not is a terminal emulator. Escape sequences are stripped rather than interpreted,
 so what comes out has the right characters in the right order and the wrong shape: a sentence the
@@ -138,11 +141,25 @@ def keystrokes(keys):
             at += 1
 
 
-def type_in(terminal, keys):
-    """Type a step in the way a person would, a character at a time."""
-    for stroke in keystrokes(keys):
+#: Silence that ends the read of what a step's earlier keys drew, before its last key is typed.
+DRAIN_QUIET = 0.3
+#: The longest that read runs, for an interface that keeps drawing (a spinner, a stream).
+DRAIN_LIMIT = 2.0
+
+
+def type_in(terminal, keys, before_last=None):
+    """Type a step in the way a person would, a character at a time.
+
+    `before_last` runs just before the last key of a step of more than one key is written, so what
+    the interface drew for the keys before it can be read off first and not be taken as its answer
+    to the last one.
+    """
+    strokes = list(keystrokes(keys))
+    for at, stroke in enumerate(strokes):
         if stroke[0] in DECIDING:
             time.sleep(PACE * 5)
+        if before_last and at > 0 and at == len(strokes) - 1:
+            before_last()
         os.write(terminal, stroke.encode())
         time.sleep(PACE)
 
@@ -162,10 +179,17 @@ def drive(argv, steps, env=None, cols=120, rows=40, quiet=1.5, settle=5.0):
 
     captured = []
 
-    def pump(timeout):
-        """Read until the stream has been quiet for `quiet`, or `timeout` passes. False if gone."""
+    def pump(timeout, typed=False):
+        """Read until the stream has been quiet for `quiet`, or `timeout` passes. False if gone.
+
+        With `typed`, the quiet counts only once the interface has written something since the
+        step's last key was typed. An interface that is busy is as quiet as one that is waiting for
+        a key, and the next step typed while it is busy waits on the tty beside this one's keys, so
+        the two arrive together and neither is a press (INPUT-34).
+        """
         deadline = time.time() + timeout
         last = time.time()
+        heard = not typed
         while time.time() < deadline:
             ready, _, _ = select.select([terminal], [], [], 0.2)
             if ready:
@@ -177,20 +201,40 @@ def drive(argv, steps, env=None, cols=120, rows=40, quiet=1.5, settle=5.0):
                     return False
                 captured.append(chunk.decode("utf-8", "replace"))
                 last = time.time()
-            elif time.time() - last >= quiet:
+                heard = True
+            elif heard and time.time() - last >= quiet:
                 return True
         return True
+
+    def drain():
+        """Read what the step's earlier keys drew, until the stream is quiet for `DRAIN_QUIET`.
+
+        A loaded machine can draw a key some time after it was typed, so reading only what has
+        already arrived would leave a late echo to be taken as the answer to the last key. Bounded
+        by `DRAIN_LIMIT` so an interface that never stops drawing still gets its last key.
+        """
+        deadline = time.time() + DRAIN_LIMIT
+        while time.time() < deadline:
+            if not select.select([terminal], [], [], DRAIN_QUIET)[0]:
+                return
+            try:
+                chunk = os.read(terminal, 65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            captured.append(chunk.decode("utf-8", "replace"))
 
     pump(settle)
     for timeout, keys in steps:
         if keys:
             try:
-                type_in(terminal, keys)
+                type_in(terminal, keys, before_last=drain)
             except OSError:
                 # The child is gone. Whatever it managed to say before it went is the reason, and
                 # it is already captured, so stop rather than raising over the top of it.
                 break
-        if not pump(timeout):
+        if not pump(timeout, typed=bool(keys)):
             break
     pump(quiet * 2)
 
