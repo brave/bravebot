@@ -4392,7 +4392,11 @@ where
                     state.mcp.as_ref().map(|(offer, _)| offer),
                     &*conversation.quarantine(),
                     call,
-                    crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
+                    crate::repeated_call::refusal(
+                        &call.function.name,
+                        state.repeats.count(),
+                        plan.beside,
+                    ),
                 ))
             } else {
                 None

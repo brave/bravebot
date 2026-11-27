@@ -108002,6 +108002,32 @@ mod repeated_call {
         assert_eq!(ran.trail.len(), 3, "{:?}", ran.trail);
     }
 
+    /// TURN-9: a third identical `run` call is held like any other. It is not run, nobody is
+    /// asked, the planner is told to wait on a background job, and the turn goes on to the reply.
+    /// Rejects: running the held command, putting a question about it, the generic text for
+    /// `run`, and ending the turn at the refusal.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_third_identical_run_is_refused_with_the_route_for_a_command() {
+        let same = || tool_request("run", r#"{"command":"true"}"#);
+        let ran = run(
+            "repeat-run",
+            vec![same(), same(), same(), reply_with("done")],
+            vec![run_it()],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty(), "{:?}", ran.asked);
+        assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert_eq!(told.matches("It exited 0.").count(), 2, "{told}");
+        assert!(told.contains("same run call 3 times"), "{told}");
+        assert!(told.contains("background: true"), "{told}");
+        assert!(told.contains("job_output with wait_seconds"), "{told}");
+        assert!(!told.contains("Try a different call"), "{told}");
+        assert_eq!(ran.requests.len(), 4, "the turn did not go on to the reply");
+    }
+
     fn start_a_job() -> String {
         tool_request("run", r#"{"command":"sleep 30","background":true}"#)
     }

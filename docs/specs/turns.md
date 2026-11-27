@@ -554,8 +554,15 @@ ended or is not one of this turn's is counted and refused as any other call.
 **The refusal says what to do instead.** The error the planner is given names the tool and the
 count. For `job_output` it also says that the end of a background job is reported in a message of
 its own, that `wait_seconds` waits for a running job, and that a shell loop that sleeps is not a
-way to wait. For any other tool it says to try a different call or carry on with the rest of the
-task. The route is chosen from the tool name the planner wrote.
+way to wait. For `run` it says to start the command with `background: true` and to wait with
+`job_output` and `wait_seconds`, adding `until_exit` where only the end of the job matters, and
+that a shell loop that sleeps is stopped at its deadline, where one that prints only when it
+finishes has printed nothing. Where the turn's list does not hold `job_output`, the text for `run`
+names neither `background` nor `job_output` and says to run the command once with a
+`deadline_seconds` long enough for it ([TOOL-6](tools/tool-surface.md#TOOL-6)). The text names no
+figure for the deadline or the wait, since the person's settings can change both
+([run.md](tools/run.md)). For any other tool it says to try a different call or carry on with the
+rest of the task. The route is chosen from the tool name the planner wrote.
 
 **The turn goes on.** The refusal does not end the turn. A planner that keeps repeating the call
 is bound only by the limits that bound any turn ([TURN-1](#TURN-1), [TURN-8](#TURN-8)).
@@ -575,6 +582,8 @@ result ([TRACE-2](trace.md#TRACE-2)). There is no setting for the number.
 `verified-by: bravebot_agent::repeated_call::the_same_arguments_in_another_key_order_are_the_same_call`
 `verified-by: bravebot_agent::repeated_call::a_call_passed_without_counting_starts_the_count_again`
 `verified-by: bravebot_agent::repeated_call::the_refusal_names_the_tool_and_the_count_and_gives_a_route`
+`verified-by: bravebot_agent::repeated_call::the_refusal_of_a_run_call_says_to_wait_on_a_background_job`
+`verified-by: bravebot_agent::turn::a_third_identical_run_is_refused_with_the_route_for_a_command`
 `verified-by: bravebot_agent::tools::tests::arguments::a_bounded_wait_on_a_running_job_is_waited_on`
 `verified-by: bravebot_agent::tools::tests::arguments::a_look_a_kill_or_a_refused_wait_is_not_waited_on`
 `verified-by: bravebot_agent::tools::tests::arguments::a_wait_on_a_job_that_has_ended_is_not_waited_on`
