@@ -19,6 +19,8 @@ export interface MentionEntry {
   kind: 'file' | 'directory' | 'session' | 'definition'
   /** A definition row's description, else `null`. From the bridge. */
   description: string | null
+  /** A definition row's marker, the `[@name]` a pick writes into the draft, built by `bravebot_mentions::marker` as the terminal's is; else `null`. From the bridge. */
+  marker: string | null
 }
 
 /** The bridge's answer to `mentions.offer` for one line and one cursor row. */
@@ -39,9 +41,15 @@ export function offerOf(answer: Partial<MentionOffer> | undefined): MentionOffer
     : { typed: null, word: null, entries: [], completes: false }
 }
 
-/** The definition a row addresses when it is picked, or `null` for a row that is written as an `@` name (ADDRESS-2). */
-export function definitionOf(entry: MentionEntry): { name: string; description: string | null } | null {
-  return entry.kind === 'definition' ? { name: entry.path, description: entry.description ?? null } : null
+/**
+ * The definition a row addresses when it is picked, with the marker the bridge built for it, or
+ * `null` for a row that is written as an `@` name (ADDRESS-2). A definition row with no marker is
+ * out of shape and picks nothing, so the window never makes a marker of its own.
+ */
+export function definitionOf(entry: MentionEntry): { name: string; description: string | null; marker: string } | null {
+  return entry.kind === 'definition' && typeof entry.marker === 'string'
+    ? { name: entry.path, description: entry.description ?? null, marker: entry.marker }
+    : null
 }
 
 /**

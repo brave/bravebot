@@ -199,7 +199,7 @@ it already addresses the definition.
 `verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_addresses_the_line_as_the_agent_command_does`
 `verified-by: bravebot_tui::app::tests::summoning::a_second_definition_picked_replaces_the_first_and_only_it_is_sent`
 `verified-by: bravebot_tui::app::tests::summoning::shift_enter_on_a_picked_definition_starts_a_line_and_keeps_the_pick`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/addressing.test.mjs holds stageDefinition to replacing the half-typed word with a definitionMarker that bravebot_mentions does not read as an @ name, a second definition pick to replacing the first, a bot pick and a definition pick to replacing each other, and addressOf to being null once the marker is deleted; ui/scripts/mentions.test.mjs holds a definition row's kind and description to reaching the composer's offer; make check-ui runs both)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/addressing.test.mjs holds stageDefinition to replacing the half-typed word with the marker the bridge's row carries, which bravebot_mentions::marker builds and bravebot_mentions does not read as an @ name, a second definition pick to replacing the first, a bot pick and a definition pick to replacing each other, and addressOf to being null once the marker is deleted; ui/scripts/mentions.test.mjs holds a definition row's kind and description to reaching the composer's offer; make check-ui runs both)`
 
 <a id="ADDRESS-3"></a>
 ### ADDRESS-3: only a line a person typed into the box, or the command line that started the session

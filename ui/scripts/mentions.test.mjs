@@ -38,8 +38,8 @@ test('a draft whose last word is no name is left as it is', () => {
 // ADDRESS-2: the composer asks for definition rows, and a definition row is staged to answer the
 // message instead of being written as an `@` name. The faults these reject are the offer dropping
 // a row's kind or description on its way to the list, and a definition row read as a file.
-const definitionRow = { path: 'lantern', shownPath: 'lantern', written: 'lantern', directory: false, kind: 'definition', description: 'Keeps the lights.' }
-const fileRow = { path: 'lantern.md', shownPath: 'lantern.md', written: 'lantern.md', directory: false, kind: 'file', description: null }
+const definitionRow = { path: 'lantern', shownPath: 'lantern', written: 'lantern', directory: false, kind: 'definition', description: 'Keeps the lights.', marker: '[@lantern]' }
+const fileRow = { path: 'lantern.md', shownPath: 'lantern.md', written: 'lantern.md', directory: false, kind: 'file', description: null, marker: null }
 
 test('a definition row reaches the composer with its kind and description, ahead of the files', () => {
   const offer = offerOf({ typed: 'lan', word: '@lan', entries: [definitionRow, fileRow], completes: true })
@@ -56,7 +56,8 @@ test('an offer out of shape offers nothing', () => {
 })
 
 test('a definition row is addressed when picked, and a file row is written as a name', () => {
-  assert.deepEqual(definitionOf(definitionRow), { name: 'lantern', description: 'Keeps the lights.' })
+  assert.deepEqual(definitionOf(definitionRow), { name: 'lantern', description: 'Keeps the lights.', marker: '[@lantern]' })
+  assert.equal(definitionOf({ ...definitionRow, marker: null }), null, 'a definition row with no marker picks nothing')
   assert.equal(definitionOf(fileRow), null)
   assert.equal(definitionOf({ ...fileRow, kind: 'directory', directory: true }), null)
 })

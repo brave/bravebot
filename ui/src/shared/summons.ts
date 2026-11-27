@@ -179,12 +179,3 @@ export function summonMarker(name: string, slug: string): string {
   const shown = name.replace(/[@[\]]/g, '').replace(/\s+/g, ' ').trim()
   return `[@${shown || slug}]`
 }
-
-/**
- * The marker a definition picked from the `@` list is written into a draft as (ADDRESS-2). It
- * takes out the characters `summonMarker` takes out, so it is never an `@` word and never a file
- * name.
- */
-export function definitionMarker(name: string): string {
-  return `[@${name.replace(/[@[\]]/g, '').replace(/\s+/g, ' ').trim()}]`
-}

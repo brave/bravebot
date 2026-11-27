@@ -14,7 +14,7 @@
 
 import type { DropOutcome, DroppedFile } from '../shared/drops'
 import { FOLDED_TEXT_MAX, type PastedPicture, type PastedText } from '../shared/pastes'
-import { definitionMarker, summonMarker } from '../shared/summons'
+import { summonMarker } from '../shared/summons'
 import { btwQuestion, isRecap } from '../shared/aside'
 import { goalArgument } from '../shared/goal'
 import { scheduleArgument } from '../shared/schedule'
@@ -30,6 +30,8 @@ export interface SummonedBot {
 export interface AddressedDefinition {
   name: string
   description: string | null
+  /** The `[@name]` the pick is written as, from the bridge's row. */
+  marker: string
 }
 
 /** One staged thing and the marker that stands for it. */
@@ -260,7 +262,7 @@ export function stageSummon(staging: Staging, bot: SummonedBot, draft: string, w
  * before is taken off.
  */
 export function stageDefinition(staging: Staging, definition: AddressedDefinition, draft: string, word: string | null): StagedPaste | null {
-  return picked(staging, { marker: definitionMarker(definition.name), via: 'address', definition }, draft, word)
+  return picked(staging, { marker: definition.marker, via: 'address', definition }, draft, word)
 }
 
 /** The bot a send summons, if its draft still names one. */

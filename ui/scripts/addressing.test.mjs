@@ -22,12 +22,12 @@ const load = (contents) => {
 
 const { sendAddressedTurn } = load(`export { sendAddressedTurn } from './src/main/addressing'`)
 const { Summoning } = load(`export { Summoning } from './src/main/summon-turn'`)
-const staging = load(`export * from './src/renderer/staging'; export { definitionMarker } from './src/shared/summons'`)
+const staging = load(`export * from './src/renderer/staging'`)
 const { route } = load(`export { route } from './src/renderer/interjecting'`)
 
 const SESSION = '11111111-1111-4111-8111-111111111111'
-const definitionRow = (path, description = null) => ({ path, shownPath: path, written: path, directory: false, kind: 'definition', description })
-const fileRow = (path) => ({ path, shownPath: path, written: path, directory: false, kind: 'file', description: null })
+const definitionRow = (path, description = null) => ({ path, shownPath: path, written: path, directory: false, kind: 'definition', description, marker: `[@${path}]` })
+const fileRow = (path) => ({ path, shownPath: path, written: path, directory: false, kind: 'file', description: null, marker: null })
 
 /** Services with a fake agent that offers `rows` and records every request. */
 function services({ rows = [definitionRow('lantern', 'Lights the way'), definitionRow('reviewer')], owner, hostBot } = {}) {
@@ -139,20 +139,13 @@ test('no agent running and a session that is not open send nothing', async () =>
   assert.deepEqual(held.sent(), [])
 })
 
-const lantern = { name: 'lantern', description: 'Lights the way' }
-const reviewerDefinition = { name: 'reviewer', description: null }
+const lantern = { name: 'lantern', description: 'Lights the way', marker: '[@lantern]' }
+const reviewerDefinition = { name: 'reviewer', description: null, marker: '[@reviewer]' }
 const ada = { slug: 'ada', name: 'Ada', avatar: 'v2:ada' }
 const empty = { made: 0, staged: [] }
 
 /** The words `bravebot_mentions` reads as `@` names: whitespace-separated words that start with `@`. */
 const atWords = (line) => line.split(/\s+/).filter((word) => word.startsWith('@'))
-
-test('a definition’s marker is never an @ name', () => {
-  assert.equal(staging.definitionMarker('lantern'), '[@lantern]')
-  assert.equal(staging.definitionMarker('[@x]'), '[@x]')
-  assert.equal(staging.definitionMarker('two  words'), '[@two words]')
-  assert.deepEqual(atWords(staging.definitionMarker('two words')), [])
-})
 
 test('picking a definition replaces the half-typed word with a marker that is not an @ word', () => {
   const picked = staging.stageDefinition(empty, lantern, 'ask @lan', '@lan')
