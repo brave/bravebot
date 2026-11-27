@@ -55,8 +55,11 @@ A `run` call that asks for no sandbox (`unconfined`, [SANDBOX-29](sandboxing.md#
 credential scopes (`scopes`, [SANDBOX-26](sandboxing.md#SANDBOX-26)) and is refused is recorded as a
 refusal under `sandbox`. The entry names the argument and each cause that held: the sandbox mode by
 its name, a turn that confines none of its runs, a workspace not trusted, a managed closed network,
-a delegate, and for `scopes` a platform with no sandbox or a session with no profile directory. The
-sentence the planner reads names none of them.
+a delegate, and for `scopes` a platform with no sandbox, a session with no profile directory, or a
+line every stage of which has an assignment in front of its program, and such a stage is given no
+requested name. The sentence the planner reads names none of the session's causes; for the last it
+says that every stage of the line has such an assignment, in fixed words that quote nothing of the
+line.
 
 A `run` line put to the person and not approved, by an answer of no, Ctrl-C or nobody being there
 to ask, is recorded as a refusal under `approval` saying the line was not approved and did not run.
@@ -185,6 +188,7 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_core::policy::a_refused_run_request_names_its_argument_and_every_cause_that_held`
 `verified-by: bravebot_agent::tools::tests::confinement::a_refused_unconfined_request_is_recorded_with_each_cause_that_held`
 `verified-by: bravebot_agent::tools::tests::confinement::a_refused_scope_request_is_recorded_with_each_cause_that_held`
+`verified-by: bravebot_agent::tools::tests::confinement::a_request_no_stage_would_be_given_is_refused_before_the_person_is_asked`
 `verified-by: bravebot_agent::tools::tests::confinement::an_accepted_request_for_reach_leaves_no_sandbox_refusal`
 `verified-by: bravebot_agent::tools::tests::confinement::pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it`
 `verified-by: bravebot_agent::tools::tests::run_arguments::an_unconfined_request_is_accepted_only_where_every_condition_holds`

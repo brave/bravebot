@@ -1548,6 +1548,7 @@ fn a_request_where_no_profile_applies_is_accepted_and_dropped() {
             json!({"command": "echo hi", "scopes": ["remote"]}),
             json!({"command": "echo hi", "unconfined": true}),
             json!({"command": "echo hi", "unconfined": false, "scopes": ["remote", "aws"]}),
+            json!({"command": "A=b /bin/sh -c true", "scopes": ["aws"]}),
         ] {
             let (said, refused, _, _) = run_in("run-request-dropped", &arguments, session);
             assert!(
@@ -1601,6 +1602,176 @@ fn a_request_where_no_profile_applies_is_accepted_and_dropped() {
                 "{why}: {arguments}: a malformed argument was not an error: {said}"
             );
         }
+    }
+}
+
+/// SANDBOX-26, TRACE-1: a request that no stage of the line would be given, because every stage
+/// has a `NAME=value` in front of its program, is refused before the person is asked, in a lead's
+/// run and in a delegate's. The planner reads one fixed sentence that names the cause and
+/// `git -c`, quotes nothing of the line and does not name `env`; the trail records a `sandbox`
+/// refusal naming `scopes` and the cause, and the person watching is told the same cause. The
+/// signing case is the one a delegate retried with `ssh-key` and the person approved each time. A
+/// line where one stage has no assignment, and the same line with no assignment, still reach the
+/// person.
+///
+/// The regressions it rejects: no refusal, so the person is asked about a line whose request lends
+/// nothing and the planner is told nothing; a refusal for any line with an assignment, which also
+/// refuses the line whose other stage was given the request; and a sentence that repeats a name or
+/// value the line wrote.
+#[test]
+fn a_request_no_stage_would_be_given_is_refused_before_the_person_is_asked() {
+    use bravebot_sandbox::SandboxMode::Strict;
+    if bravebot_sandbox::base::Prelude::current().is_none() {
+        return;
+    }
+    let session = session_under(Strict);
+    let delegated = Session {
+        delegated: true,
+        ..session
+    };
+    let cause = "every stage of the line has an assignment in front of its program, and such a \
+                 stage is given no requested name";
+    for (session, arguments) in [
+        json!({
+            "command": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=x git commit -m t",
+            "scopes": ["signing"],
+        }),
+        json!({
+            "command": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=x git commit -m t",
+            "scopes": ["ssh-key"],
+        }),
+        json!({"command": "A=b /bin/sh -c true", "scopes": ["loopback"]}),
+        json!({"command": "A=b /bin/sh -c true", "scopes": ["aws", "cargo"]}),
+        json!({"command": "A=b /bin/echo hi | B=c /bin/cat", "scopes": ["remote"]}),
+    ]
+    .into_iter()
+    .flat_map(|arguments| [(session, arguments.clone()), (delegated, arguments)])
+    {
+        let (said, refused, clean, note) =
+            run_in("run-scopes-every-stage-assigned", &arguments, session);
+        let delegated = session.delegated;
+        assert_eq!(
+            said, REQUEST_REACHES_NO_STAGE,
+            "{arguments}, delegated: {delegated}"
+        );
+        assert!(said.contains("`git -c name=value`"), "{said}");
+        assert!(said.contains("NAME=value"), "{said}");
+        assert!(said.contains("the line did not run"), "{said}");
+        assert!(!said.contains("env "), "{said}");
+        assert_eq!(
+            sandbox_refusals(&refused),
+            [format!(
+                "run.scopes: the request was refused and the line did not run: {cause}"
+            )],
+            "{arguments}: {refused:?}"
+        );
+        assert_eq!(
+            note,
+            format!("refused, 'scopes' adds nothing to this line: {cause}")
+        );
+        assert!(
+            !clean,
+            "{arguments}: a turn whose run was refused ended as clean"
+        );
+    }
+    for (session, arguments) in [
+        json!({"command": "A=b /bin/echo hi | /bin/cat", "scopes": ["remote"]}),
+        json!({"command": "git commit -m t", "scopes": ["signing"]}),
+        json!({"command": "/bin/sh -c true", "scopes": ["loopback"]}),
+    ]
+    .into_iter()
+    .flat_map(|arguments| [(session, arguments.clone()), (delegated, arguments)])
+    {
+        let (said, refused, _, _) = run_in("run-scopes-a-stage-given", &arguments, session);
+        let delegated = session.delegated;
+        assert!(
+            said.starts_with("refused: the user did not approve running this"),
+            "{arguments}, delegated: {delegated}: the call did not reach the confirmer: {said}"
+        );
+        assert_eq!(
+            sandbox_refusals(&refused),
+            Vec::<&str>::new(),
+            "{arguments}: {refused:?}"
+        );
+    }
+}
+
+/// SANDBOX-19, SANDBOX-26: a line that asked for a scope, where one stage has a `NAME=value` in
+/// front of its program and another does not, runs, and when it fails the result the planner reads
+/// carries the fixed sentence that a stage with an assignment was not given the request. The same
+/// line exiting 0 carries no such sentence, and the same failing line with no assignment carries
+/// none either.
+///
+/// The regressions it rejects: the sentence left out of the failed result `run` gives, so the
+/// planner retries with another scope; and the sentence said after every failed line that asked
+/// for a scope.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_failed_line_with_an_assigned_stage_tells_the_planner_its_request_skipped_that_stage() {
+    use crate::confine::REQUEST_SKIPPED_AN_ASSIGNED_STAGE_SENTENCE;
+    use bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    if bravebot_sandbox::base::Prelude::current().is_none()
+        || !bravebot_sandbox::confinement_works_here()
+    {
+        return;
+    }
+    let scratch = Scratch::new("run-scopes-an-assigned-stage");
+    let project = scratch.path.join("project");
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(&project).expect("the project");
+    std::fs::create_dir_all(&home).expect("the home");
+    let home: &'static std::path::Path =
+        Box::leak(home.canonicalize().expect("the home").into_boxed_path());
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    for (command, failed, told_of_the_stage) in [
+        ("A=b /bin/sh -c 'exit 3' | /bin/cat", true, true),
+        ("A=b /bin/sh -c 'exit 0' | /bin/cat", false, false),
+        ("/bin/sh -c 'exit 3' | /bin/cat", true, false),
+    ] {
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "run a command");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::ShellExec]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+
+        let produced = with_tools(&workspace, |tools| {
+            tools.confine_runs = true;
+            tools.sandbox = WorkspaceWrite;
+            tools.profile = Some(home);
+            run(
+                &mut policy,
+                tools,
+                &mut crate::confirm::ApproveRuns,
+                &mut crate::report::IgnoreReports,
+                &json!({"command": command, "scopes": ["aws"]}),
+            )
+        });
+        assert!(produced.ran_a_program, "{command}: the line did not run");
+        let outcome = &produced
+            .printed_by
+            .as_ref()
+            .expect("a line that ran says how it ended")
+            .outcome;
+        let described = outcome.describe();
+        assert_eq!(
+            matches!(outcome, crate::report::Outcome::Failed { .. }),
+            failed,
+            "{command}: {described}"
+        );
+        assert_eq!(
+            described.contains(REQUEST_SKIPPED_AN_ASSIGNED_STAGE_SENTENCE),
+            told_of_the_stage,
+            "{command}: {described}"
+        );
     }
 }
 

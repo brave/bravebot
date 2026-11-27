@@ -376,8 +376,9 @@ pub struct ExDenial(Denial);
 /// SANDBOX-29).
 ///
 /// A fixed set of facts about the session, chosen by the driver where it refuses, so the trail can
-/// say which setting withheld a request that the planner is told no setting for. The one piece of
-/// text carried is a sandbox mode's own name.
+/// say which setting withheld a request that the planner is told no setting for, and one fact about
+/// the compiled line ([`RunRequestCause::EveryStageAssigned`]), which the planner is told. The one
+/// piece of text carried is a sandbox mode's own name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunRequestCause {
     /// The sandbox mode does not take the request, named by its own name.
@@ -398,6 +399,9 @@ pub enum RunRequestCause {
     /// No line has run with a sandbox and failed in this turn, and none was refused because its
     /// program could not be confined, so there is no refusal for the request to follow.
     NoConfinedAttempt,
+    /// Every stage of the line has an assignment in front of its program, and such a stage is
+    /// given no requested name, so the request would add nothing.
+    EveryStageAssigned,
 }
 
 impl fmt::Display for RunRequestCause {
@@ -415,6 +419,10 @@ impl fmt::Display for RunRequestCause {
             Self::NoConfinedAttempt => f.write_str(
                 "no line has run with a sandbox and failed, or been refused because it could \
                      not be confined, this turn",
+            ),
+            Self::EveryStageAssigned => f.write_str(
+                "every stage of the line has an assignment in front of its program, and such a \
+                 stage is given no requested name",
             ),
         }
     }
@@ -10725,8 +10733,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The planner is told one sentence that names no setting, so without this the trail holds
     /// nothing that says which setting withheld the request (TRACE-1), and the turn reads as clean.
     /// `argument` is the `run` argument, `unconfined` or `scopes`, and `causes` is every reason that
-    /// held, in the fixed order the caller lists them. Each is a fact about the session and none is
-    /// text a call or a tool produced (TRACE-2).
+    /// held, in the fixed order the caller lists them. Each is a fact about the session, or about the
+    /// compiled line where every stage has an assignment in front of it, and none is text a call or
+    /// a tool produced (TRACE-2).
     ///
     /// Returns the causes joined the same way the trail records them, so a caller can put the same
     /// words in the note the person watching is told, without a second place that spells a cause
@@ -26511,8 +26520,8 @@ five
         #[test]
         fn a_refused_run_request_names_its_argument_and_every_cause_that_held() {
             use super::RunRequestCause::{
-                Delegate, ManagedClosedNetwork, NoConfinement, NoPlatformSandbox,
-                NoProfileDirectory, SandboxMode, UntrustedWorkspace,
+                Delegate, EveryStageAssigned, ManagedClosedNetwork, NoConfinement,
+                NoPlatformSandbox, NoProfileDirectory, SandboxMode, UntrustedWorkspace,
             };
             let mut sink = RecordingSink::new();
             let mut turn = open_policy(&mut sink);
@@ -26528,6 +26537,7 @@ five
             turn.refuse_run_request("scopes", &[NoConfinement]);
             turn.refuse_run_request("scopes", &[NoProfileDirectory]);
             turn.refuse_run_request("scopes", &[NoPlatformSandbox]);
+            turn.refuse_run_request("scopes", &[EveryStageAssigned]);
             assert!(!turn.finish(), "a turn that refused a request ended clean");
             let refused: Vec<(&str, Principle, &str)> = sink
                 .events()
@@ -26569,6 +26579,13 @@ five
                         Principle::Confinement,
                         "run.scopes: the request was refused and the line did not run: this \
                          platform has no sandbox to confine runs with"
+                    ),
+                    (
+                        "sandbox",
+                        Principle::Confinement,
+                        "run.scopes: the request was refused and the line did not run: every \
+                         stage of the line has an assignment in front of its program, and such a \
+                         stage is given no requested name"
                     ),
                 ]
             );

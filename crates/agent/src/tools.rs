@@ -10979,6 +10979,16 @@ const NOT_ACCEPTING_REQUESTS: &str = "refused: this session does not accept a re
      credential scope or toolchain list. Run the line without 'scopes', and say what it needs \
      for the person to add.";
 
+/// What a request says that would be added to no stage, because every stage of the line has an
+/// assignment in front of its program (SANDBOX-26). Fixed words: nothing of the line is quoted, so
+/// the planner is told the cause and the working forms and reads no name or value it wrote back as
+/// the driver's. `env` in front of the program is not named.
+const REQUEST_REACHES_NO_STAGE: &str = "refused: a name in 'scopes' is not added to a stage that \
+     has a NAME=value assignment in front of its program, and every stage of this line has one, \
+     so the request would add nothing and the line did not run. Pass git configuration as \
+     `git -c name=value` instead of GIT_CONFIG_* assignments, or drop the assignment, and run the \
+     line again.";
+
 /// What a refused request to run one line with no sandbox says, whatever refused it: the planner
 /// learns that the line did not run and not which setting withheld it. It does not name the
 /// argument: the planner learns that from the `run` description (SANDBOX-29).
@@ -11487,6 +11497,19 @@ fn settle_the_confinement<S: Sink>(
         return Err(Box::new(Produced::refused_with_a_note(
             NOT_ACCEPTING_REQUESTS,
             format!("refused, 'scopes' is not accepted: {causes}"),
+        )));
+    }
+    // A request no stage would be given, because every stage has an assignment in front of its
+    // program, is refused before the person is asked, since the person would be asked about a
+    // request that adds nothing. Decided from the compiled steps and the menu words (SANDBOX-26).
+    if confinement
+        .as_ref()
+        .is_some_and(|confinement| confinement.request_reaches_no_stage(&plan.steps()))
+    {
+        let causes = policy.refuse_run_request("scopes", &[RunRequestCause::EveryStageAssigned]);
+        return Err(Box::new(Produced::refused_with_a_note(
+            REQUEST_REACHES_NO_STAGE,
+            format!("refused, 'scopes' adds nothing to this line: {causes}"),
         )));
     }
     // Accepted after a line has failed with the sandbox on, or for a line whose own redirection

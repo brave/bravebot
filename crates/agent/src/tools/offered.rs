@@ -1859,7 +1859,9 @@ fn table(
                              every stage of this one line, by name from the list \
                              given, for a script that runs `gh`, `aws`, `git commit` \
                              or a build inside it and so shows no operation of its \
-                             own. On macOS `loopback` is for listening on a port of \
+                             own. A stage with a NAME=value assignment in front of its \
+                             program gets none of them, and a line where every stage \
+                             has one is refused. On macOS `loopback` is for listening on a port of \
                              this machine, which `cargo test` and `sccache` need. \
                              {LOOPBACK_CONNECT_RULE} On Linux and Windows `loopback` \
                              changes nothing. `ssh-key` has the user choose again \

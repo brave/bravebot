@@ -17,7 +17,7 @@ guards:
       - crates/agent/src/tools/tests/reading_together.rs: 1
   - symbol: Produced::refused_with_a_note
     sites:
-      - crates/agent/src/tools.rs: 14
+      - crates/agent/src/tools.rs: 15
       - crates/agent/src/tools/recall.rs: 1
 documented-by: docs/website/docs/reference/tools.md
 ---

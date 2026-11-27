@@ -1267,6 +1267,26 @@ impl Confinement {
         }
     }
 
+    /// Whether the planner asked for a name and [`Confinement::requested_for`] gives it to no
+    /// stage of `steps`, because every stage has an assignment in front of its program
+    /// (SANDBOX-26). Read from the compiled steps and the menu words alone. `false` where nothing
+    /// was asked for and where the session names no home, which refuses a request for that reason.
+    pub fn request_reaches_no_stage(&self, steps: &[&Step]) -> bool {
+        !self.requested.is_empty()
+            && self.home.is_some()
+            && !steps.is_empty()
+            && steps.iter().all(|step| self.requested_for(step).is_empty())
+    }
+
+    /// Whether the planner asked for a name and a stage of `steps` is given none of it because an
+    /// assignment is in front of its program (SANDBOX-26). Read from the compiled steps and the
+    /// menu words alone, for the failure sentence of a line that ran with the request.
+    fn request_skips_a_stage(&self, steps: &[&Step]) -> bool {
+        !self.requested.is_empty()
+            && self.home.is_some()
+            && steps.iter().any(|step| self.requested_for(step).is_empty())
+    }
+
     /// What the trail records of a request for one run: each stage by its place in the line and the
     /// names added to it, which are menu words and nothing the plan chose. `None` where the line
     /// asked for nothing.
@@ -1999,8 +2019,12 @@ impl Confinement {
             true => SHELL_REDIRECTION_SENTENCE,
             false => "",
         };
+        let assigned = match self.request_skips_a_stage(steps) {
+            true => REQUEST_SKIPPED_AN_ASSIGNED_STAGE_SENTENCE,
+            false => "",
+        };
         format!(
-            "{}{}{}{source}{refusal}{}{commit}{git}{launch}{listing}{shell}{}",
+            "{}{}{}{source}{refusal}{}{commit}{git}{launch}{listing}{shell}{assigned}{}",
             self.linked_checkout_sentence(steps, unconfined_offered),
             self.cache_sentence(steps),
             self.reach(steps),
@@ -2991,6 +3015,15 @@ const MACOS_GH_CACHE_SENTENCE: &str = "A `gh` step could write its cache `~/.cac
 const MACOS_GH_CACHE_MOVED_SENTENCE: &str = " A gh step can keep its cache in the session's \
      scratch directory instead, which it can write, by starting gh through `env` with \
      XDG_CACHE_HOME set to that directory and asking for gh's login by name: ";
+
+/// Said after a failed step where the planner asked for a name in `scopes` and a stage of the line
+/// was given none of it because an assignment is in front of its program (SANDBOX-19,
+/// SANDBOX-26). Fixed words that quote nothing of the line. `env` in front of the program is not
+/// named.
+pub(crate) const REQUEST_SKIPPED_AN_ASSIGNED_STAGE_SENTENCE: &str = " A name in 'scopes' was not added to \
+     a stage of this line that has a NAME=value assignment in front of its program. Pass git \
+     configuration as `git -c name=value` instead of GIT_CONFIG_* assignments, or drop the \
+     assignment.";
 
 /// Follows the line [`MACOS_GH_CACHE_MOVED_SENTENCE`] introduces.
 const MACOS_GH_CACHE_MOVED_SCOPE: &str = " with `scopes: [\"remote\"]`. An assignment written in \
