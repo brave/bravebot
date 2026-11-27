@@ -61873,7 +61873,12 @@ fn a_stop_ends_a_wait_for_all_of_a_calls_delegates() {
 fn a_stop_during_the_wait_ends_the_turn_after_its_delegates_and_leaves_a_later_line() {
     let scratch = Scratch::new("delegates-stop-then-type");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, _received, _kept) = serve_by_marker_in(
+    // Both delegates' replies are held until the planner's third request, the one answered
+    // "waiting on both", has arrived. That request is made after the turn last looked for finished
+    // delegates, so neither is taken back before the wait. A delegate back sooner would be joined
+    // on the way to the next request, and the report of that join would stop the turn before the
+    // second delegate was started.
+    let (endpoint, _received, held) = serve_by_marker_in(
         vec![
             (
                 "ASK-STOP",
@@ -61887,7 +61892,7 @@ fn a_stop_during_the_wait_ends_the_turn_after_its_delegates_and_leaves_a_later_l
             ("STOP-A", vec![reply_with("THE-A-REPORT")]),
             ("STOP-B", vec![reply_with("THE-B-REPORT")]),
         ],
-        Order::Any,
+        Order::StagedAll(&[("STOP-A", "ASK-STOP", 3), ("STOP-B", "ASK-STOP", 3)]),
     );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -61919,6 +61924,10 @@ fn a_stop_during_the_wait_ends_the_turn_after_its_delegates_and_leaves_a_later_l
         matches!(ended, Err(bravebot_agent::TurnError::Cancelled { .. })),
         "the turn ended some other way, so this says nothing about a stop: {:?}",
         ended.err()
+    );
+    assert!(
+        held.load(Ordering::SeqCst),
+        "a delegate had ended before the planner answered \"waiting on both\""
     );
     assert!(
         reporter.position("delegate d1 finished").is_some()
