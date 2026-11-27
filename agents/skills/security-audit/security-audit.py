@@ -314,10 +314,15 @@ NOT_A_KEY = "reads_a_step_without_keying"
 # files the volume holds apart one key, and the table of names asks only whether one file's names
 # share a rule, so nothing else asks about it. `normalise` and the two `key` methods build the key
 # every trust rule, writer reservation and prompt answer is filed under, and `key_of` is the key a
-# permission rule is matched under. The rest are the steps those call that fold or decompose a name.
-# Only these are read: a step added somewhere else is the reviewer's, which is what PATH-007 asks.
+# permission rule is matched under. The rest are the steps those call that fold or decompose a name,
+# and the ones `normalise` reads a path and writes its key through. Only these are read: a step added
+# somewhere else is the reviewer's, which is what PATH-007 asks.
 KEY_FUNCTIONS = (
     ("crates/core/src/trust.rs", "normalise"),
+    ("crates/core/src/trust.rs", "names_something"),
+    ("crates/core/src/trust.rs", "push_segment"),
+    ("crates/core/src/trust.rs", "chars_of"),
+    ("crates/core/src/trust.rs", "string_of"),
     ("crates/core/src/trust.rs", "key"),
     ("crates/core/src/trust.rs", "fold_case"),
     ("crates/core/src/trust.rs", "fold_simple"),

@@ -360,6 +360,7 @@ kind then has one rule instead of two that could disagree.
 `verified-by: bravebot_core::trust::a_trusted_subpath_overrides_an_untrusted_parent`
 `verified-by: bravebot_core::trust::a_rule_matches_whole_segments_only`
 `verified-by: bravebot_core::trust::equivalent_path_spellings_are_the_same_rule`
+`verified-by: bravebot_core::spec::a_segment_that_names_nothing_leaves_the_key_as_it_was`
 `verified-by: bravebot_core::trust::a_name_with_whitespace_at_an_end_is_not_the_name_without_it`
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group`
 `verified-by: bravebot_agent::workspace::two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group`

@@ -893,3 +893,31 @@ replace: push_rows(out, &parts.sockets, Operation::NetworkOutbound, parts); => p
 mutation: Stamp::still_holds ignores the count of run lines where a person was asked, so a line started while they were asked voids nothing
 file: crates/core/src/file_authority.rs
 replace: self.revision == now.revision && (!person_asked || self.programs == now.programs) => self.revision == now.revision
+
+mutation: normalise keeps a `.` segment, so `src/./a.md` is a rule apart from `src/a.md` and spells past it
+file: crates/core/src/trust.rs
+replace: let dot = segment.len() == 1 && segment[0] == '.'; => let dot = false;
+
+mutation: normalise keeps an empty segment, so `src//a.md` is a rule apart from `src/a.md` and spells past it
+file: crates/core/src/trust.rs
+replace: !segment.is_empty() && !dot => !dot
+
+mutation: normalise drops the leading slash of an absolute path, so it is keyed as a name under the working directory
+file: crates/core/src/trust.rs
+replace: let absolute = !chars.is_empty() && chars[0] == '/'; => let absolute = false;
+
+mutation: normalise joins two segments with no separator, so `a/bc` and `ab/c` are one rule
+file: crates/core/src/trust.rs
+replace: let after_a_segment = wrote; => let after_a_segment = false;
+
+mutation: tail_beneath counts every byte of a segment as one, so a rule copied under another directory lands at a shorter path than it had
+file: crates/core/src/trust.rs
+replace: let ends_a_segment = key[at] == '/'; => let ends_a_segment = true;
+
+mutation: tail_beneath keeps the leading slash of a key, so a rule copied under another directory lands at `to//tail`
+file: crates/core/src/trust.rs
+replace: while at < key.len() && key[at] == '/' { => while false {
+
+mutation: segments_in counts every character as a segment, so tail_beneath skips more of a key than the prefix covers
+file: crates/core/src/trust.rs
+replace: in_segment = true; => in_segment = false;
