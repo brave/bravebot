@@ -51,6 +51,7 @@ fn waiting_on_a_write(request: u64) -> (Running, mpsc::Receiver<Reply>) {
     let pending: Pending = Arc::new(Mutex::new(Some(Question {
         id: request,
         kind: Kind::Write,
+        local_only: false,
     })));
     let running = Running {
         cancel: Cancel::new(),
@@ -695,6 +696,7 @@ fn a_hand_over_that_fails_refuses_a_question_only_the_joining_client_could_answe
                 *asked.lock().unwrap() = Some(Question {
                     id: 3,
                     kind: Kind::Write,
+                    local_only: false,
                 });
                 Err(Failure::bad_request("the owners cannot be written"))
             },
@@ -707,4 +709,49 @@ fn a_hand_over_that_fails_refuses_a_question_only_the_joining_client_could_answe
         "{refusal:?}"
     );
     assert!(pending.lock().unwrap().is_none());
+}
+
+/// A device's reply to a question a device is not offered is refused with `not_allowed` by the
+/// bridge itself, whatever the host has recorded, and the question stays waiting for an answer
+/// from the computer, which applies. A device's reply to a question any connection may answer
+/// applies.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_devices_reply_to_a_question_it_is_not_offered_is_refused_by_the_bridge() {
+    for local_only in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut bridge, _) = a_bridge();
+        let (running, receiver) = waiting_on_a_write(3);
+        if let Some(question) = running.pending.lock().unwrap().as_mut() {
+            question.local_only = local_only;
+        }
+        let pending = Arc::clone(&running.pending);
+        let handle = open(&mut bridge, directory.path(), true, Some(running));
+        bridge.emitter.start_view(&handle, true).unwrap();
+        let line = json!({"id": 1, "method": "confirm.reply", "params": {
+            "session": handle, "request": 3, "decision": "approve"}})
+        .to_string();
+        let reply = Request::parse(&line).unwrap();
+
+        let from_device = bridge.dispatch_as_device("phone", &reply);
+
+        if local_only {
+            let refused = from_device.expect_err("the device answered");
+            assert_eq!(refused.code, ErrorCode::NotAllowed);
+            assert!(receiver.try_recv().is_err(), "the answer reached the turn");
+            assert!(
+                pending.lock().unwrap().is_some(),
+                "the question was consumed"
+            );
+            bridge
+                .dispatch_as("window", &reply)
+                .expect("the computer's answer");
+        } else {
+            from_device.expect("the device's answer");
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Reply::Write(Decision::Approve))
+        ));
+    }
 }

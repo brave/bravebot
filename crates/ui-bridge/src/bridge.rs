@@ -333,6 +333,12 @@ pub struct Bridge {
     /// Told of each moment a session may have come to reach more, by a host that holds connections
     /// to a ceiling. None for a bridge with no such connection.
     scope_watch: Option<crate::widening::ScopeWatch>,
+    /// Asked whether a connection that is not a device can answer a question devices are not
+    /// offered. None for a bridge with no device.
+    locally: Option<crate::device_view::Locally>,
+    /// Who sent the request being dispatched. A device only for the duration of
+    /// [`Bridge::dispatch_as_device`].
+    replier: crate::running::Replier,
 }
 
 impl Bridge {
@@ -356,7 +362,16 @@ impl Bridge {
             acting: None,
             background_reader: bravebot_session::listing::Reader::new(),
             scope_watch: None,
+            locally: None,
+            replier: crate::running::Replier::Local,
         }
+    }
+
+    /// Ask `locally` whether a connection that is not a device can answer a question devices are not
+    /// offered, before it is asked, and refuse it where none can.
+    pub fn with_local_answering(mut self, locally: crate::device_view::Locally) -> Self {
+        self.locally = Some(locally);
+        self
     }
 
     /// Tell `watch` of each moment a session may have come to reach more: when a turn starts, when
@@ -441,6 +456,15 @@ impl Bridge {
         self.acting = Some(actor.to_string());
         let outcome = self.dispatch(request);
         self.acting = None;
+        outcome
+    }
+
+    /// As [`Bridge::dispatch_as`], for a device: its answer to a question a device is not offered is
+    /// refused ([`crate::device_view`]).
+    pub fn dispatch_as_device(&mut self, actor: &str, request: &Request) -> Result<Value, Failure> {
+        self.replier = crate::running::Replier::Device;
+        let outcome = self.dispatch_as(actor, request);
+        self.replier = crate::running::Replier::Local;
         outcome
     }
 
@@ -1966,6 +1990,18 @@ impl Bridge {
         });
     }
 
+    /// The connections of the session that are not devices can now answer only `local`, so a
+    /// question only such a connection may answer, of a kind not among them, is refused and shown as
+    /// resolved. Any other question stays waiting.
+    pub fn refuse_local_only_unless(&mut self, handle: &str, local: &[Kind]) {
+        let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) else {
+            return;
+        };
+        running.refuse_local_only_unless(local, |request| {
+            self.emitter.view_answered(handle, request, Acting::Nobody);
+        });
+    }
+
     /// Give a session's view to a client that is joining it.
     ///
     /// `hand_over` adds the client to those the session's events go to, and runs between the end
@@ -2440,6 +2476,7 @@ impl Bridge {
         let session = handle.clone();
         let answerers = self.answerers_of(&handle);
         let scope_watch = self.scope_watch.clone();
+        let locally = self.locally.clone();
 
         let worker_model = model.clone();
 
@@ -2528,6 +2565,7 @@ impl Bridge {
                 actors: actors.clone(),
                 published,
                 scope_watch,
+                locally,
             });
         });
 
@@ -3712,7 +3750,7 @@ impl Bridge {
             ));
         }
         let acting = self.acting();
-        if running.answer_with(id, reply, || {
+        let answered = running.answer_from(id, reply, self.replier, || {
             // Noted before the worker is woken, so the entry that records the answer follows it.
             if let Some(client) = &self.acting {
                 running
@@ -3720,8 +3758,14 @@ impl Bridge {
                     .note(format!("client {client} answered question {id}"));
             }
             self.emitter.view_answered(&handle, id, acting);
-        }) {
+        });
+        if answered == crate::running::Answered::Applied {
             Ok(json!({}))
+        } else if answered == crate::running::Answered::NotOffered {
+            Err(Failure::new(
+                ErrorCode::NotAllowed,
+                "that question holds what nobody vouched for, so it is answered on the computer",
+            ))
         } else {
             // Unknown, or already used. An approval is single-use and bound to the one
             // write it was shown for, so this changes nothing rather than being retried.
@@ -4670,6 +4714,28 @@ impl Bridge {
         self.open.insert(handle.clone(), session);
         handle
     }
+
+    /// Open a session in `project` with `running` as its turn and its view started, for a test
+    /// outside this module that needs a turn waiting on a question. Only the host's tests use it,
+    /// and the host is built on Unix alone.
+    #[cfg(all(test, unix))]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    pub(crate) fn open_running_for_test(&mut self, project: &Path, running: Running) -> String {
+        let handle = self.mint(Open {
+            running: Some(running),
+            ..Open::opened(
+                project.to_path_buf(),
+                State::fresh(TrustStore::new(project)),
+                true,
+                None,
+                false,
+            )
+        });
+        self.emitter
+            .start_view(&handle, true)
+            .expect("the view starts");
+        handle
+    }
 }
 
 /// Hold `open` to the permission rules `rules`, and to whether they keep reads inside the workspace.
@@ -5338,6 +5404,9 @@ struct Work {
     published: crate::turn::Published,
     /// Told when the person approves for this turn a grant no ceiling holds.
     scope_watch: Option<crate::widening::ScopeWatch>,
+    /// Asked whether a connection that is not a device can answer a question devices are not
+    /// offered.
+    locally: Option<crate::device_view::Locally>,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -5455,6 +5524,7 @@ fn work(work: Work) {
         actors,
         published,
         scope_watch,
+        locally,
     } = work;
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
@@ -5515,7 +5585,8 @@ fn work(work: Work) {
     .answerable_by(answerers)
     .remembering(Arc::clone(&state.question_answers))
     .taking_interjections(interjections)
-    .watched_by(scope_watch);
+    .watched_by(scope_watch)
+    .answered_locally_by(locally);
 
     // The session's MCP servers (SERVERS-9), started by its first turn or first plan run and held
     // until it closes. Here rather than when the session opened, so that the questions about them

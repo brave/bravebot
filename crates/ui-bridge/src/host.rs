@@ -66,6 +66,9 @@ struct Attached {
     /// The sessions that went past what this connection is held to there, which it is not shown and
     /// cannot act on until the person approves it again.
     suspended: HashSet<String>,
+    /// The questions, by session and number, a connection held to a ceiling was not offered because
+    /// their body came from somewhere nobody vouched for, which it may not answer.
+    withheld: HashSet<(String, u64)>,
     lines: mpsc::SyncSender<String>,
     /// The bytes of the lines in `lines` that the writer has not yet taken.
     waiting: Arc<AtomicUsize>,
@@ -118,6 +121,7 @@ impl Attached {
             ceiling,
             approved: HashMap::new(),
             suspended: HashSet::new(),
+            withheld: HashSet::new(),
             lines,
             waiting,
             channel: channel.try_clone()?,
@@ -133,16 +137,22 @@ impl Attached {
 /// later ones while it takes an earlier one:
 ///
 /// 1. [`Served`], the lock a request is answered under;
-/// 2. the bridge's emitter lock, which every event and snapshot is sent under;
-/// 3. a session's answerers, which [`crate::answerers::Answerers::set_by`] holds while it calls
+/// 2. a session's pending question, which a turn's thread holds while it calls
+///    [`answered_locally`] through [`crate::device_view::Locally`] and while it sends the question,
+///    and which [`Served::lose`] takes to refuse a question only a local connection may answer;
+/// 3. the bridge's emitter lock, which every event and snapshot is sent under;
+/// 4. a session's answerers, which [`crate::answerers::Answerers::set_by`] holds while it calls
 ///    the scope watch;
-/// 4. [`Owners`], which [`on_widening`] holds from start to end and a join's hand-over takes;
-/// 5. [`Latest`], then this sink, then [`Viewed`], each taken under the owners and let go quickly.
+/// 5. [`Owners`], which [`on_widening`] holds from start to end and a join's hand-over takes;
+/// 6. [`Latest`], then this sink, then [`Viewed`], each taken under the owners and let go quickly.
+///    [`answered_locally`] takes [`Viewed`], the owners and this sink one at a time, each let go
+///    before the next.
 ///
 /// A turn's thread never takes [`Served`], and the scope watch never takes the emitter, the
 /// answerers or a session's pending question. A new path that holds the owners, this sink, the
-/// latest scopes or the viewed sessions and then takes the emitter or the answerers would make a
-/// cycle, and so would one that calls the scope watch while it holds the emitter.
+/// latest scopes or the viewed sessions and then takes a pending question, the emitter or the
+/// answerers would make a cycle, and so would one that calls the scope watch while it holds the
+/// emitter.
 type Sink = Arc<Mutex<HashMap<u64, Attached>>>;
 
 /// The connection whose request is being answered, or 0 for none. An event that names no session,
@@ -460,6 +470,18 @@ impl Served {
         // A connection held to a ceiling is stopped before a session it is attached to sends
         // anything past it.
         .with_scope_watch(watch)
+        // A question a device is not offered waits only where a connection that is not one can
+        // answer it.
+        .with_local_answering({
+            let (output, owners, viewed) = (
+                Arc::clone(&output),
+                Arc::clone(&owners),
+                Arc::clone(&viewed),
+            );
+            Arc::new(move |handle: &str, kind: Kind| {
+                answered_locally(&output, &owners, &viewed, handle, kind)
+            })
+        })
         .with_settings(setup.settings)
         // Nobody can answer a session's questions until its client has the view of it.
         .refusing_questions_until_set()
@@ -510,6 +532,7 @@ impl Served {
         if let Some(handle) = &handle {
             self.may_act(connection, handle, operation.method)?;
             self.not_stopped(connection, handle)?;
+            self.not_withheld(connection, handle, request)?;
         }
         match operation.method {
             "session.new" => self.new_session(connection, request),
@@ -542,9 +565,14 @@ impl Served {
                 info["inspection"] = json!(self.inspection);
                 Ok(info)
             }
-            _ => match self.names.get(&connection) {
-                Some(name) => self.bridge.dispatch_as(name, request),
-                None => self.bridge.dispatch(request),
+            _ => match (self.ceiling_of(connection), self.names.get(&connection)) {
+                // A connection held to a ceiling is a device's, which may not answer a question a
+                // device is not offered, whether or not it has a name.
+                (Some(_), name) => self
+                    .bridge
+                    .dispatch_as_device(name.map_or("a device", String::as_str), request),
+                (None, Some(name)) => self.bridge.dispatch_as(name, request),
+                (None, None) => self.bridge.dispatch(request),
             },
         }
     }
@@ -605,6 +633,31 @@ impl Served {
             .ok()
             .and_then(|latest| latest.get(handle).cloned());
         Seen::standing(seen, now)
+    }
+
+    /// Refuse an answer from `connection` to a question it was not offered because its body came
+    /// from somewhere nobody vouched for. That question is answered on the computer.
+    fn not_withheld(
+        &self,
+        connection: u64,
+        handle: &str,
+        request: &Request,
+    ) -> Result<(), Failure> {
+        let Some(question) = request.params.get("request").and_then(Value::as_u64) else {
+            return Ok(());
+        };
+        let withheld = self.output.lock().map_or(true, |output| {
+            output
+                .get(&connection)
+                .is_some_and(|attached| attached.withheld.contains(&(handle.to_string(), question)))
+        });
+        if withheld {
+            return Err(Failure::new(
+                ErrorCode::NotAllowed,
+                "that question holds what nobody vouched for, so it is answered on the computer",
+            ));
+        }
+        Ok(())
     }
 
     /// The ceiling `connection` is held to, or `None` for one held to none.
@@ -700,6 +753,17 @@ impl Served {
             let kinds = self.answerable_by(handle, &self.attached_to(handle));
             self.bridge.narrow_answerable(handle, &kinds);
         }
+    }
+
+    /// The kinds a connection attached to `handle` that is held to no ceiling, and so is no device,
+    /// can answer there, as [`answered_locally`] decides each.
+    fn answerable_locally(&self, handle: &str) -> Vec<Kind> {
+        allowlist::answerable(&Answer::ALL)
+            .into_iter()
+            .filter(|kind| {
+                answered_locally(&self.output, &self.owners, &self.viewed, handle, *kind)
+            })
+            .collect()
     }
 
     /// The connections attached to `handle`, none where they cannot be read.
@@ -877,6 +941,7 @@ impl Served {
                 for attached in output.values_mut() {
                     attached.suspended.remove(&session);
                     attached.approved.remove(&session);
+                    attached.withheld.retain(|(held, _)| *held != session);
                 }
             }
             if let Ok(mut latest) = latest.lock() {
@@ -954,6 +1019,9 @@ impl Served {
                 let kinds = self.answerable_by(&handle, &rest);
                 self.bridge.narrow_answerable(&handle, &kinds);
                 self.settle_kinds(&handle, seen);
+                // A question a device is not offered waits only on a connection that is not one.
+                let local = self.answerable_locally(&handle);
+                self.bridge.refuse_local_only_unless(&handle, &local);
             }
         }
     }
@@ -1014,14 +1082,83 @@ fn write_event(output: &Sink, owners: &Owners, dispatching: &AtomicU64, event: &
         return;
     };
     let line = event.to_value().to_string();
+    // A device's copy, made once for every connection held to a ceiling.
+    let mut for_devices: Option<Option<(String, Option<u64>)>> = None;
     for connection in connections {
-        if output.get(&connection).is_some_and(|attached| {
-            (event.name != "trust.request" || attached.answers.contains(&Answer::Trust))
-                && !stopped_for(attached, event)
-        }) {
-            queue(&mut output, connection, line.clone());
+        let Some(attached) = output.get(&connection) else {
+            continue;
+        };
+        if (event.name == "trust.request" && !attached.answers.contains(&Answer::Trust))
+            || stopped_for(attached, event)
+        {
+            continue;
         }
+        if attached.ceiling.is_none() {
+            queue(&mut output, connection, line.clone());
+            continue;
+        }
+        let Some((shown, question)) = for_devices
+            .get_or_insert_with(|| as_a_device_sees_it(event))
+            .clone()
+        else {
+            continue;
+        };
+        if let (Some(question), Some(session), Some(attached)) =
+            (question, &event.session, output.get_mut(&connection))
+        {
+            attached.withheld.insert((session.clone(), question));
+        }
+        queue(&mut output, connection, shown);
     }
+}
+
+/// Whether a connection attached to `handle` that is held to no ceiling, and so is no device, can
+/// answer a question of `kind` there once the session's view has started. Each lock is taken and let
+/// go on its own.
+fn answered_locally(
+    output: &Sink,
+    owners: &Owners,
+    viewed: &Viewed,
+    handle: &str,
+    kind: Kind,
+) -> bool {
+    if !viewed.lock().is_ok_and(|viewed| viewed.contains(handle)) {
+        return false;
+    }
+    let attached = owners
+        .lock()
+        .ok()
+        .and_then(|owners| owners.get(handle).cloned())
+        .unwrap_or_default();
+    let Ok(output) = output.lock() else {
+        return false;
+    };
+    attached
+        .iter()
+        .filter_map(|connection| output.get(connection))
+        .any(|attached| {
+            attached.ceiling.is_none() && allowlist::answerable(&attached.answers).contains(&kind)
+        })
+}
+
+/// `event` as a device is sent it, with the number of a question in it the device is not offered,
+/// or `None` where a device is not sent it at all ([`crate::device_view`]). A view that cannot be
+/// read as one is not sent, rather than sent whole.
+fn as_a_device_sees_it(event: &Event) -> Option<(String, Option<u64>)> {
+    if !crate::device_view::EVENTS.contains(&event.name) {
+        return None;
+    }
+    if !crate::device_view::VIEWS.contains(&event.name) {
+        return Some((event.to_value().to_string(), None));
+    }
+    let mut view: crate::view::Update = serde_json::from_value(event.data.clone()).ok()?;
+    let question = crate::device_view::for_a_device(&mut view);
+    let shown = Event {
+        name: event.name,
+        session: event.session.clone(),
+        data: json!(view),
+    };
+    Some((shown.to_value().to_string(), question))
 }
 
 /// Refuse to let a connection held to a ceiling open or join a session whose scope the ceiling
@@ -1803,12 +1940,20 @@ mod tests {
             )
         }
 
+        /// Send an event of `name`, with a view of nothing where it is a view, so that a connection
+        /// held to a ceiling is sent it unless it is stopped.
         fn event(&self, name: &'static str) {
+            let data = if crate::device_view::VIEWS.contains(&name) {
+                json!({"sequence": 1, "turn": 1, "target": 1, "status": "running",
+                    "pending": null, "rows": [], "omitted": 0, "actor": null})
+            } else {
+                json!({})
+            };
             write_event(
                 &self.sink,
                 &self.owners,
                 &AtomicU64::new(0),
-                &Event::new(name, "s1", json!({})),
+                &Event::new(name, "s1", data),
             );
         }
 
@@ -1832,7 +1977,7 @@ mod tests {
         watched.event("session.view.update");
         let kinds = watched.widen(&Widening::TurnStarting(Some(wider.clone())));
         assert_eq!(kinds, Some(vec![Kind::Run]));
-        watched.event("turn.started");
+        watched.event("session.view.update");
         watched.event("session.closed");
 
         let (held, free) = watched.sent();
@@ -1846,7 +1991,11 @@ mod tests {
         );
         assert_eq!(
             names(&free),
-            ["session.view.update", "turn.started", "session.closed"]
+            [
+                "session.view.update",
+                "session.view.update",
+                "session.closed"
+            ]
         );
         assert_eq!(
             watched.latest.lock().unwrap().get("s1"),
@@ -1868,14 +2017,14 @@ mod tests {
         let mut watched = watched(wider.clone());
         assert_eq!(watched.widen(&Widening::TurnStarting(Some(wider))), None);
         assert_eq!(watched.widen(&Widening::TrustAnswered(Some(ceiling))), None);
-        watched.event("turn.started");
-        assert_eq!(names(&watched.sent().0), ["turn.started"]);
+        watched.event("session.view.update");
+        assert_eq!(names(&watched.sent().0), ["session.view.update"]);
 
         assert_eq!(
             watched.widen(&Widening::TurnStarting(None)),
             Some(vec![Kind::Run])
         );
-        watched.event("turn.started");
+        watched.event("session.view.update");
         let (held, _) = watched.sent();
         assert_eq!(names(&held), ["session.suspended"]);
         assert_eq!(
@@ -1901,11 +2050,11 @@ mod tests {
                 watched.widen(&Widening::Granted(grant)),
                 Some(vec![Kind::Run])
             );
-            watched.event("tool.finished");
+            watched.event("session.view.update");
             let (held, free) = watched.sent();
             assert_eq!(names(&held), ["session.suspended"], "{grant:?}");
             assert_eq!(held[0]["data"]["widened"], json!([said]));
-            assert_eq!(names(&free), ["tool.finished"], "{grant:?}");
+            assert_eq!(names(&free), ["session.view.update"], "{grant:?}");
         }
     }
 
@@ -2376,5 +2525,312 @@ mod tests {
             host.not_stopped(1, "s2").is_ok(),
             "s2 was stopped by s1's approval"
         );
+    }
+
+    /// A connection held to a ceiling is sent only the events a device is, and its copy of the view
+    /// has what nobody vouched for as placeholders, while a connection held to none is sent every
+    /// event whole. A question whose body nobody vouched for is not offered to the held connection,
+    /// and its answer to that question is refused.
+    #[test]
+    fn a_held_connection_is_sent_a_devices_view() {
+        let (ceiling, _) = a_ceiling_and_a_wider_scope();
+        let mut host = a_host_with_a_session_attached_to_connection_one();
+        let mut held = a_reading_client(&host.output, 1, &Answer::ALL, Some(ceiling));
+        let mut free = a_reading_client(&host.output, 2, &Answer::ALL, None);
+        host.owners.lock().unwrap().get_mut("s1").unwrap().insert(2);
+        let sentinel = "SENTINEL-only-the-computer-sees-this";
+        let send = |host: &Served, name: &'static str, data: Value| {
+            write_event(
+                &host.output,
+                &host.owners,
+                &AtomicU64::new(0),
+                &Event::new(name, "s1", data),
+            );
+        };
+        send(
+            &host,
+            "tool.finished",
+            json!({"target": sentinel, "untrusted": true}),
+        );
+        send(&host, "quarantined", json!({"preview": [sentinel]}));
+        let update = json!({
+            "sequence": 3, "turn": 1, "target": 1, "status": "waiting", "omitted": 0, "actor": null,
+            "pending": {"row": 2, "request": 5, "kind": "confirm", "supported": true,
+                "data": {"request": 5, "path": sentinel, "untrusted": true}},
+            "rows": [
+                {"id": 1, "turn": 1, "kind": "quarantined", "event": "quarantined",
+                    "data": {"preview": [sentinel]}, "resolved": false},
+                {"id": 2, "turn": 1, "kind": "approval", "event": "confirm.request",
+                    "data": {"request": 5, "path": sentinel, "untrusted": true}, "resolved": false},
+            ],
+        });
+        send(&host, "session.view.update", update.clone());
+
+        let held_sent = sent_so_far(&host.output, 1, &mut held);
+        assert_eq!(names(&held_sent), ["session.view.update"]);
+        assert!(
+            !held_sent[0].to_string().contains(sentinel),
+            "{held_sent:?}"
+        );
+        assert_eq!(
+            held_sent[0]["data"]["rows"][0]["data"],
+            json!({"withheld": true})
+        );
+        assert_eq!(held_sent[0]["data"]["rows"][1]["id"], 2);
+        assert_eq!(
+            held_sent[0]["data"]["rows"][1]["data"],
+            json!({"withheld": true, "answer": "on the computer"})
+        );
+        assert!(held_sent[0]["data"]["pending"].is_null());
+
+        let free_sent = sent_so_far(&host.output, 2, &mut free);
+        assert_eq!(
+            names(&free_sent),
+            ["tool.finished", "quarantined", "session.view.update"]
+        );
+        assert_eq!(free_sent[2]["data"], update);
+
+        let reply = |request: u64| Request {
+            id: 1,
+            method: "confirm.reply".into(),
+            params: json!({"session": "s1", "request": request, "decision": "approve"}),
+        };
+        let refused = host.not_withheld(1, "s1", &reply(5)).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotAllowed);
+        assert!(host.not_withheld(2, "s1", &reply(5)).is_ok());
+        assert!(host.not_withheld(1, "s1", &reply(6)).is_ok());
+        host.answers.clear();
+    }
+
+    /// A host whose session `handle` has a turn waiting on question 3, a write only a connection
+    /// held to no ceiling may answer, with the turn's end of the answers and its pending question.
+    /// Connection 1 is held to a ceiling and connection 2 is not; both are attached with every
+    /// answer, and the session's view has started.
+    struct Waiting {
+        host: Served,
+        handle: String,
+        receiver: std::sync::mpsc::Receiver<crate::turn::Reply>,
+        pending: crate::turn::Pending,
+        _clients: Vec<BufReader<UnixStream>>,
+        _directory: tempfile::TempDir,
+    }
+
+    fn a_host_waiting_on_a_local_only_write() -> Waiting {
+        let (ceiling, _) = a_ceiling_and_a_wider_scope();
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = Served::new(Setup {
+            workspaces: Vec::new(),
+            settings: None,
+            inspection: "refused",
+        });
+        let (answers, receiver) = std::sync::mpsc::channel();
+        let pending: crate::turn::Pending = Arc::new(Mutex::new(Some(crate::turn::Question {
+            id: 3,
+            kind: Kind::Write,
+            local_only: true,
+        })));
+        let handle = host.bridge.open_running_for_test(
+            directory.path(),
+            crate::running::Running {
+                cancel: bravebot_core::cancel::Cancel::new(),
+                answers,
+                pending: Arc::clone(&pending),
+                target: 7,
+                finished: Arc::new(AtomicBool::new(false)),
+                interjections: None,
+                actors: Default::default(),
+            },
+        );
+        host.sessions.insert(handle.clone(), None);
+        host.owners
+            .lock()
+            .unwrap()
+            .insert(handle.clone(), BTreeSet::from([1, 2]));
+        let mut clients = Vec::new();
+        for (connection, ceiling) in [(1, Some(ceiling)), (2, None)] {
+            clients.push(a_reading_client(
+                &host.output,
+                connection,
+                &Answer::ALL,
+                ceiling,
+            ));
+            host.answers.insert(connection, Answer::ALL.to_vec());
+        }
+        host.viewed.lock().unwrap().insert(handle.clone());
+        let kinds = host.answerable_by(&handle, &BTreeSet::from([1, 2]));
+        host.bridge.set_answerable(&handle, &kinds).unwrap();
+        Waiting {
+            host,
+            handle,
+            receiver,
+            pending,
+            _clients: clients,
+            _directory: directory,
+        }
+    }
+
+    /// A held connection's reply to a question it is not offered is refused even when the host has
+    /// recorded nothing withheld, as when the reply arrives before the view that withholds the
+    /// question is sent, and even when the connection has no name. The question stays waiting, and
+    /// a connection held to no ceiling answers it.
+    #[test]
+    fn a_held_connections_reply_to_a_question_it_is_not_offered_is_refused_unrecorded() {
+        use crate::turn::Reply;
+        use bravebot_agent::confirm::Decision;
+        let mut waiting = a_host_waiting_on_a_local_only_write();
+        let host = &mut waiting.host;
+        host.names.insert(1, "phone".into());
+        host.names.insert(2, "window".into());
+        let reply = Request {
+            id: 1,
+            method: "confirm.reply".into(),
+            params: json!({"session": waiting.handle, "request": 3, "decision": "approve"}),
+        };
+
+        let refused = host.dispatch(1, &Answer::ALL, &reply).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotAllowed);
+        assert!(
+            waiting.receiver.try_recv().is_err(),
+            "the answer reached the turn"
+        );
+        assert!(waiting.pending.lock().unwrap().is_some());
+
+        host.names.remove(&1);
+        let refused = host.dispatch(1, &Answer::ALL, &reply).unwrap_err();
+        assert_eq!(
+            refused.code,
+            ErrorCode::NotAllowed,
+            "an unnamed device answered"
+        );
+        assert!(waiting.pending.lock().unwrap().is_some());
+
+        host.dispatch(2, &Answer::ALL, &reply).unwrap();
+        assert!(matches!(
+            waiting.receiver.try_recv(),
+            Ok(Reply::Write(Decision::Approve))
+        ));
+        host.responded();
+    }
+
+    /// When the last connection held to no ceiling that could answer a question a device is not
+    /// offered goes, the host refuses the question, so the turn does not wait on the device left,
+    /// which holds every answer. While another such connection stays, the question waits.
+    #[test]
+    fn the_host_refuses_a_local_only_question_when_the_last_local_connection_goes() {
+        use crate::turn::Reply;
+        use bravebot_agent::confirm::Decision;
+        let mut waiting = a_host_waiting_on_a_local_only_write();
+        let host = &mut waiting.host;
+        let _other = a_reading_client(&host.output, 3, &[Answer::Confirm], None);
+        host.owners
+            .lock()
+            .unwrap()
+            .get_mut(&waiting.handle)
+            .unwrap()
+            .insert(3);
+        host.answers.insert(3, vec![Answer::Confirm]);
+
+        host.lose(2);
+        assert!(
+            waiting.receiver.try_recv().is_err(),
+            "refused while a local connection stayed"
+        );
+        assert!(waiting.pending.lock().unwrap().is_some());
+
+        host.lose(3);
+        assert!(matches!(
+            waiting.receiver.try_recv(),
+            Ok(Reply::Write(Decision::Reject))
+        ));
+        assert!(waiting.pending.lock().unwrap().is_none());
+        host.responded();
+    }
+
+    /// Only a connection held to no ceiling, attached to the session, with the answer, and once the
+    /// session's view has started, counts as answering locally. A device given every answer does
+    /// not.
+    #[test]
+    fn only_a_connection_that_is_no_device_answers_locally() {
+        let (ceiling, _) = a_ceiling_and_a_wider_scope();
+        let host = a_host_with_a_session_attached_to_connection_one();
+        let _held = a_reading_client(&host.output, 1, &Answer::ALL, Some(ceiling));
+        let local = |host: &Served| {
+            answered_locally(&host.output, &host.owners, &host.viewed, "s1", Kind::Write)
+        };
+        host.viewed.lock().unwrap().insert("s1".into());
+        assert!(!local(&host), "a device answered locally");
+
+        let _free = a_reading_client(&host.output, 2, &[Answer::Run], None);
+        host.owners.lock().unwrap().get_mut("s1").unwrap().insert(2);
+        assert!(
+            !local(&host),
+            "a connection without the answer answered locally"
+        );
+
+        let _writer = a_reading_client(&host.output, 3, &[Answer::Confirm], None);
+        host.owners.lock().unwrap().get_mut("s1").unwrap().insert(3);
+        assert!(local(&host));
+
+        host.viewed.lock().unwrap().clear();
+        assert!(!local(&host), "answered before the view started");
+    }
+
+    /// What a held connection was not offered in a session is forgotten once the session has closed,
+    /// with what it was stopped for and approved for there.
+    #[test]
+    fn a_closed_session_leaves_nothing_withheld_stopped_or_approved() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().canonicalize().unwrap();
+        let mut host = Served::new(Setup {
+            workspaces: vec![directory.clone()],
+            settings: None,
+            inspection: "refused",
+        });
+        let _free = a_reading_client(&host.output, 2, &Answer::ALL, None);
+        let _held = a_reading_client(
+            &host.output,
+            1,
+            &Answer::ALL,
+            Some(bravebot_listener::registry::narrow_ceiling("\"/work\"")),
+        );
+        let opened = host
+            .new_session(
+                2,
+                &Request {
+                    id: 1,
+                    method: "session.new".into(),
+                    params: json!({"directory": directory.display().to_string()}),
+                },
+            )
+            .unwrap();
+        let handle = opened["session"].as_str().unwrap().to_string();
+        {
+            let mut output = host.output.lock().unwrap();
+            let held = output.get_mut(&1).unwrap();
+            held.withheld.insert((handle.clone(), 5));
+            held.suspended.insert(handle.clone());
+            held.approved.insert(
+                handle.clone(),
+                bravebot_listener::registry::narrow_ceiling("x"),
+            );
+        }
+        host.close(2, &handle).unwrap();
+        host.responded();
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let left = {
+                let output = host.output.lock().unwrap();
+                let held = &output[&1];
+                !held.withheld.is_empty() || !held.suspended.is_empty() || !held.approved.is_empty()
+            };
+            if !left {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "the closed session was not forgotten"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

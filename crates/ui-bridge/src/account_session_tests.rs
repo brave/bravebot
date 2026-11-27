@@ -91,6 +91,7 @@ fn take_a_turn_at(
         actors: Default::default(),
         published: Default::default(),
         scope_watch: None,
+        locally: None,
     });
 }
 

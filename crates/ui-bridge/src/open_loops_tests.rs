@@ -558,6 +558,7 @@ fn a_turn_that(
             actors: Default::default(),
             published: Default::default(),
             scope_watch: None,
+            locally: None,
         })
     });
     let result = received.recv_timeout(Duration::from_secs(20));

@@ -9,6 +9,7 @@ governs:
   - crates/ui-bridge/src/answerers.rs
   - crates/ui-bridge/src/workers.rs
   - crates/ui-bridge/src/widening.rs
+  - crates/ui-bridge/src/device_view.rs
   - crates/ui-bridge/src/bin/bravebot-host.rs
   - packages/agent-client/scripts/dev-relay.ts
   - packages/agent-client/scripts/host-client.ts
@@ -150,7 +151,7 @@ Each run of the host has an instance ID, drawn from the seed the standard librar
 
 A session has a set of attached connections. The connection that opens it is attached from `session.new`, and another joins with `session.attach` ([HOST-11](#HOST-11)). There is no controller: each attached connection may send, cancel, reply and close, and a connection that is attached already is refused a second `session.attach` with `bad_request`. There is no request to leave a session other than ending the connection. A connection that is not attached sees the session in `instance.info` with `attached` false, and is refused every other request that names it with `not_allowed`. It may close a session only when no connection is attached.
 
-A session's events go to every attached connection, except one stopped for the session ([HOST-15](#HOST-15)), in the order the bridge emits them, because the view and its sequence belong to the session and not to a connection. Two are sent only to the connection whose request made them, and only while it is attached: `session.view.snapshot`, which answers its `session.attach` or `session.view.resync`, and the startup question `trust.request` ([HOST-10](#HOST-10) says which connections are sent that). An event made while a session is being opened goes to the connection opening it. A `session.close` attaches the connection that sent it, so `session.closed` goes to it and to each connection attached when the close was answered, after the closer's answer ([HOST-8](#HOST-8)). The host tells the bridge the name of the client that sent each send, answer, trust answer and cancel it passes on, so the view and the trail can name the client that sent, answered or cancelled ([RPCVIEW-14](session-view.md#RPCVIEW-14), [TRACE-7](trace.md#TRACE-7)).
+A session's events go to every attached connection, except one stopped for the session ([HOST-15](#HOST-15)), in the order the bridge emits them, and one held to a ceiling is sent a device's copy of them ([HOST-16](#HOST-16)), because the view and its sequence belong to the session and not to a connection. Two are sent only to the connection whose request made them, and only while it is attached: `session.view.snapshot`, which answers its `session.attach` or `session.view.resync`, and the startup question `trust.request` ([HOST-10](#HOST-10) says which connections are sent that). An event made while a session is being opened goes to the connection opening it. A `session.close` attaches the connection that sent it, so `session.closed` goes to it and to each connection attached when the close was answered, after the closer's answer ([HOST-8](#HOST-8)). The host tells the bridge the name of the client that sent each send, answer, trust answer and cancel it passes on, so the view and the trail can name the client that sent, answered or cancelled ([RPCVIEW-14](session-view.md#RPCVIEW-14), [TRACE-7](trace.md#TRACE-7)).
 
 The first answer to a question counts, and a later answer to it is refused with `no_such_request` ([RPCVIEW-6](session-view.md#RPCVIEW-6)). A `turn.send` while a turn runs is refused with `turn_in_flight`, whichever attached connection sent the turn that is running.
 
@@ -337,3 +338,36 @@ The person approves a stopped connection for a session on the host, through `Hos
 `verified-by: bravebot_ui_bridge::answering_tests::an_approved_unconfined_run_tells_the_scope_watch_and_a_confined_one_does_not`
 `verified-by: bravebot_ui_bridge::scope_tests::the_trust_answer_is_told_to_the_scope_watch_before_anything_it_makes_the_bridge_say`
 `verified-by: bravebot_ui_bridge::scope_tests::a_turn_is_told_to_the_scope_watch_before_anything_of_it_is_sent`
+
+<a id="HOST-16"></a>
+### HOST-16: a connection held to a ceiling is sent a device's view
+
+A connection held to a ceiling ([HOST-15](#HOST-15)) is how a paired device is to be served, and the person agreed at pairing that the device may show what a session shows them, except what the bridge marks as from somewhere nobody vouched for ([decision 19](../design/mobile/decisions-and-tradeoffs.md#19-a-paired-device-is-an-approved-screen-that-receives-an-allowlist-of-events)). Such a connection is sent only `agent.ready`, `session.view.initial`, `session.view.update`, `session.view.snapshot`, `session.suspended`, `session.closed` and `trust.request`, the last only where it was given `trust`. Every other event is not sent to it, so an event the bridge comes to emit reaches no device until it is named here. A connection held to no ceiling is sent every event whole.
+
+In each view it is sent, live or as a snapshot, these rows keep their id, turn, kind, event and resolution and have their content replaced with `{"withheld":true}`:
+
+- a quarantined preview;
+- a tool's activity the agent marked `untrusted`, whose output lines are content nobody vouched for;
+- a question a device is not offered, whose placeholder also says `"answer":"on the computer"`.
+
+A device is offered a `confirm`, `run`, `fetch` or `ask` question, and not one of any other kind, which by what it is holds content nobody vouched for, such as a command's output or a file to vouch for. Nor is it offered one the agent marked `untrusted`, a write whose body came from such content, a write with an isolated processor's remark, which is always untrusted, or a fetch a redirect led to, whose address a remote server chose. Only the bridge's own row kind and question kind, a flag set to `true`, and whether the remark and the redirect are there decide this, and no text of a row is read.
+
+A question a device is not offered is also left out of what waits in the connection's view, and the connection's answer to it is refused with `not_allowed`, by the bridge under the lock that holds the question, so an answer sent before the view that withholds the question arrives is refused too. Such a write or fetch is put to the session only where a connection held to no ceiling can answer it, checked under the lock that registers the question, and is otherwise refused when it is asked, unshown and unnumbered, as a question nobody can answer is ([HOST-10](#HOST-10)). When the last connection held to no ceiling that could answer it leaves while it waits, it is refused and shown as resolved, so it does not wait on a device that is not shown it. A view that cannot be read as one is not sent to the connection, rather than sent whole. What the connection was not offered is forgotten when the session closes.
+
+A file name is not withheld for what it is. Where a tool's activity or a write question is sent, not replaced by a placeholder, the file name it shows is sent whole, even when it names a file the agent holds as a reference because it came from somewhere nobody vouched for, since no flag the bridge reads marks it.
+
+`verified-by: bravebot_ui_bridge::device_view::what_nobody_vouched_for_reaches_a_device_as_a_placeholder_in_its_place`
+`verified-by: bravebot_ui_bridge::device_view::a_question_nothing_marked_is_offered_to_a_device`
+`verified-by: bravebot_ui_bridge::device_view::only_the_flag_the_agent_sets_withholds_a_row`
+`verified-by: bravebot_ui_bridge::device_view::a_device_is_sent_only_these_events`
+`verified-by: bravebot_ui_bridge::host::a_held_connection_is_sent_a_devices_view`
+`verified-by: bravebot_ui_bridge::host::only_a_connection_that_is_no_device_answers_locally`
+`verified-by: bravebot_ui_bridge::answering_tests::an_untrusted_write_is_refused_unasked_where_only_a_device_could_answer_it`
+`verified-by: bravebot_ui_bridge::answering_tests::a_question_only_a_local_connection_may_answer_is_refused_when_the_last_one_goes`
+`verified-by: bravebot_ui_bridge::answering_tests::a_redirected_fetch_is_refused_unasked_where_only_a_device_could_answer_it`
+`verified-by: bravebot_ui_bridge::device_view::each_question_a_device_is_not_offered_is_withheld`
+`verified-by: bravebot_ui_bridge::host::a_closed_session_leaves_nothing_withheld_stopped_or_approved`
+`verified-by: bravebot_ui_bridge::host::a_held_connections_reply_to_a_question_it_is_not_offered_is_refused_unrecorded`
+`verified-by: bravebot_ui_bridge::host::the_host_refuses_a_local_only_question_when_the_last_local_connection_goes`
+`verified-by: bravebot_ui_bridge::control_tests::a_devices_reply_to_a_question_it_is_not_offered_is_refused_by_the_bridge`
+`verified-by: bravebot_ui_bridge::answering_tests::a_device_cannot_answer_a_question_it_is_not_offered_however_soon_it_replies`

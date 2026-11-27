@@ -650,6 +650,7 @@ fn a_turn(
         actors: Default::default(),
         published: Default::default(),
         scope_watch: None,
+        locally: None,
     }
 }
 

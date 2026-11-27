@@ -211,6 +211,7 @@ fn shutting_down_refuses_a_waiting_question_rather_than_only_cancelling_its_turn
     let pending: crate::turn::Pending = Arc::new(Mutex::new(Some(crate::turn::Question {
         id: 1,
         kind: Kind::Write,
+        local_only: false,
     })));
     let running = Running {
         cancel: cancel.clone(),

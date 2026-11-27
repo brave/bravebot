@@ -28,6 +28,7 @@ fn a_question(id: u64) -> Question {
     Question {
         id,
         kind: Kind::Write,
+        local_only: false,
     }
 }
 
@@ -390,6 +391,7 @@ fn an_answer_to_another_question_does_not_apply() {
     *running.pending.lock().expect("not poisoned") = Some(Question {
         id: 1,
         kind: Kind::Run,
+        local_only: false,
     });
 
     assert!(
@@ -653,7 +655,11 @@ fn an_mcp_question_takes_no_answer_of_another_kind() {
             Reply::McpMove(Decision::Approve),
         ),
     ] {
-        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        *running.pending.lock().expect("not poisoned") = Some(Question {
+            id: 1,
+            kind,
+            local_only: false,
+        });
         assert!(
             !running.answer(1, Reply::Write(Decision::Approve)),
             "{kind:?}"
@@ -868,7 +874,11 @@ fn an_approved_fetch_answers_no_other_question() {
         Kind::Vet,
         Kind::Server,
     ] {
-        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        *running.pending.lock().expect("not poisoned") = Some(Question {
+            id: 1,
+            kind,
+            local_only: false,
+        });
         assert!(
             !running.answer(1, Reply::Fetch(Decision::Approve)),
             "a fetch approval answered a waiting {kind:?}"
@@ -1021,7 +1031,11 @@ fn an_approved_server_answers_no_other_question() {
         Kind::Vet,
         Kind::Fetch,
     ] {
-        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        *running.pending.lock().expect("not poisoned") = Some(Question {
+            id: 1,
+            kind,
+            local_only: false,
+        });
         assert!(
             !running.answer(1, Reply::Server(Decision::Approve)),
             "a server approval answered a waiting {kind:?}"
@@ -1141,7 +1155,11 @@ fn an_approved_plan_answers_no_other_question() {
         Kind::Fetch,
         Kind::Server,
     ] {
-        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        *running.pending.lock().expect("not poisoned") = Some(Question {
+            id: 1,
+            kind,
+            local_only: false,
+        });
         assert!(
             !running.answer(1, Reply::Manifest(Decision::Approve)),
             "a plan approval answered a waiting {kind:?}"
@@ -1260,7 +1278,11 @@ fn an_approved_exposure_answers_no_other_question() {
         Kind::Server,
         Kind::Manifest,
     ] {
-        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        *running.pending.lock().expect("not poisoned") = Some(Question {
+            id: 1,
+            kind,
+            local_only: false,
+        });
         assert!(
             !running.answer(1, Reply::Exposure(Decision::Approve)),
             "an exposure approval answered a waiting {kind:?}"
@@ -1621,7 +1643,11 @@ fn a_host_answer_answers_no_other_question() {
         Kind::Exposure,
         Kind::McpMove,
     ] {
-        *running.pending.lock().expect("not poisoned") = Some(Question { id: 1, kind });
+        *running.pending.lock().expect("not poisoned") = Some(Question {
+            id: 1,
+            kind,
+            local_only: false,
+        });
         assert!(
             !running.answer(1, Reply::Host(Decision::Approve)),
             "a host approval answered a waiting {kind:?}"
@@ -1630,6 +1656,7 @@ fn a_host_answer_answers_no_other_question() {
     *running.pending.lock().expect("not poisoned") = Some(Question {
         id: 1,
         kind: Kind::Host,
+        local_only: false,
     });
     assert!(running.answer(1, Reply::Host(Decision::Approve)));
 }
