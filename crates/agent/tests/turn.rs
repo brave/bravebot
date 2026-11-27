@@ -77584,6 +77584,7 @@ fn a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_pr
                 while !started.exists() && std::time::Instant::now() < until {
                     thread::sleep(std::time::Duration::from_millis(20));
                 }
+                assert!(started.exists(), "the job never wrote started");
                 tool_request(
                     "job_output",
                     r#"{"job":"job:1","wait_seconds":2,"until_exit":true}"#,
