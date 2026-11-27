@@ -3214,13 +3214,7 @@ fn undeclared_argument(
     arguments: &Value,
     mode: crate::PermissionMode,
 ) -> Option<String> {
-    let declared = offered?
-        .iter()
-        .find(|tool| tool.function.name == name)?
-        .function
-        .parameters
-        .get("properties")?
-        .as_object()?;
+    let declared = declared_arguments(offered, name)?;
     let (argument, _) = arguments.as_object()?.iter().find(|(argument, value)| {
         !value.is_null()
             && !declared.contains_key(argument.as_str())
@@ -3245,6 +3239,109 @@ fn undeclared_argument(
         }
     }
     Some(said)
+}
+
+/// The arguments the schema `name` was offered with declares, or `None` where no schema offered
+/// this turn has that name or it declares none.
+fn declared_arguments<'a>(
+    offered: Option<&'a [Tool]>,
+    name: &str,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    offered?
+        .iter()
+        .find(|tool| tool.function.name == name)?
+        .function
+        .parameters
+        .get("properties")?
+        .as_object()
+}
+
+/// The error for a call whose arguments are not valid JSON (TOOL-3, BACKEND-44).
+///
+/// It says the call was not run, names the tool, gives the parser's reason, quotes a short piece
+/// of the text received around the position the parser reported, lists what a built-in takes as
+/// TOOL-3 does, and asks for the whole call again. It also says the call was not empty, because the
+/// next request may carry it with empty arguments (BACKEND-44). The text received is the planner's
+/// own, so it is quoted only where [`Policy::read_planner_argument`] releases it, and a result that
+/// quotes it is labelled as what the planner wrote, from the context (LABEL-5, TOOL-7); from a
+/// context that has met untrusted content the sentence says it is not repeated. A server's tool,
+/// or a name nothing was offered under, lists nothing.
+///
+/// The tool is named by the driver's own string for it: the schema offered under that name this
+/// turn, or the wire name a server's tool was offered under. A name neither holds is "a tool
+/// call". The name as the call spelled it is what the planner wrote, so it is never repeated in a
+/// result labelled as the driver's. The person watching is told the first sentence alone, so a
+/// quote from a private context does not reach a screen unlabelled.
+fn unparsed_arguments<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    call: &ToolCall,
+    name: &str,
+    error: &serde_json::Error,
+) -> Produced {
+    let named = tools
+        .offered
+        .and_then(|offered| offered.iter().find(|tool| tool.function.name == name))
+        .map(|tool| tool.function.name.as_str())
+        .or_else(|| tools.mcp.and_then(|offer| offer.wire_name_of(name)));
+    let first = match named {
+        Some(named) => format!(
+            "error: the {named} call was not run, because its arguments were not valid JSON: \
+             {error}."
+        ),
+        None => format!(
+            "error: a tool call was not run, because its arguments were not valid JSON: {error}."
+        ),
+    };
+    let gated_as = named.unwrap_or("unoffered");
+    let mut said = first.clone();
+    let received = Labelled::new(
+        call.function.arguments.clone().unwrap_or_default(),
+        bravebot_core::label::Label::untrusted_public(),
+    );
+    let quoted = match policy.read_planner_argument(gated_as, "arguments", &received) {
+        Ok(received) => {
+            let piece = bravebot_core::excerpt::around(&received, error.line(), error.column());
+            said.push_str(&format!(
+                " Its arguments were: `{piece}`. The conversation may show this call with empty \
+                 arguments; those arguments were the text quoted here."
+            ));
+            true
+        }
+        Err(_) => {
+            said.push_str(
+                " The conversation may show this call with empty arguments; it was not empty, but \
+                 the text it received is not repeated here, because this context has met \
+                 untrusted content.",
+            );
+            false
+        }
+    };
+    let a_server_tool =
+        name.starts_with("mcp__") || tools.mcp.is_some_and(|offer| offer.find(name).is_some());
+    if !a_server_tool && let Some(declared) = declared_arguments(tools.offered, name) {
+        let takes = declared
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        said.push_str(&format!(" It takes: {takes}."));
+    }
+    said.push_str(" Send the whole call again, with its arguments written as valid JSON.");
+    if quoted {
+        // The quote is the planner's words, so the result takes the label of the context they
+        // were written in, which holds private content where the planner was shown some.
+        Produced {
+            failed: true,
+            ..Produced::new(
+                policy.label_model_output(gated_as, said),
+                String::new(),
+                first,
+            )
+        }
+    } else {
+        Produced::refused_with_a_note(said, first)
+    }
 }
 
 /// [`dispatch`], answering a call from a read that already ran where there is one.
@@ -3273,8 +3370,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     let arguments = match call.arguments() {
         Ok(value) => value,
         Err(e) => {
-            let produced =
-                Produced::problem(format!("error: the arguments were not valid JSON: {e}"));
+            let produced = unparsed_arguments(policy, tools, call, &name, &e);
             // Announced and closed in one breath, because there was never a call to watch.
             let call_id = CallId::next();
             reporter.tool_started(Activity::running(verb, "").for_call(call_id).of_tool(&name));

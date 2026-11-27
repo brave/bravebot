@@ -40,6 +40,7 @@ pub mod credentials;
 pub mod delegate;
 pub mod device;
 pub mod event;
+pub mod excerpt;
 pub mod fence;
 pub mod file_authority;
 pub mod incognito;

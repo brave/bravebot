@@ -80,6 +80,14 @@ does not take: the call is refused before it runs, and nobody is asked about it.
 the argument and lists the ones the tool takes. For [`run`](#run) it also says that a variable is
 set by writing `NAME=value` in front of the program. A server's tool is sent its arguments as given.
 
+A call whose arguments are not valid JSON is not run. The planner is told so, with the tool's name
+where it is one the turn offered, the parser's reason, a short piece of what it sent around the
+place the parser stopped (at most 40 characters before and 20 from it), the arguments a built-in
+tool takes, and a request to send the whole call again as valid JSON. The error also says the call
+was not empty, because the next request may show it with empty arguments. Once the planner's
+context has met untrusted content, its text is not repeated in the error. The line on the screen
+shows the first sentence of the error, without the piece.
+
 When the planner asks for several calls in one reply, they run in the order it asked, except that two
 or more consecutive [`list_files`](#list_files) and [`search`](#search) calls are read at the same
 time, eight at most. Their results are added in the order the calls were asked, and what is

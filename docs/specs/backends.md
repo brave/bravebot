@@ -3658,7 +3658,8 @@ An argument that arrives this way is handed to the turn loop exactly as the mode
 does not parse is a failed call the planner is told about, and it never runs: nothing repairs it or
 closes it on the way to being dispatched. The conversation sent on the next round carries that call
 with an empty object for its arguments, this service taking nothing but an object there, beside the
-result saying it failed.
+result saying it failed. That result quotes what was received and says the call was not empty
+([TOOL-7](tools/tool-surface.md#TOOL-7)).
 
 **Why.** Without the ask the service holds an argument back until the model has finished writing it,
 so a `write_file` whose contents are a whole program is the tool's name and then silence for as long

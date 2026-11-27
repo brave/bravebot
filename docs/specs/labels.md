@@ -19,7 +19,7 @@ guards:
       - crates/agent/src/manifest.rs: 4
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/skills.rs: 1
-      - crates/agent/src/tools.rs: 31
+      - crates/agent/src/tools.rs: 32
       - crates/agent/src/tools/tests/untrusted_refusals.rs: 2
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 19
@@ -189,7 +189,7 @@ guards:
   - symbol: Policy::label_model_output
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 6
+      - crates/agent/src/tools.rs: 7
       - crates/agent/src/tools/recall.rs: 3
       - crates/core/src/policy.rs: 26
   - symbol: Policy::adopt_model_output
@@ -240,7 +240,7 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 18
+      - crates/agent/src/tools.rs: 19
       - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/tools/web_search.rs: 1
       - crates/agent/src/workspace.rs: 1
@@ -586,6 +586,19 @@ An argument naming something the driver minted is held the same way, since the p
 who picks which of those names a call is about. [routing.md](routing.md) is where that case is
 settled.
 
+The text of a call whose arguments do not parse ([TOOL-7](tools/tool-surface.md#TOOL-7)) is read
+through the same gate, and the error quotes a piece of it back to the planner only where the gate
+released it. The gate releases it only while the context has met nothing untrusted, which is the
+condition under which the row for what the planner wrote in [LABEL-8](#LABEL-8) gives it a trusted
+label. So the quote is trusted because of that row. The result that quotes it takes that row's label
+from the context, through `Policy::label_model_output`, so it is private where the context holds
+private content, and is not given the trusted public label of the rest of a refusal. The screen is
+told the error without the quote. From a context that has met untrusted content nothing is quoted.
+The name the call gave for its tool is what the planner wrote as well, and is not gated, so the
+error never repeats it: it names the tool by the schema or server tool offered under that name, and
+otherwise says "a tool call". The piece is cut at the parser's position and its control and
+invisible characters are written out; no effect depends on it.
+
 One exception is named, and it is narrow: within a manifest plan a person approved, the calls of an
 `apply` step whose tools the person marked plan-covered are selected by a processor that read
 untrusted content, among calls of the plan's tools, arguments and lists, each acceptable on its own,
@@ -605,6 +618,8 @@ within the caps the plan states ([manifest.md](manifest.md#MANIFEST-17)).
 `verified-by: bravebot_agent::tools::tests::arguments::a_job_name_is_read_from_a_trusted_context`
 `verified-by: bravebot_agent::tools::tests::arguments::a_job_name_is_refused_once_the_context_has_met_something_untrusted`
 `verified-by: bravebot_agent::tools::tests::arguments::a_skill_name_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::the_text_of_an_unparsed_call_is_not_repeated_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::the_text_of_an_unparsed_call_keeps_the_label_of_the_context_that_wrote_it`
 `verified-by: bravebot_agent::tools::tests::references::a_context_that_has_met_something_untrusted_collects_nothing_from_the_planners_arguments`
 `verified-by: bravebot_agent::tools::tests::references::a_command_the_planner_wrote_names_the_items_it_works_on_even_where_the_call_then_fails`
 `verified-by: bravebot_agent::manifest_server_calls::a_step_whose_tools_are_all_marked_runs_on_the_plans_approval`

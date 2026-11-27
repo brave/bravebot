@@ -4549,6 +4549,87 @@ fn an_undeclared_argument_is_refused_by_any_built_in_tool() {
     );
 }
 
+/// TOOL-7, BACKEND-44: a call whose arguments are not valid JSON is answered, in the request that
+/// follows, with an error that names the tool, quotes the text around the bad key and asks for the
+/// whole call again, and the corrected call the model sends next runs once. The file changes only
+/// from the resend.
+///
+/// The regressions it rejects: a fix made to the screen's note and not to what the planner is sent,
+/// a malformed call that is run or repaired, and a failed call that leaves the turn unable to run
+/// the next one.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_call_that_did_not_parse_is_resent_whole_and_the_resend_runs() {
+    let scratch = Scratch::new("unparsed-resend");
+    std::fs::write(scratch.path.join("a.txt"), "y\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","edits":[{"new_text">"x","old_text":"y"}],"why":"edit"}"#,
+        ),
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","edits":[{"new_text":"x","old_text":"y"}],"why":"edit"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        Task::new("change y to x in a.txt"),
+    )
+    .expect("turn runs");
+
+    let results = |request: &str| -> Vec<String> {
+        let parsed: serde_json::Value = serde_json::from_str(request).expect("a request");
+        parsed["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .map(|message| message["content"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    let _first = received.recv().expect("first request");
+    let second = results(&received.recv().expect("second request"));
+    let refused = second.last().expect("a result for the first call");
+    assert!(
+        refused
+            .contains("the edit_file call was not run, because its arguments were not valid JSON"),
+        "the planner was not told the call did not run: {refused}"
+    );
+    assert!(
+        refused.contains(r#"{"new_text">"x","#),
+        "the planner was not shown the bad key: {refused}"
+    );
+    assert!(
+        refused.contains("Send the whole call again, with its arguments written as valid JSON."),
+        "the planner was not asked to resend the call: {refused}"
+    );
+    assert!(
+        refused.contains("may show this call with empty arguments"),
+        "the planner was not told the call held text: {refused}"
+    );
+    let third = results(&received.recv().expect("third request"));
+    assert_eq!(third.len(), 2, "{third:?}");
+    assert!(
+        !third[1].starts_with("error"),
+        "the resent call did not run: {}",
+        third[1]
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "x\n",
+        "the file was not changed once, by the resend"
+    );
+}
+
 /// `why`, which no built-in schema writes for itself, is not refused as undeclared: every offered
 /// schema declares it (TOOL-5), and the call runs.
 ///
