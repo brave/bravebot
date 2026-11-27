@@ -758,12 +758,12 @@ check-affected-containers:
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-log-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
-	check-verus-contracts-ledger check-verus-weakened-selftest
+	check-verus-contracts-ledger check-verus-weakened-selftest check-drive-tui-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
 	check-maintenance-selftest check-profile-selftest check-session-review-selftest check-log-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
 	check-review-ready-selftest check-clean-branches-selftest check-verus-contracts-selftest \
-	check-verus-contracts-ledger check-verus-weakened-selftest
+	check-verus-contracts-ledger check-verus-weakened-selftest check-drive-tui-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -812,6 +812,9 @@ check-implement-issues-selftest:
 
 check-review-ready-selftest:
 	python3 contrib/review-ready-selftest.py
+
+check-drive-tui-selftest:
+	python3 contrib/drive-tui-selftest.py
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest

@@ -228,7 +228,12 @@ fn drive(scratch: &Scratch, arguments: &[&str], script: &str, errors: Option<&Pa
         .env("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1")
         .env("OPENROUTER_API_KEY", "a-token")
         .current_dir(&scratch.work);
-    command.arg("python3").arg(&driver).args(["-", "--"]);
+    // `--answer` past every step's timeout: a step here always draws, and a step that ended
+    // before its keys drew would type the next one while the interface is busy.
+    command
+        .arg("python3")
+        .arg(&driver)
+        .args(["-", "--answer", "600", "--"]);
     if let Some(errors) = errors {
         // The shell only moves the binary's standard error to the file and starts it.
         command.env("RESUME_LINE_STANDARD_ERROR", errors).args([

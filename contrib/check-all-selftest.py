@@ -77,7 +77,7 @@ class CheckTargets(unittest.TestCase):
           ' check-maintenance-selftest check-profile-selftest check-session-review-selftest check-log-review-selftest check-lint-increase-selftest'
           ' check-implement-issues-selftest check-review-ready-selftest check-clean-branches-selftest'
           ' check-verus-contracts-selftest check-verus-contracts-ledger'
-          ' check-verus-weakened-selftest:\n\t@true\n')
+          ' check-verus-weakened-selftest check-drive-tui-selftest:\n\t@true\n')
         for target, expected in (("check-all-local", local), ("check-all", gates)):
             for failing in ("", *sorted(expected)):
                 with self.subTest(target=target, failing=failing):
@@ -108,7 +108,8 @@ class CheckTargets(unittest.TestCase):
                     "python3 agents/skills/clean-branches-and-worktrees/selftest.py",
                     "python3 contrib/check-verus-contracts.py --selftest",
                     "python3 contrib/check-verus-contracts.py",
-                    "python3 contrib/check-verus-weakened.py --selftest"]
+                    "python3 contrib/check-verus-weakened.py --selftest",
+                    "python3 contrib/drive-tui-selftest.py"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("-k", "check-scripts", FAIL_COMMAND=failing)

@@ -481,7 +481,11 @@ the model.
 A step that types keys ends only once the interface has written something after its last key and
 then gone still. An interface that is busy writes nothing, and the next step's keys typed then
 would wait on the terminal beside this step's and be read with them, which the interface does not
-take as a press. A step whose keys draw nothing therefore runs for its whole timeout.
+take as a press. A step whose keys draw nothing ends after `--answer` seconds (default 5) or its
+timeout, whichever is sooner. An interface busy for longer than that without drawing can still be
+sent the next step's keys while it is busy; raise `--answer` for such a script. The first step is
+typed once the program has drawn something and gone still, or after `--settle` seconds (default 5)
+if it draws nothing.
 
 Before a step's last key, the driver reads what the earlier keys drew until the interface has been
 quiet for 0.3 seconds, for at most 2 seconds, and that output does not count. An interface that is

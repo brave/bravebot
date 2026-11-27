@@ -140,7 +140,8 @@ fn the_interface_that_draws_sends_one_ping_a_day_as_tui() {
         let mut driving = command
             .arg("python3")
             .arg(&driver)
-            .args(["-", "--squash", "--"])
+            // `--answer` past every step's timeout, so no step ends before its keys draw.
+            .args(["-", "--squash", "--answer", "600", "--"])
             .arg(env!("CARGO_BIN_EXE_bravebot"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

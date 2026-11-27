@@ -20,7 +20,9 @@ the longest it will wait and returns as soon as the screen has been still for a 
 both quicker and far less brittle than sleeping for a guess. A step that types keys waits for the
 interface to write something after its last key before the stillness counts, since an interface
 that is busy is as still as one waiting for a key. What the earlier keys drew is read off first,
-within `DRAIN_QUIET` and `DRAIN_LIMIT`; output later than that still counts.
+within `DRAIN_QUIET` and `DRAIN_LIMIT`; output later than that still counts. Keys that draw
+nothing end the step after `--answer` seconds. The first step is typed only once the program has
+drawn something and gone still, or `--settle` seconds have passed.
 
 What this is not is a terminal emulator. Escape sequences are stripped rather than interpreted,
 so what comes out has the right characters in the right order and the wrong shape: a sentence the
@@ -164,7 +166,7 @@ def type_in(terminal, keys, before_last=None):
         time.sleep(PACE)
 
 
-def drive(argv, steps, env=None, cols=120, rows=40, quiet=1.5, settle=5.0):
+def drive(argv, steps, env=None, cols=120, rows=40, quiet=1.5, settle=5.0, answer=5.0):
     """Run `argv` under a pty, send each step, and return everything it wrote."""
     child, terminal = pty.fork()
     if child == 0:
@@ -179,16 +181,18 @@ def drive(argv, steps, env=None, cols=120, rows=40, quiet=1.5, settle=5.0):
 
     captured = []
 
-    def pump(timeout, typed=False):
+    def pump(timeout, typed=False, unheard=None):
         """Read until the stream has been quiet for `quiet`, or `timeout` passes. False if gone.
 
         With `typed`, the quiet counts only once the interface has written something since the
         step's last key was typed. An interface that is busy is as quiet as one that is waiting for
         a key, and the next step typed while it is busy waits on the tty beside this one's keys, so
-        the two arrive together and neither is a press (INPUT-34).
+        the two arrive together and neither is a press (INPUT-34). Keys that draw nothing at all
+        end the step after `unheard` seconds, `answer` unless given, not after the whole timeout.
         """
         deadline = time.time() + timeout
         last = time.time()
+        unheard_until = last + (answer if unheard is None else unheard)
         heard = not typed
         while time.time() < deadline:
             ready, _, _ = select.select([terminal], [], [], 0.2)
@@ -203,6 +207,8 @@ def drive(argv, steps, env=None, cols=120, rows=40, quiet=1.5, settle=5.0):
                 last = time.time()
                 heard = True
             elif heard and time.time() - last >= quiet:
+                return True
+            elif not heard and time.time() >= unheard_until:
                 return True
         return True
 
@@ -225,7 +231,10 @@ def drive(argv, steps, env=None, cols=120, rows=40, quiet=1.5, settle=5.0):
                 return
             captured.append(chunk.decode("utf-8", "replace"))
 
-    pump(settle)
+    # The first screen is waited for as a step's answer is. A program that has drawn nothing has
+    # not yet set its terminal up, and keys typed before it does are read as the terminal's own
+    # line editing gives them, or thrown away when it switches to reading raw keys.
+    pump(settle, typed=True, unheard=settle)
     for timeout, keys in steps:
         if keys:
             try:
@@ -260,10 +269,14 @@ def main():
                         help="print with layout removed, which is what to assert against")
     parser.add_argument("--cols", type=int, default=120)
     parser.add_argument("--rows", type=int, default=40)
+    parser.add_argument("--answer", type=float, default=5.0,
+                        help="seconds a step waits for its keys to draw anything before it ends "
+                             "on silence anyway (default: 5)")
     parser.add_argument("--quiet", type=float, default=1.5,
                         help="seconds of silence that end a step early (default: 1.5)")
     parser.add_argument("--settle", type=float, default=5.0,
-                        help="seconds to wait for the first screen (default: 5)")
+                        help="seconds to wait for the first screen; the first step is typed once "
+                             "it has drawn and gone quiet (default: 5)")
     # Split on the separator before argparse sees it. REMAINDER would do this only when the
     # separator comes before every option, so `--squash -- bravebot` silently ran a program called
     # --squash. Splitting here means the options may go in any order.
@@ -277,12 +290,14 @@ def main():
     # Parsed before the command is insisted on, so `--help` prints help rather than complaining
     # about a separator the reader is asking where to put.
     args = parser.parse_args(mine)
+    if not args.answer > 0:
+        parser.error("--answer must be more than 0 seconds; a step would end before its keys drew")
     if not command:
         parser.error("give the command to run after a --")
 
     text = sys.stdin.read() if args.script == "-" else open(args.script).read()
     captured = drive(command, parse_script(text), cols=args.cols, rows=args.rows,
-                     quiet=args.quiet, settle=args.settle)
+                     quiet=args.quiet, settle=args.settle, answer=args.answer)
 
     if args.raw:
         with open(args.raw, "w") as handle:
