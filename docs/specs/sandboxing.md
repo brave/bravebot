@@ -5058,6 +5058,12 @@ file. A new spawn that looks a name up through
   | `BROWSER` | a program | the command `gcloud auth login` opens the sign-in page with |
   | `OPENSSL_CONF` | a file | configuration of the OpenSSL Python loads, which can load a provider module |
 
+  The `gcloud` start is made the same way for three fixed argument lists, each a constant in
+  `crates/agent/src/gcloud.rs`: `auth application-default print-access-token`, `auth application-default login`
+  and `auth application-default revoke --quiet`. The last runs only after a person typed a yes
+  ([BACKEND-75](backends.md#BACKEND-75)). All three take the list above and the generic names, and no value from
+  a settings file, a model or the workspace reaches any of them.
+
   The AWS CLI's list is:
 
   | AWS CLI variable | Names | Why it selects code |
@@ -6913,6 +6919,10 @@ shown by running the program, or not entirely:
 `verified-by: bravebot_bedrock::credentials::the_aws_start_turns_off_the_user_site_when_dot_local_leads_into_a_stage_directory`
 `verified-by: bravebot_agent::gcloud::the_gcloud_start_turns_off_the_user_site_only_where_a_stage_may_write_it`
 `verified-by: bravebot_agent::gcloud::the_gcloud_start_turns_off_the_user_site_when_dot_local_leads_into_a_stage_directory`
+`verified-by: bravebot_agent::gcloud::the_revoke_is_the_application_default_credentials_command_and_reports_only_its_exit_status`
+`verified-by: bravebot_agent::gcloud::a_started_gcloud_has_this_agents_credentials_removed`
+`verified-by: bravebot_agent::gcloud::a_started_gcloud_has_the_generic_code_selectors_removed_as_well`
+`verified-by: bravebot_agent::gcloud::a_started_gcloud_is_given_a_path_the_lookup_has_reduced`
 `verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so the deletion of the sixteen names before each call of electron shell is pinned instead by ui/scripts/external-open.test.mjs, which asserts that the sixteen names are the ones the opener scripts read, that each of openExternal, openPath and showItemInFolder reaches electron with them already deleted, that PATH, EDITOR and HOME are left alone, and that no other file in ui/src/main calls the opening functions of shell; make check-ui runs it)`
 `verified-by: by-construction (the same deletion is pinned against Electron itself on Linux by ui/scripts/external-open-electron.test.mjs, which asserts that openExternal, openPath and showItemInFolder each start xdg-open without the sixteen names where Electron's own shell starts it with all sixteen; its showItemInFolder case is a test case of its own, asserts a start of xdg-open and passed on Linux in CI run 43104226342; the ui job of CI runs it through make check-ui-build on ubuntu-latest and fails on Linux when Electron or xvfb-run is missing)`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_that_spells_a_directory_is_removed_from_a_browser_or_xdg_value_unless_it_is_a_listed_gap`

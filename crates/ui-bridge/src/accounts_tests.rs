@@ -128,6 +128,29 @@ fn the_block_hides_rows_about_nothing_to_sign_in_to() {
     assert!(shown(&row(Way::Xai, not_signed_in(Why::NothingStored))));
 }
 
+/// BACKEND-74: the window draws no row for the Google Cloud CLI's sign-in, whatever its standing,
+/// since the project is typed at a terminal and the sign-in waits on a browser the window cannot
+/// show. The regression it rejects: a `shown` that lets the row through, which draws a row with no
+/// sentence and no command.
+#[test]
+fn the_window_draws_no_row_for_the_google_cloud_cli_sign_in_whatever_its_standing() {
+    let row = |standing| Row {
+        way: Way::GoogleCloud,
+        standing,
+        stored: false,
+    };
+    for standing in [
+        Standing::SignedIn(Held::GoogleCloudToken),
+        not_signed_in(Why::GoogleCloudNoProject),
+        not_signed_in(Why::GoogleCloudLapsed),
+        not_signed_in(Why::NotChecked),
+        Standing::Unusable(Why::GoogleCloudNoCli),
+        Standing::Unusable(Why::GoogleCloudTimedOut),
+    ] {
+        assert!(!shown(&row(standing)));
+    }
+}
+
 #[test]
 fn only_what_bravebot_keeps_can_be_signed_out_of() {
     let row = |way, stored| Row {

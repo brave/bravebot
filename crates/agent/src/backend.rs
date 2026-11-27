@@ -5689,6 +5689,31 @@ mod tests {
         assert!(matches!(failure, BackendError::NoGatewayToken { .. }));
     }
 
+    /// BACKEND-65 and CLI-18: the block `auth login google` records is what a turn reads. Built from the
+    /// offer the command writes, with no key stored and a `GOOGLE_API_KEY` exported that the block
+    /// does not name, a request for a `google-vertex` model is sent the CLI's token as an access
+    /// token and no key, at the host the project builds. The regression it rejects is a recorded block
+    /// that a turn reads as express mode or as a key to look for, so the person is signed in and the
+    /// request still carries no token.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_block_a_google_sign_in_records_is_answered_with_the_cli_token_and_no_key() {
+        let offer = crate::key_entry::google_cloud_offer("example-project-1", "").expect("offer");
+        let config = vertex_config(&offer.entry_text());
+        let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
+        assert_eq!(
+            provider.base_url,
+            "https://aiplatform.googleapis.com/v1/projects/example-project-1/locations/global/endpoints/openapi"
+        );
+        let exported = |name: &str| (name == env_var::GOOGLE_API_KEY).then(|| "a-key".to_string());
+        let ((token, _), access_token) = gateway_parts_or_google_token(provider, exported, || {
+            Ok(bravebot_config::Secret::new("placeholder-t"))
+        })
+        .expect("resolved");
+        assert_eq!(token.expect("a token").expose(), "placeholder-t");
+        assert!(access_token, "the CLI's token was not sent as a bearer");
+    }
+
     /// BACKEND-9, BACKEND-65: the sign-in is due for a model such a project serves and for no
     /// other, and not where a key resolves.
     #[test]

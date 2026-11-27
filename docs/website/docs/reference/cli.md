@@ -27,7 +27,7 @@ Usage:
   bravebot bug-report                    Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
   bravebot update                        Print the command that updates this copy
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
-  bravebot auth logout <way>             Forget the stored Brave premium key, a gateway key, or a ChatGPT or xAI sign-in
+  bravebot auth logout <way>             Forget the stored Brave premium key, a gateway key, a ChatGPT or xAI sign-in, or the Google project block
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
@@ -63,7 +63,8 @@ Usage:
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
 | `bravebot auth logout chatgpt` | forget the ChatGPT sign-in `auth login chatgpt` stored |
 | `bravebot auth logout xai` | forget the xAI sign-in `auth login xai` stored |
-| `bravebot auth status [brave\|bedrock\|gateway [id]\|chatgpt\|xai]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
+| `bravebot auth logout google` | remove the `google-vertex` block `auth login google` recorded, and offer to end the Google Cloud CLI's sign-in |
+| `bravebot auth status [brave\|bedrock\|gateway [id]\|chatgpt\|xai\|google]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot --bg "<prompt>"` | start a session that runs in the background and keeps going after the terminal closes ([Sessions](../using/sessions.md#sessions-in-the-background)) |
 | `bravebot sessions` | list the background sessions of every project, grouped by state when run in a terminal ([Sessions](../using/sessions.md#sessions-in-the-background)) |
@@ -1066,12 +1067,13 @@ what was already true.
 ## `auth`
 
 ```sh
-bravebot auth login [brave | bedrock | import | gateway [id] | chatgpt | xai]
+bravebot auth login [brave | bedrock | import | gateway [id] | chatgpt | xai | google]
 bravebot auth logout brave
 bravebot auth logout gateway [id]
 bravebot auth logout chatgpt
 bravebot auth logout xai
-bravebot auth status [brave | bedrock | gateway [id] | chatgpt | xai]
+bravebot auth logout google
+bravebot auth status [brave | bedrock | gateway [id] | chatgpt | xai | google]
 ```
 
 With no way named, `auth login` lists the ways to sign in, marks the ones already in use, and asks
@@ -1082,21 +1084,28 @@ which to run. It needs a terminal for that. A script names the way instead:
 | `brave` | asks for a premium key with nothing shown as it is typed, and keeps it in `~/.bravebot/brave-key.json`, asking first before it replaces one already stored ([Brave's premium service](../customize/premium.md)) |
 | `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names, then sets `BRAVEBOT_USE_BEDROCK` to `1` in `~/.bravebot/settings.json` once the `AWS_PROFILE` account signs in, unless that file names it, something turns Bedrock off, or the session is incognito |
 | `import` | what `import-providers` runs |
-| `gateway [id]` | asks for a key for `openrouter`, `openai`, `anthropic` or a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json`. For one of the three that no block names it then adds `"provider": {"<id>": {}}` to `~/.bravebot/settings.json` |
+| `gateway [id]` | asks for a key for `openrouter`, `openai`, `anthropic`, `google-vertex` (Gemini on Google Vertex AI) or a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json`. For one of those that no block names it then adds `"provider": {"<id>": {}}` to `~/.bravebot/settings.json`. `google-vertex` first asks for a Google Cloud project and, with one, a location; no project is express mode and the entry then states `options.project` and `options.location` (`global` where none was typed) ([Signing in](../customize/signing-in.md#gemini-on-google-vertex-ai)) |
 | `chatgpt` | prints an address on `auth.openai.com` and opens it in a browser, waits five minutes for the browser to return to a port on `127.0.0.1`, and keeps the sign-in in `chatgpt-account.json` ([ChatGPT](../customize/providers/chatgpt.md)) |
 | `xai` | asks `auth.x.ai` for a code, prints an address and the code on standard error, waits for them to be used on any device, and keeps the sign-in in `xai-account.json` ([Signing in](../customize/signing-in.md#xai)) |
+| `google` | asks for a Google Cloud project, runs `gcloud auth application-default login` and shows each line it writes, then adds `"provider": {"google-vertex": {"options": {"project": "<project>", "location": "global"}}}` to `~/.bravebot/settings.json` and stores no key ([Signing in](../customize/signing-in.md#google)) |
 
-`brave` needs a terminal, and is refused with status 2 where standard input or standard error is not one.
+`brave` and `google` need a terminal, and are refused with status 2 where standard input or standard error is not one.
 `gateway` needs a terminal even with the id named, since the key is typed rather than given as an
-argument. A word after the id is refused with status 2 by `auth login`, `auth status` and `auth logout`
+argument, and `google-vertex` asks for its project and location first. A project or location Google cannot
+build a Vertex AI host from is refused with status 2 before the key is asked for, and nothing is stored.
+A word after the id is refused with status 2 by `auth login`, `auth status` and `auth logout`
 alike, and is not repeated, since it may be a key. With one service offered it asks for no id. Where the machine-level file names the
 gateways, only those are offered, and the list and the refusal of any other id name that file.
 
 `auth logout brave` removes the stored premium key and ends nothing at Brave, where the key still works
 until it is revoked. `auth logout gateway [id]` forgets a stored key, and the id can be left off when only one is stored. It names the host the key still works at, and
-leaves the settings as they are. `auth logout chatgpt` forgets the stored ChatGPT
+leaves the settings as they are. For `google-vertex` it names the host of the entry in settings, or
+`aiplatform.googleapis.com` where none names it. `auth logout chatgpt` forgets the stored ChatGPT
 sign-in and ends nothing at OpenAI, and `auth logout xai` forgets the stored xAI sign-in and ends nothing at
-xAI. In an incognito session the `brave`, `import`, `gateway`, `chatgpt` and `xai` ways are refused, and
+xAI. `auth logout google` removes the `google-vertex` block `auth login google` wrote, only where it still
+holds exactly that, and leaves the Google Cloud CLI's sign-in in place unless a yes is typed at the terminal
+to `gcloud auth application-default revoke --quiet`. In an incognito session the `brave`, `import`, `gateway`,
+`chatgpt`, `xai` and `google` ways are refused, and
 `bedrock`, `auth status` and every form of `auth logout` are allowed. See
 [Signing in](../customize/signing-in.md).
 
@@ -1109,6 +1118,7 @@ bedrock: not signed in: the AWS session has lapsed: run `bravebot auth login bed
 gateway openrouter: signed in: stored by bravebot auth login gateway (never printed)
 chatgpt: signed in: the access token expires 2026-10-22T21:05:27Z
 xai: signed in: the access token expires 2026-10-22T21:05:27Z and is sent to api.x.ai alone, and the refresh token is sent to auth.x.ai alone
+google: signed in: the Google Cloud CLI gives an access token, which a session sends to the Vertex AI host of the project google-vertex names and to no other host
 ```
 
 A line says signed in, not signed in (signing in fixes it), or unusable (it does not: an unreadable
@@ -1117,7 +1127,10 @@ what to run. For Brave it says a premium key is stored and is sent to Brave's pr
 that none is stored and to run `bravebot auth login brave`, or that the file cannot be read, naming it. For ChatGPT it says when the access token expires, and a token past that time is still
 signed in, since the next request replaces it. For xAI it says when the access token expires, and that a token
 past that time is still signed in, that the access token is sent to `api.x.ai` alone, and that the refresh token is
-sent to `auth.x.ai` alone. Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
+sent to `auth.x.ai` alone. For Google it says the Google Cloud CLI gives an access token, asked for without a
+sign-in or a browser, or that it gives none and to run `bravebot auth login google`, or that no block or
+`GOOGLE_CLOUD_PROJECT` names a project it signs in, or that `gcloud` is missing or did not answer within twenty seconds.
+Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
 is one of four fixed sentences: the AWS session has lapsed, the AWS CLI has no profile by the name
 you set, the AWS CLI is not installed, or the AWS CLI answered with something that is not a
 credential. What the AWS CLI itself printed is never copied, because it can name accounts and roles.
@@ -1128,7 +1141,11 @@ be read. `auth status import` is refused, since an import keeps no sign-in. `aut
 asks about each gateway a provider block names and about a service whose key is stored with no block
 naming it, and `auth status gateway openai` asks about that id whether or not a block names it. A
 key stored for `openai`, `openrouter` or `anthropic` with no block naming it is reported as not
-signed in, since no session sends it, and `auth login gateway <id>` records the block. A block that
+signed in, since no session sends it, and `auth login gateway <id>` records the block. `google-vertex`
+is asked about the same way, and an express entry of it with no key stored is reported as not signed in,
+since Vertex AI refuses a request with no key. A project the environment names alone, or a block whose
+`env` names an unset `GOOGLE_API_KEY`, is reported as not signed in although `gcloud` would sign the
+request, since the listing does not ask `gcloud`. A block that
 names an `options.keyFile` that gives no key is reported as not signed in, with the file named only
 as the setting, and storing a key with `auth login gateway <id>` makes the stored key win over the
 file. The desktop accounts list says the same.

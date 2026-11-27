@@ -64,7 +64,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [browser.md](browser.md) | `BROWSER` | 46 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 11 | a command a person asked to have run when something happens, and the question before a plugin's hook first fires |
 | [network-egress.md](network-egress.md) | `NET` | 12 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 73 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 75 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 12 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama, LM Studio or llama-server serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 19 | shortening a long conversation into a summary of itself, in the request only |
 | [retrieval.md](retrieval.md) | `RETRIEVE` | 23 | retrieving earlier excerpts of a long bot conversation instead of summarising it: the setting, what is embedded, the file the vectors are kept in, the request a retrieving turn sends, and what an administrator may pin |

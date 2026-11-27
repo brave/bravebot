@@ -8,7 +8,9 @@
 
 use crate::emit::Emitter;
 use crate::protocol::{ErrorCode, Event, Failure, Request};
-use bravebot_agent::accounts::{self, BedrockCheck, Held, Inputs, Row, Standing, Way, Which, Why};
+use bravebot_agent::accounts::{
+    self, BedrockCheck, GoogleCheck, Held, Inputs, Row, Standing, Way, Which, Why,
+};
 use bravebot_agent::home;
 use bravebot_config::{Config, ConfigError, Managed};
 use bravebot_i18n::t;
@@ -70,7 +72,7 @@ fn list_with(
         config: config(project, selected),
         bedrock_config: accounts::bedrock_config(&layers, &managed),
         managed,
-        ..Inputs::read(bedrock)
+        ..Inputs::read(bedrock, GoogleCheck::Skip)
     };
     // `Which::All` names no gateway, and only a named one can be refused.
     let mut rows = accounts::list(inputs, Which::All)
@@ -120,7 +122,9 @@ fn with_known_first(rows: &mut Vec<Row>, config: &Result<Config, ConfigError>, m
 
 /// Whether the block draws a row. The row about the gateways as a whole says only that none is set
 /// up, which is not a thing to sign in to, so it is drawn where something is wrong with them. A
-/// configuration that names no AWS account has no Bedrock account to show.
+/// configuration that names no AWS account has no Bedrock account to show. The Google Cloud CLI's
+/// sign-in is the terminal's alone: the window has no way to start it and the row would be asked of
+/// nothing, so it draws none.
 fn shown(row: &Row) -> bool {
     !matches!(
         (&row.way, &row.standing),
@@ -129,7 +133,7 @@ fn shown(row: &Row) -> bool {
                 Way::Bedrock { .. },
                 Standing::NotSignedIn(Why::NoAwsAccount)
             )
-    )
+    ) && !matches!(row.way, Way::GoogleCloud)
 }
 
 /// One row as the window draws it.
@@ -141,6 +145,7 @@ fn worded(row: &Row, config: &Result<Config, ConfigError>) -> Value {
         Way::Gateways => ("gateway", None),
         Way::ChatGpt => ("chatgpt", None),
         Way::Xai => ("xai", None),
+        Way::GoogleCloud => ("google", None),
     };
     let standing = match &row.standing {
         Standing::SignedIn(_) => "signedIn",
@@ -210,6 +215,8 @@ fn name(way: &Way, config: &Result<Config, ConfigError>) -> String {
         Way::Gateways => t!(desktop_accounts_name_gateways).into(),
         Way::ChatGpt => t!(desktop_accounts_name_chatgpt).into(),
         Way::Xai => t!(desktop_accounts_name_xai).into(),
+        // Never drawn: `shown` leaves the row out.
+        Way::GoogleCloud => "google".to_string(),
     }
 }
 
@@ -246,6 +253,11 @@ fn detail(standing: &Standing) -> Option<String> {
         Why::GatewayAbsent => t!(desktop_accounts_gateway_absent),
         Why::KeysUnreadable => t!(desktop_accounts_keys_unreadable),
         Why::NotChecked => t!(desktop_accounts_not_checked),
+        // The row is never drawn, so it has no sentence.
+        Why::GoogleCloudNoProject
+        | Why::GoogleCloudLapsed
+        | Why::GoogleCloudNoCli
+        | Why::GoogleCloudTimedOut => return None,
     };
     Some(said.to_string())
 }
@@ -270,6 +282,7 @@ fn command(way: &Way, standing: &Standing) -> Option<String> {
         Way::Gateways => "bravebot auth login gateway".to_string(),
         Way::ChatGpt => "bravebot auth login chatgpt".to_string(),
         Way::Xai => "bravebot auth login xai".to_string(),
+        Way::GoogleCloud => return None,
     })
 }
 

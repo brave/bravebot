@@ -6964,15 +6964,27 @@ fn in_a_terminal_run(
 /// Written whole before the run asks anything. The terminal holds typed lines until something reads
 /// them, which is what a person typing ahead gets too, so each question reads the next line.
 #[cfg(unix)]
-#[expect(clippy::expect_used, reason = "a test fails by panicking")]
-#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn in_a_terminal_answering(
     home: &Path,
     environment: &[(&str, &str)],
     arguments: &[&str],
     answers: &str,
 ) -> Output {
-    let mut terminal = in_a_terminal_command(home, None, environment, arguments);
+    in_a_terminal_answering_started_in(home, None, environment, arguments, answers)
+}
+
+/// The same, started in a directory of the test's choosing, for [`bravebot_started_in`]'s reason.
+#[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn in_a_terminal_answering_started_in(
+    home: &Path,
+    cwd: Option<&Path>,
+    environment: &[(&str, &str)],
+    arguments: &[&str],
+    answers: &str,
+) -> Output {
+    let mut terminal = in_a_terminal_command(home, cwd, environment, arguments);
     let mut child = terminal
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -11207,6 +11219,570 @@ fn auth_login_in_an_incognito_session_refuses_what_its_command_refuses() {
     assert!(stderr.contains("AWS_REGION"), "{stderr}");
 }
 
+/// A stand-in for the Google Cloud CLI. `auth application-default print-access-token` gives a
+/// placeholder token once `auth application-default login` has run until `revoke --quiet` removes
+/// the sign-in, and `login` writes a sign-in line and succeeds, or ends without signing in where
+/// `$HOME/gcloud-login-fails` exists. Every
+/// start is appended to `$HOME/gcloud-log`. Only shell built-ins run, so the program needs nothing
+/// on its reduced `PATH`.
+#[cfg(unix)]
+const GCLOUD_THAT_SIGNS_IN: &str = r#"echo "$*" >> "$HOME/gcloud-log"
+case "$3" in
+  print-access-token)
+    if [ -e "$HOME/gcloud-signed" ]; then echo placeholder-gcloud-token; else exit 1; fi ;;
+  login)
+    echo 'Go to the following link in your browser: https://accounts.example.invalid/placeholder'
+    if [ -e "$HOME/gcloud-login-fails" ]; then echo 'placeholder-gcloud-secret' >&2; exit 1; fi
+    : > "$HOME/gcloud-signed" ;;
+  revoke)
+    [ "$4" = --quiet ] || exit 2
+    rm -f "$HOME/gcloud-signed" ;;
+  *) exit 2 ;;
+esac"#;
+
+/// Put the stand-in Google Cloud CLI under `scratch`, and return the `PATH` that finds it, with the
+/// system directories `script` is found in after it.
+#[cfg(unix)]
+fn gcloud_stand_in(scratch: &Scratch) -> String {
+    let bin = scratch.path.join("bin");
+    stand_in(&bin, "gcloud", GCLOUD_THAT_SIGNS_IN);
+    format!("{}:/usr/bin:/bin", bin.display())
+}
+
+/// A `PATH` of one directory made under `scratch` that holds a link to each of `programs` and
+/// nothing else, so a case about a missing Google Cloud CLI depends on nothing the machine has
+/// installed. Each program is linked from the first directory of this process's own `PATH` that has
+/// it. The Google Cloud CLI's packages install it in `/usr/bin`, which a `PATH` of the system
+/// directories would find.
+#[cfg(unix)]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn path_holding_only(scratch: &Scratch, programs: &[&str]) -> String {
+    let only = scratch.path.join("no-gcloud-bin");
+    std::fs::create_dir_all(&only).expect("create the directory the path holds");
+    let ambient = std::env::var_os("PATH").unwrap_or_default();
+    for program in programs {
+        let found = std::env::split_paths(&ambient)
+            .map(|directory| directory.join(program))
+            .find(|candidate| candidate.is_file())
+            .expect("each program is on this process's PATH");
+        std::os::unix::fs::symlink(found, only.join(program)).expect("link the program");
+    }
+    only.display().to_string()
+}
+
+/// What the stand-in Google Cloud CLI was started with, one start a line.
+#[cfg(unix)]
+fn gcloud_starts(scratch: &Scratch) -> Vec<String> {
+    std::fs::read_to_string(scratch.path.join("gcloud-log"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// CLI-18 and BACKEND-65: picking the Google way from the list asks for the project, runs the
+/// Google Cloud CLI's login with each line it writes shown, and records a `provider.google-vertex`
+/// block that states the project and no key. The settings the person had are kept, no key is stored,
+/// and a second sign-in finds the block there, asks for no project, finds a token already given,
+/// opens no browser and records nothing again.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn auth_login_google_signs_in_with_the_cli_and_records_the_project_and_no_key() {
+    let scratch = Scratch::new("cli-running-auth-google").with_settings(r#"{"model": "opus"}"#);
+    let path = gcloud_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+    let cwd = checkout_in(&scratch);
+    let answering = |arguments: &[&str], answers: &str| {
+        in_a_terminal_answering_started_in(
+            &scratch.path,
+            Some(&cwd),
+            &environment,
+            arguments,
+            answers,
+        )
+    };
+
+    let output = answering(&["auth", "login"], "google\nexample-project-1\n");
+    let (transcript, _) = said(&output);
+    if cfg!(target_os = "linux") {
+        assert_eq!(output.status.code(), Some(0), "{transcript}");
+    }
+    assert!(transcript.contains("7. google"), "{transcript}");
+    assert!(
+        transcript.contains("Go to the following link in your browser"),
+        "the CLI's line was not shown: {transcript}"
+    );
+    assert!(transcript.contains("signed in to Google"), "{transcript}");
+    assert_eq!(
+        gcloud_starts(&scratch),
+        [
+            "auth application-default print-access-token",
+            "auth application-default login",
+            "auth application-default print-access-token"
+        ]
+    );
+    let recorded = std::fs::read_to_string(scratch.settings()).expect("the settings file");
+    let value: serde_json::Value = serde_json::from_str(&recorded).expect("json");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "model": "opus",
+            "provider": {"google-vertex": {
+                "options": {"project": "example-project-1", "location": "global"}
+            }}
+        }),
+        "{recorded}"
+    );
+    assert!(
+        !scratch.path.join(".bravebot/gateway-keys.json").exists(),
+        "a key was stored"
+    );
+    for text in [&transcript, &recorded] {
+        assert!(!text.contains("placeholder-gcloud-token"), "{text}");
+    }
+
+    let again = answering(&["auth", "login", "google"], "");
+    let (transcript, _) = said(&again);
+    if cfg!(target_os = "linux") {
+        assert_eq!(again.status.code(), Some(0), "{transcript}");
+    }
+    assert!(transcript.contains("no browser was opened"), "{transcript}");
+    assert!(
+        transcript.contains("already configured by a provider block"),
+        "{transcript}"
+    );
+    assert!(
+        !transcript.contains("Google Cloud project that has"),
+        "the project was asked for: {transcript}"
+    );
+    assert_eq!(
+        gcloud_starts(&scratch).len(),
+        4,
+        "a second sign-in started the login again: {:?}",
+        gcloud_starts(&scratch)
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings file"),
+        recorded,
+        "a second sign-in wrote the file"
+    );
+}
+
+/// CLI-18: a login that ends without a sign-in records nothing and quotes nothing the CLI wrote
+/// beyond the lines it shows, and a project the endpoint cannot be built from is refused before the
+/// CLI starts at all.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn auth_login_google_records_nothing_when_the_login_fails_or_the_project_is_refused() {
+    let scratch = Scratch::new("cli-running-auth-google-fails").with_file("gcloud-login-fails", "");
+    let path = gcloud_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+    let cwd = checkout_in(&scratch);
+    let answering = |answers: &str| {
+        in_a_terminal_answering_started_in(
+            &scratch.path,
+            Some(&cwd),
+            &environment,
+            &["auth", "login", "google"],
+            answers,
+        )
+    };
+
+    let output = answering("example-project-1\n");
+    let (transcript, _) = said(&output);
+    if cfg!(target_os = "linux") {
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+    }
+    assert!(transcript.contains("did not complete"), "{transcript}");
+    // The CLI's own lines are shown as they arrive (BACKEND-9) and the failure sentence is fixed
+    // words: the line the CLI wrote is on the screen once, not repeated in the failure.
+    assert_eq!(
+        transcript.matches("placeholder-gcloud-secret").count(),
+        1,
+        "{transcript}"
+    );
+    let failure = transcript
+        .lines()
+        .find(|line| line.contains("did not complete"))
+        .expect("the failure line");
+    assert!(!failure.contains("placeholder-gcloud-secret"), "{failure}");
+    assert!(
+        !scratch.settings().exists(),
+        "a failed sign-in recorded a block"
+    );
+
+    let before = gcloud_starts(&scratch).len();
+    let output = answering("a/b\n");
+    let (transcript, _) = said(&output);
+    if cfg!(target_os = "linux") {
+        assert_eq!(output.status.code(), Some(2), "{transcript}");
+    }
+    assert!(
+        transcript.contains("not a Google Cloud project id"),
+        "{transcript}"
+    );
+    assert!(
+        !transcript.contains("a/b\n"),
+        "the project was repeated: {transcript}"
+    );
+    assert_eq!(
+        gcloud_starts(&scratch).len(),
+        before,
+        "the CLI was started for a project that was refused"
+    );
+    assert!(!scratch.settings().exists());
+}
+
+/// CLI-18: with no Google Cloud CLI on `PATH` the command says so, names where to get it, asks for
+/// no project and writes nothing. The `PATH` holds `script` and `sh` and no other program, so a
+/// machine with a `gcloud` of its own does not change the case. An implementation that asked for the
+/// project before looking for the CLI, or that ran a login with no program, fails the assertions on
+/// the transcript and the settings file.
+#[cfg(unix)]
+#[test]
+fn auth_login_google_says_where_to_get_the_cli_when_it_is_missing() {
+    let scratch = Scratch::new("cli-running-auth-google-missing");
+    let path = path_holding_only(&scratch, &["script", "sh"]);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+    let cwd = checkout_in(&scratch);
+
+    let output = in_a_terminal_answering_started_in(
+        &scratch.path,
+        Some(&cwd),
+        &environment,
+        &["auth", "login", "google"],
+        "example-project-1\n",
+    );
+
+    let (transcript, _) = said(&output);
+    if cfg!(target_os = "linux") {
+        assert_eq!(output.status.code(), Some(1), "{transcript}");
+    }
+    assert!(
+        transcript.contains("cloud.google.com/sdk/docs/install"),
+        "{transcript}"
+    );
+    assert!(
+        !transcript.contains("Google Cloud project that has"),
+        "the project was asked for: {transcript}"
+    );
+    assert!(!scratch.settings().exists());
+}
+
+/// CLI-18 and INCOG-7: with no terminal the command is refused with the argument status, and in an
+/// incognito session it is refused with the failure status, both before the Google Cloud CLI is
+/// started and before anything is written. A word after the way is refused and named.
+#[cfg(unix)]
+#[test]
+fn auth_login_google_is_refused_without_a_terminal_and_while_incognito_before_the_cli_starts() {
+    let scratch = Scratch::new("cli-running-auth-google-refused");
+    let path = gcloud_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+
+    for (arguments, code, said_this) in [
+        (&["auth", "login", "google"][..], 2, "needs a terminal"),
+        (
+            &["auth", "login", "google", "example-project-1"][..],
+            2,
+            "example-project-1",
+        ),
+        (
+            &["--incognito", "auth", "login", "google"][..],
+            1,
+            "incognito",
+        ),
+    ] {
+        let output = bravebot_beside_the_stand_in(&scratch, &environment, arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(stderr.contains(said_this), "{arguments:?}: {stderr}");
+    }
+    assert!(
+        stderr_forms_name_the_way(&scratch, &environment),
+        "the forms a script types do not name the Google way"
+    );
+    assert!(gcloud_starts(&scratch).is_empty(), "the CLI was started");
+    assert!(!scratch.settings().exists());
+}
+
+/// Whether a refusal of the command lists `bravebot auth login google` among the forms.
+#[cfg(unix)]
+fn stderr_forms_name_the_way(scratch: &Scratch, environment: &[(&str, &str)]) -> bool {
+    let output = bravebot_beside_the_stand_in(scratch, environment, &["auth"]);
+    said(&output).1.contains("bravebot auth login google")
+}
+
+/// A settings file whose `google-vertex` block is what `auth login google` records.
+#[cfg(unix)]
+const A_RECORDED_GOOGLE_BLOCK: &str = r#"{"model": "opus", "provider": {"google-vertex": {"options": {"project": "example-project-1", "location": "global"}}}}"#;
+
+/// CLI-23 and BACKEND-65: `auth status google` asks the Google Cloud CLI for a token and never for a
+/// sign-in. It is signed in where the CLI gives one (exit 0), not signed in with the command to run
+/// where it gives none (exit 1, and the login was not started), unusable where the CLI is missing,
+/// and not signed in with no project named, where the CLI is not asked at all. The same in an
+/// incognito session, and nothing the CLI printed is on a line.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn auth_status_google_asks_the_cli_for_a_token_without_signing_in() {
+    let scratch =
+        Scratch::new("cli-running-auth-status-google").with_settings(A_RECORDED_GOOGLE_BLOCK);
+    let path = gcloud_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+
+    let (code, stdout, stderr) = status_beside_the_stand_in(&scratch, &environment, &["google"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stdout.starts_with("google: not signed in: "), "{stdout}");
+    assert!(stdout.contains("bravebot auth login google"), "{stdout}");
+    assert_eq!(
+        gcloud_starts(&scratch),
+        ["auth application-default print-access-token"],
+        "asking started a sign-in"
+    );
+    assert!(!scratch.path.join("gcloud-signed").exists());
+
+    std::fs::write(scratch.path.join("gcloud-signed"), "").expect("sign in");
+    for arguments in [&["google"][..], &[]] {
+        let (code, stdout, stderr) = status_beside_the_stand_in(&scratch, &environment, arguments);
+        assert_eq!(code, Some(0), "{arguments:?}: {stdout}{stderr}");
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.starts_with("google: signed in: ")),
+            "{arguments:?}: {stdout}"
+        );
+        assert!(!stdout.contains("placeholder-gcloud-token"), "{stdout}");
+    }
+    let incognito = bravebot_beside_the_stand_in(
+        &scratch,
+        &environment,
+        &["--incognito", "auth", "status", "google"],
+    );
+    let (stdout, stderr) = said(&incognito);
+    assert_eq!(incognito.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.starts_with("google: signed in: "), "{stdout}");
+    assert!(
+        gcloud_starts(&scratch)
+            .iter()
+            .all(|start| start == "auth application-default print-access-token"),
+        "a status started something else: {:?}",
+        gcloud_starts(&scratch)
+    );
+
+    let no_project =
+        Scratch::new("cli-running-auth-status-google-no-project").with_file("gcloud-signed", "");
+    let path = gcloud_stand_in(&no_project);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+    let (code, stdout, stderr) = status_beside_the_stand_in(&no_project, &environment, &["google"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stdout.starts_with("google: not signed in: "), "{stdout}");
+    assert!(
+        gcloud_starts(&no_project).is_empty(),
+        "the CLI was asked with no project"
+    );
+
+    let missing = Scratch::new("cli-running-auth-status-google-missing")
+        .with_settings(A_RECORDED_GOOGLE_BLOCK);
+    let path = path_holding_only(&missing, &[]);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+    let (code, stdout, stderr) = status_beside_the_stand_in(&missing, &environment, &["google"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stdout.starts_with("google: unusable: "), "{stdout}");
+    assert!(stdout.contains("gcloud"), "{stdout}");
+}
+
+/// CLI-18: the list of ways shows the Google way as held where a project the CLI signs in is named
+/// and the CLI gives a token, which it is asked without a browser and which is never printed, and
+/// shows nothing held where it gives none.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn auth_login_list_shows_google_held_where_the_cli_gives_a_token() {
+    let scratch =
+        Scratch::new("cli-running-auth-list-google").with_settings(A_RECORDED_GOOGLE_BLOCK);
+    let path = gcloud_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+    let cwd = checkout_in(&scratch);
+    let list = || {
+        let output = in_a_terminal_answering_started_in(
+            &scratch.path,
+            Some(&cwd),
+            &environment,
+            &["auth", "login"],
+            "\n",
+        );
+        said(&output).0
+    };
+    let line_of = |transcript: &str| {
+        transcript
+            .lines()
+            .find(|line| line.contains("7. google"))
+            .unwrap_or_else(|| panic!("google is not listed: {transcript}"))
+            .to_string()
+    };
+
+    let before = line_of(&list());
+    assert!(!before.contains("(signed in)"), "{before}");
+    std::fs::write(scratch.path.join("gcloud-signed"), "").expect("sign in");
+    let transcript = list();
+    let held = line_of(&transcript);
+    assert!(held.ends_with("(signed in)"), "{held}");
+    assert!(
+        !transcript.contains("placeholder-gcloud-token"),
+        "{transcript}"
+    );
+    assert!(
+        gcloud_starts(&scratch)
+            .iter()
+            .all(|start| start == "auth application-default print-access-token"),
+        "drawing the list started a login: {:?}",
+        gcloud_starts(&scratch)
+    );
+}
+
+/// CLI-18 and INCOG-7: `auth logout google` takes out the block sign-in recorded, in an incognito
+/// session as well, and says the Google Cloud CLI's own sign-in is left until it is ended with
+/// `gcloud auth application-default revoke`; the stand-in is never started. A block with a key
+/// variable is the person's and is left byte for byte, and with nothing recorded it says so and
+/// exits 0.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn auth_logout_google_removes_the_recorded_block_and_leaves_the_cli_sign_in() {
+    let scratch = Scratch::new("cli-running-auth-logout-google")
+        .with_settings(A_RECORDED_GOOGLE_BLOCK)
+        .with_file("gcloud-signed", "");
+    let path = gcloud_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+
+    let output = bravebot_beside_the_stand_in(
+        &scratch,
+        &environment,
+        &["--incognito", "auth", "logout", "google"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("no longer names a google-vertex project"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("gcloud auth application-default revoke"),
+        "{stdout}"
+    );
+    let left: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(scratch.settings()).expect("settings"))
+            .expect("json");
+    assert_eq!(left, serde_json::json!({"model": "opus", "provider": {}}));
+    assert!(gcloud_starts(&scratch).is_empty(), "logout started the CLI");
+    assert!(scratch.path.join("gcloud-signed").exists());
+
+    let again = bravebot_beside_the_stand_in(&scratch, &environment, &["auth", "logout", "google"]);
+    let (stdout, stderr) = said(&again);
+    assert_eq!(again.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("nothing was removed"), "{stdout}");
+
+    let persons = r#"{"provider": {"google-vertex": {"env": ["A_VERTEX_KEY"], "options": {"project": "example-project-1"}}}}"#;
+    std::fs::write(scratch.settings(), persons).expect("settings");
+    let kept = bravebot_beside_the_stand_in(&scratch, &environment, &["auth", "logout", "google"]);
+    let (stdout, stderr) = said(&kept);
+    assert_eq!(kept.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("left as it is"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("settings"),
+        persons
+    );
+
+    let extra =
+        bravebot_beside_the_stand_in(&scratch, &environment, &["auth", "logout", "google", "now"]);
+    assert_eq!(extra.status.code(), Some(2), "{}", said(&extra).1);
+    assert!(
+        gcloud_starts(&scratch).is_empty(),
+        "a logout with no terminal started the CLI: {:?}",
+        gcloud_starts(&scratch)
+    );
+}
+
+/// CLI-18: at a terminal `auth logout google` asks whether to end the Google Cloud CLI's sign-in as
+/// well. A yes runs `gcloud auth application-default revoke --quiet` and nothing else, and the
+/// stand-in then gives no token; any other answer leaves it signed in and starts nothing. The
+/// recorded block is removed either way, and a CLI that fails the revoke ends the command with the
+/// failure status without repeating what it wrote. The regression it rejects is a logout that
+/// revokes shared credentials without being told to.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn auth_logout_google_ends_the_cli_sign_in_only_on_a_yes() {
+    let scratch = Scratch::new("cli-running-auth-logout-google-revoke")
+        .with_settings(A_RECORDED_GOOGLE_BLOCK)
+        .with_file("gcloud-signed", "");
+    let path = gcloud_stand_in(&scratch);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+    let cwd = checkout_in(&scratch);
+    let answering = |answers: &str| {
+        in_a_terminal_answering_started_in(
+            &scratch.path,
+            Some(&cwd),
+            &environment,
+            &["auth", "logout", "google"],
+            answers,
+        )
+    };
+
+    let output = answering("n\n");
+    let (transcript, _) = said(&output);
+    assert!(
+        transcript.contains("End the Google Cloud CLI's sign-in"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("left in place"), "{transcript}");
+    assert!(
+        gcloud_starts(&scratch).is_empty(),
+        "{:?}",
+        gcloud_starts(&scratch)
+    );
+    assert!(scratch.path.join("gcloud-signed").exists());
+    let left: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(scratch.settings()).expect("settings"))
+            .expect("json");
+    assert_eq!(left, serde_json::json!({"model": "opus", "provider": {}}));
+
+    // The end of the input as the answer is covered by the unit test: the BSD `script` holds the
+    // input open, so a run that reads it waits for a line that never comes.
+    let output = answering("y\n");
+    let (transcript, _) = said(&output);
+    if cfg!(target_os = "linux") {
+        assert_eq!(output.status.code(), Some(0), "{transcript}");
+    }
+    assert!(transcript.contains("were revoked"), "{transcript}");
+    assert_eq!(
+        gcloud_starts(&scratch),
+        ["auth application-default revoke --quiet"]
+    );
+    assert!(
+        !scratch.path.join("gcloud-signed").exists(),
+        "the stand-in still gives a token"
+    );
+    assert!(
+        !transcript.contains("placeholder-gcloud-token"),
+        "{transcript}"
+    );
+}
+
 /// A stand-in for the AWS CLI on profiles `work` and `lapsed`. `aws sso login` succeeds on both,
 /// and afterwards `work` exports a credential and `lapsed` still does not, as a profile whose role
 /// is gone would. The credential is a placeholder.
@@ -11758,12 +12334,12 @@ fn gateway_keys(scratch: &Scratch) -> PathBuf {
 }
 
 /// The ids `auth login gateway` offers where `TWO_GATEWAYS` are configured: those, then each known
-/// service no block of them names, read from the table a session reaches them by.
+/// service no block of them names, read from the table a session reaches them by, then Vertex AI.
 fn the_ids_offered_beside_two_gateways() -> String {
     let known: Vec<&str> = bravebot_config::provider::known_ids()
         .filter(|id| *id != "openrouter")
         .collect();
-    format!("openrouter, work, {}", known.join(", "))
+    format!("openrouter, work, {}, google-vertex", known.join(", "))
 }
 
 /// CLI-18 and INCOG-7: every refusal the gateway way can make without asking anything is made
@@ -11772,6 +12348,7 @@ fn the_ids_offered_beside_two_gateways() -> String {
 /// what follows `--key=` are not repeated, since each is most likely the key, typed where somebody
 /// took it for the argument.
 #[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
     let scratch = Scratch::new("cli-running-auth-gateway-refused").with_settings(TWO_GATEWAYS);
     let key_as_a_flag = format!("--key={A_STORED_KEY}");
@@ -11793,6 +12370,11 @@ fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
             2,
             "never a command-line argument",
         ),
+        (
+            &["auth", "login", "gateway", "google-vertex", A_STORED_KEY][..],
+            2,
+            "never a command-line argument",
+        ),
         (&["auth", "login", "gateway", "--key"][..], 2, "--key"),
         (
             &["auth", "login", "gateway", key_as_a_flag.as_str()][..],
@@ -11811,7 +12393,17 @@ fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
             "needs a terminal",
         ),
         (
+            &["auth", "login", "gateway", "google-vertex"][..],
+            2,
+            "needs a terminal",
+        ),
+        (
             &["--incognito", "auth", "login", "gateway", "work"][..],
+            1,
+            "incognito",
+        ),
+        (
+            &["--incognito", "auth", "login", "gateway", "google-vertex"][..],
             1,
             "incognito",
         ),
@@ -11970,6 +12562,101 @@ fn auth_logout_gateway_forgets_a_key_stored_for_a_known_service_no_block_names()
         std::fs::read_to_string(scratch.settings()).expect("the settings"),
         recorded,
         "forgetting a key changed the settings"
+    );
+}
+
+/// CLI-18: a key stored for Google Vertex AI, with no block naming it, is forgotten by name or as
+/// the only one stored, and the line names the host of express mode, which it still works at until it
+/// is revoked there, in place of the sentence for a key whose issuer is not known. Where a block states
+/// a location the host is that block's. The entry stays in settings.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn auth_logout_gateway_forgets_a_key_stored_for_google_vertex_naming_its_host() {
+    for (how, settings, host) in [
+        ("no block", None, "aiplatform.googleapis.com"),
+        (
+            "a block with a location",
+            Some(
+                r#"{"provider": {"google-vertex": {"options":
+                    {"project": "example-project-1", "location": "us-east5"}}}}"#,
+            ),
+            "us-east5-aiplatform.googleapis.com",
+        ),
+    ] {
+        let mut scratch = Scratch::new("cli-running-auth-gateway-logout-vertex").with_state(
+            "gateway-keys.json",
+            &stored_keys(&["google-vertex", "openai"]),
+        );
+        if let Some(settings) = settings {
+            scratch = scratch.with_settings(settings);
+        }
+        let keys = gateway_keys(&scratch);
+        let output = bravebot(
+            &scratch.path,
+            NOTHING_CONFIGURED,
+            &["auth", "logout", "gateway", "google-vertex"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{how}: {stderr}");
+        assert!(
+            !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
+            "{how}: printed the key: {stdout}{stderr}"
+        );
+        assert!(
+            stdout.contains(host) && stdout.contains("still works at"),
+            "{how}: {stdout}"
+        );
+        let left = std::fs::read_to_string(&keys).expect("the key left");
+        assert!(
+            left.contains("openai") && !left.contains("google-vertex"),
+            "{how}: {left}"
+        );
+    }
+}
+
+/// CLI-18 and CLI-23: Vertex AI is asked about by name where nothing names it, is not signed in with
+/// no key or with a key no block names, and is signed in once the block the sign-in records is there.
+#[test]
+fn auth_status_gateway_asks_about_google_vertex_where_no_block_names_it() {
+    let scratch = Scratch::new("cli-running-auth-status-vertex");
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "google-vertex"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway google-vertex: not signed in: no key is stored for google-vertex")
+            && stdout.contains("bravebot auth login gateway google-vertex"),
+        "{stdout}"
+    );
+
+    let scratch = scratch.with_state("gateway-keys.json", &stored_keys(&["google-vertex"]));
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "google-vertex"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("a key is stored for google-vertex")
+            && stdout.contains("no provider block names it"),
+        "{stdout}"
+    );
+
+    let scratch = scratch.with_settings(r#"{"provider": {"google-vertex": {}}}"#);
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "google-vertex"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "gateway google-vertex: signed in: stored by bravebot auth login gateway (never printed)\n"
+    );
+
+    // The express block with the key forgotten is not signed in, as no key is the one thing the
+    // service refuses.
+    let scratch = Scratch::new("cli-running-auth-status-vertex-express")
+        .with_settings(r#"{"provider": {"google-vertex": {}}}"#);
+    let (code, stdout, stderr) =
+        status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "google-vertex"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway google-vertex: not signed in"),
+        "{stdout}"
     );
 }
 
@@ -12250,7 +12937,10 @@ fn auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it() {
     let known: Vec<&str> = bravebot_config::provider::known_ids().collect();
     let (code, stdout, stderr) = status_of(&bare, NOTHING_CONFIGURED, &["gateway", A_STORED_KEY]);
     assert_eq!(code, Some(2), "{stdout}{stderr}");
-    assert!(stderr.contains(&known.join(", ")), "{stderr}");
+    assert!(
+        stderr.contains(&format!("{}, google-vertex", known.join(", "))),
+        "{stderr}"
+    );
     assert_eq!(stdout, "");
     let (code, stdout, _) = status_of(&bare, NOTHING_CONFIGURED, &["gateway"]);
     assert_eq!(code, Some(1), "{stdout}");
@@ -12410,7 +13100,7 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     }
     let (_, _, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["elsewhere"]);
     assert!(
-        stderr.contains("bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai]"),
+        stderr.contains("bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai|google]"),
         "{stderr}"
     );
 
@@ -12418,13 +13108,13 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     // the language the interface is in.
     let (_, _, english) = status_of(&scratch, NOTHING_CONFIGURED, &["import"]);
     assert!(
-        english.contains("name brave, bedrock, gateway, chatgpt or xai"),
+        english.contains("name brave, bedrock, gateway, chatgpt, xai or google"),
         "{english}"
     );
     let in_french = [NOTHING_CONFIGURED, &[("BRAVEBOT_LOCALE", "fr")]].concat();
     let (_, _, french) = status_of(&scratch, &in_french, &["import"]);
     assert!(
-        french.contains("nommez brave, bedrock, gateway, chatgpt ou xai"),
+        french.contains("nommez brave, bedrock, gateway, chatgpt, xai ou google"),
         "{french}"
     );
 }

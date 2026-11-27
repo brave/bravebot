@@ -1334,16 +1334,53 @@ auth-ways-heading = Ways to sign in to a model service:
 auth-way-brave = Brave's premium service, with a key typed here and kept by bravebot
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
-# The services are the ids bravebot knows an endpoint for, such as openrouter, comma separated.
+# The services are the ids bravebot knows an endpoint for, such as openrouter, comma separated, and
+# google-vertex with the name a person looking for Gemini knows it by.
 auth-way-gateway = A key for { $services } or a gateway a provider block in settings names, typed here and kept by bravebot
 auth-way-chatgpt = A ChatGPT Plus or Pro account, signed in to in a browser
 auth-way-xai = An xAI SuperGrok subscription, signed in to with a code entered on any device
+# The way that signs in to Google with the Google Cloud CLI and keeps no key.
+auth-way-google = Google, for Gemini on Vertex AI, signed in to with the Google Cloud CLI in a browser and a project named here, with no key kept by bravebot
 # The status of the gateway way where keys are stored. The ids are provider ids.
 auth-gateway-held = a key stored for { $ids }
 auth-gateway-held-unreadable = the file of gateway keys cannot be read
 # A way that is already signed in, with what it holds.
 auth-way-held = { $description } ({ $status })
 auth-signed-in = signed in
+# Said by bravebot auth login google. Each is one sentence and names nothing the Google Cloud CLI wrote.
+auth-google-not-while-incognito =
+    an incognito session writes nothing to disk, and signing in to Google records the project in settings: run bravebot auth login google without --incognito
+# The path is the machine-level settings file an administrator writes, which names the gateways.
+auth-google-managed =
+    { $path } names the gateways for every user of this machine and none of them is google-vertex, so a project recorded in your settings would not be read
+auth-google-needs-a-terminal =
+    the project is typed at a terminal, so bravebot auth login google needs a terminal
+auth-google-not-installed =
+    the Google Cloud CLI (gcloud) was not found: install it from https://cloud.google.com/sdk/docs/install and run bravebot auth login google again, or use a Google API key with bravebot auth login gateway google-vertex
+auth-google-project-question = Google Cloud project that has the Vertex AI API enabled, or nothing to stop:
+auth-google-project-refused =
+    that is not a Google Cloud project id: it holds letters, digits, _, ., : and -, and starts with a letter or a digit; the Google Cloud CLI was not started and nothing was recorded
+# The problem is one sentence about the settings file.
+auth-google-cannot-record =
+    the project cannot be recorded, so the Google Cloud CLI was not started: { $problem }
+auth-google-signed-in = signed in to Google with the Google Cloud CLI
+auth-google-already-signed-in = the Google Cloud CLI already gives an access token, so no browser was opened
+auth-google-failed =
+    the sign-in with the Google Cloud CLI did not complete, so nothing was recorded; run bravebot auth login google again
+# The file is the person's own settings file, the host is the one the project and location build, and the project
+# is the one typed.
+auth-google-recorded =
+    { $file } names { $project } under provider.google-vertex now, so sessions started from now on reach { $host } with the Google Cloud CLI's access token and no key
+# Said where a block or a variable configures google-vertex so that a session sends it the Google Cloud CLI's
+# token. No project is asked for then, since that configuration names its own.
+auth-google-already-recorded =
+    google-vertex is already configured by a provider block or a variable and takes the Google Cloud CLI's access token, so nothing was recorded and a session uses the project that configuration names
+# Said where a block or a variable configures google-vertex another way, such as with a key.
+auth-google-left =
+    google-vertex is already configured by a provider block or a variable, and not to take the Google Cloud CLI's token, so it was left as it is and a session uses what that configuration names
+# The entry is the text to add under provider by hand, and the problem is one sentence about the file.
+auth-google-not-recorded =
+    the sign-in worked, and no session uses it until a provider block names the project: add { $entry } to { $file } ({ $problem })
 auth-which-way = Which one? Type its number or its name, or nothing to stop:
 # Said where the answer to auth-which-way names none of the ways listed.
 auth-not-a-listed-way = { $answer } is not one of the ways listed
@@ -1380,6 +1417,25 @@ auth-logout-bedrock =
     bravebot keeps no AWS session of its own: the AWS CLI keeps it, and aws sso logout ends it
 auth-logout-import =
     an import keeps no credential of its own: it wrote entries to the settings file, and removing them there undoes it
+# Said by bravebot auth logout google. Each says that the Google Cloud CLI's own sign-in is not ended here.
+auth-logout-google-removed =
+    { $file } no longer names a google-vertex project, so sessions stop using the Google Cloud CLI's access token; the CLI's sign-in still works until it is ended with gcloud auth application-default revoke
+auth-logout-google-nothing =
+    no google-vertex block that bravebot auth login google recorded is there, so nothing was removed; the Google Cloud CLI's sign-in is not ended here, and gcloud auth application-default revoke ends it
+auth-logout-google-not-ours =
+    the google-vertex block in { $file } is not the one bravebot auth login google writes, so it was left as it is; the Google Cloud CLI's sign-in is not ended here, and gcloud auth application-default revoke ends it
+auth-logout-google-key-stored =
+    a key is stored for google-vertex and the block is where a session sends it, so the block was left as it is; bravebot auth logout gateway google-vertex forgets the key
+# Asked after the block is dealt with, at a terminal only. The credentials are the Application Default
+# Credentials the Google Cloud CLI keeps, which other programs on the machine read too.
+auth-logout-google-revoke-question =
+    End the Google Cloud CLI's sign-in as well? Every program on this machine that uses its Application Default Credentials stops working until gcloud auth application-default login is run again.
+auth-logout-google-revoked =
+    the Google Cloud CLI's Application Default Credentials were revoked; bravebot auth login google signs in again
+auth-logout-google-revoke-declined =
+    the Google Cloud CLI's sign-in was left in place
+auth-logout-google-revoke-failed =
+    gcloud auth application-default revoke did not complete, so the Google Cloud CLI's sign-in may still be in place; run bravebot auth status google to check
 # The id is the word typed after gateway. The word after it is not repeated, because it is most
 # likely the key.
 auth-gateway-key-argument =
@@ -1410,6 +1466,22 @@ auth-gateways-heading-managed =
     The gateways { $path } names for every user of this machine, which are the only ones a key can be stored for:
 # Beside a gateway in the list under auth-gateways-heading.
 auth-gateway-key-stored = a key stored
+# The name Google gives the service the google-vertex id reaches, which a person looking for Gemini
+# knows it by. Said beside the id.
+auth-service-google-vertex = Gemini on Google Vertex AI
+# Asked once google-vertex is picked and no provider block names it. Answering nothing is Vertex AI
+# express mode, which a key alone reaches.
+auth-vertex-project-question = Google Cloud project to use, or nothing for express mode, which needs only a key:
+# Asked only where a project was given. Answering nothing is the global location.
+auth-vertex-location-question = Location, such as us-central1, or nothing for global:
+# Said where the project typed is not one a Vertex AI endpoint can be built from. The value is not
+# repeated: it is free text.
+auth-vertex-project-refused =
+    that is not a Google Cloud project id: it holds letters, digits, _, ., : and -, and starts with a letter or a digit; nothing was stored
+# Said where the location typed is not one a Vertex AI host can be built from. The value is not
+# repeated: it is free text.
+auth-vertex-location-refused =
+    that is not a location: it holds lowercase letters, digits and -; nothing was stored
 auth-which-gateway = Which one? Type its number or its id, or nothing to stop:
 auth-not-a-listed-gateway = { $answer } is not one of the gateways listed
 auth-gateway-key-held = A key is already stored for { $id }.
@@ -1429,6 +1501,11 @@ auth-gateway-stored =
 # The file is the person's own settings file, and the host is the one compiled in for the id.
 auth-gateway-recorded =
     { $file } names { $id } under provider now, so sessions started from now on send the key stored for it to { $host }
+# Said once the key is stored for a service only the environment names: no provider block is recorded,
+# because one would replace what the environment configures. The variable is the one the service
+# reads its key from, which a session reads before a stored key.
+auth-gateway-stored-from-environment =
+    the key for { $id } is stored in { $path }. No provider block names { $id }; the environment configures it, and a session reads { $variable } before the stored key, so it sends the stored key to { $host } only while { $variable } is not exported and { $project } or the env block of settings names the service
 # Said where no provider block named the id, once its key is stored and the block recorded.
 auth-gateway-stored-and-recorded =
     the key for { $id } is stored in { $path }, and { $file } names { $id } under provider now, so sessions started from now on send it to { $host }
@@ -1467,14 +1544,15 @@ auth-status-not-all-usable = a sign-in asked about is not usable
 auth-status-brave-held = a premium key is stored and is sent to Brave's premium service alone
 auth-status-brave-none = no premium key is stored; run bravebot auth login brave
 auth-status-brave-nowhere = this machine has nowhere to keep a key, so none is stored
-auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name brave, bedrock, gateway, chatgpt or xai
+auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name brave, bedrock, gateway, chatgpt, xai or google
 # Said of a gateway when no key is stored for any service and no provider block names a gateway.
 auth-status-gateway-none = no gateway key is stored; run bravebot auth login gateway
 # The file the block's `options.keyFile` names gives no key. A stored key is read before the file, so
 # storing one makes the gateway usable. The path is not said.
 auth-status-gateway-key-file-unusable =
     the file options.keyFile names { $reason }; fix it, or run bravebot auth login gateway { $id }, since a stored key is read before the file
-# The id is a service bravebot knows that no provider block names, so no session sends a key to it.
+# The id is a service bravebot knows, or google-vertex, that no provider block names, so no session sends
+# a key to it; or a google-vertex express block that has no key stored for it.
 auth-status-gateway-none-stored = no key is stored for { $id }; run bravebot auth login gateway { $id }
 auth-status-gateway-unrecorded =
     a key is stored for { $id } and no provider block names it, so no session sends it; run bravebot auth login gateway { $id } to record the block
@@ -1495,6 +1573,13 @@ auth-status-bedrock-lapsed = the AWS session has lapsed: run `bravebot auth logi
 auth-status-bedrock-no-profile = the AWS CLI has no profile by this name: name one it has in settings
 auth-status-bedrock-no-cli = the AWS CLI is not installed, and Bedrock credentials come from it
 auth-status-bedrock-undecodable = the AWS CLI answered with something that is not a credential
+# Said of the Google Cloud CLI's sign-in. Fixed sentences: the CLI's own text can name an account or a
+# path, so none of it is copied.
+auth-status-google-good = the Google Cloud CLI gives an access token, which a session sends to the Vertex AI host of the project google-vertex names and to no other host
+auth-status-google-no-project = no google-vertex block names a project for the Google Cloud CLI to sign in to; run bravebot auth login google
+auth-status-google-lapsed = the Google Cloud CLI gives no access token; run bravebot auth login google
+auth-status-google-no-cli = the Google Cloud CLI (gcloud) is not installed, and the access token for the project comes from it
+auth-status-google-timed-out = the Google Cloud CLI did not answer in time
 
 
 ## Signing in with a ChatGPT account
@@ -4756,6 +4841,9 @@ desktop-accounts-key-brave-unreadable = The stored premium key could not be read
 desktop-accounts-key-misconfigured = The settings could not be read, so no key can be stored.
 desktop-accounts-key-not-offered = These settings offer no gateway by this name to store a key for.
 desktop-accounts-key-cannot-record = A key for this service is sent only once your settings name it, and they cannot be changed to name it, so no key was asked for.
+# Said of Google Vertex AI where no settings entry names it: its entry states a project and a location,
+# which this window does not ask for.
+desktop-accounts-key-needs-project = A key for Google Vertex AI is stored with the project and location it is used with, which this window does not ask for. Run bravebot auth login gateway google-vertex in a terminal, so no key was asked for.
 desktop-accounts-key-empty = No key was typed, so nothing was stored.
 desktop-accounts-key-stored-already = A key is stored already, so it was left as it is.
 desktop-accounts-key-not-stored = The key could not be stored on this computer.
@@ -6523,6 +6611,7 @@ gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `g
 gcloud-no-token = the reply was not a token
 gcloud-no-reason = the Google Cloud CLI gave no reason
 gcloud-login-incomplete = the sign-in did not complete
+gcloud-revoke-incomplete = the revoke did not complete
 doctor-gateway-token-google-cloud = none needed (the Google Cloud CLI is asked for an access token)
 schedule-usage = schedule takes add, list, remove, pause, resume, clear and a number, pending with or without a number, run-now and a number, or history with or without a number
 schedule-add-usage = schedule add takes --cron and five fields in quotes, --prompt and the text, and may add --dir and a directory, --scheduler and crontab, launchd or systemd, --deliver-to and the absolute path of a program, and --accept-edits or --dangerously-skip-permissions

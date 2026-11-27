@@ -25,6 +25,8 @@ governs:
   - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
   - crates/agent/src/gcloud.rs
+  - crates/agent/src/key_entry.rs
+  - crates/agent/src/accounts.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/turns.rs
   - crates/tui/src/app/models.rs
@@ -347,6 +349,10 @@ sign-in is answered in a dialog its main process draws ([XAI-7](xai-sign-in.md#X
 on it that finds no usable sign-in ends before a request is sent, naming the command
 ([XAI-17](xai-sign-in.md#XAI-17)).
 
+The Google Cloud sign-in is run by a person as well: `bravebot auth login google` runs the sign-in of
+[BACKEND-65](#BACKEND-65) when it is typed, and shows each line the CLI writes as it arrives, drawn so that
+no control character reaches the terminal ([BACKEND-74](#BACKEND-74)).
+
 `verified-by: bravebot_agent::backend::a_brave_model_never_needs_an_aws_sign_in`
 `verified-by: bravebot_agent::backend::without_bedrock_configured_nothing_needs_a_sign_in`
 `verified-by: bravebot_agent::backend::signing_in_for_a_model_no_aws_account_serves_does_nothing`
@@ -359,6 +365,8 @@ on it that finds no usable sign-in ends before a request is sent, naming the com
 `verified-by: bravebot_cli::layering::the_xai_sign_in_is_started_by_the_command_and_nothing_else`
 `verified-by: bravebot_agent::backend::a_turn_on_an_xai_model_with_no_usable_sign_in_ends_before_a_request_naming_the_command`
 `verified-by: bravebot_cli::running::a_turn_on_a_chatgpt_model_with_no_sign_in_ends_naming_the_command_and_stores_nothing`
+`verified-by: bravebot_cli::auth::each_line_the_google_cli_writes_is_shown_with_its_control_characters_drawn`
+`verified-by: bravebot_agent::gcloud::a_sign_in_asked_for_opens_no_browser_for_a_token_already_given_and_checks_one_after_the_login`
 
 <a id="BACKEND-10"></a>
 ### BACKEND-10: asking whether a session is good costs nothing once it is known to be
@@ -854,7 +862,12 @@ those variables name models by their bare id.
 `bravebot auth login gateway` offers a key for exactly these names where no block names them, and
 for none of them where the machine-level layer names the gateways. It shows each with the endpoint
 its entry would reach: a known name asked for alone is read as an entry that holds no field is, so
-the host it shows is the one a session sends the key to.
+the host it shows is the one a session sends the key to. It offers `google-vertex` as well, which is
+not a known name because its endpoint is built from a project and a location and not compiled in.
+Where no block or variable names it, it is offered as the entry that states no field, which is express
+mode ([BACKEND-58](#BACKEND-58)), and a project and location the person types replace that entry
+before anything is stored ([BACKEND-49](#BACKEND-49), [cli.md](cli.md)). It is offered under no managed
+list, as the known names are not.
 
 A known name supplies an endpoint and no credential. An `openai` entry is reached as any other
 gateway is, with its key as a bearer token in `authorization`, and names where that key lives as
@@ -969,6 +982,7 @@ qualified name at all, which is what keeps the other rosters' spellings out of t
 `verified-by: bravebot_config::lib::a_provider_entry_named_xai_keeps_the_name_and_no_model_is_the_accounts`
 `verified-by: bravebot_config::lib::an_entry_named_xai_that_states_no_endpoint_holds_nothing_and_its_models_are_not_read`
 `verified-by: bravebot_config::lib::a_gateway_listing_a_name_that_begins_with_xai_is_reached_by_its_qualified_name_alone`
+`verified-by: bravebot_config::lib::the_settings_and_key_a_vertex_sign_in_writes_resolve_the_model_with_no_configuration`
 
 <a id="BACKEND-19"></a>
 ### BACKEND-19: a gateway that was told no models is asked what it serves
@@ -3885,6 +3899,10 @@ for any other. An `options.baseURL` the entry states is where its requests go re
 An entry whose project or location holds a character outside the ones Google allows in it
 configures no service, and is not read as express mode for having a project: a project is letters, digits, `_`, `.`, `:` and `-`
 and starts with a letter or a digit, and a location is lowercase letters, digits and `-`.
+`bravebot auth login gateway google-vertex` holds the project and location it is given to the same
+rules before it stores a key, and records an entry that states both, with `global` for a location
+none was given ([CLI-18](cli.md#CLI-18)). `bravebot auth login google` records an entry that states
+the project and `global` and names no key ([BACKEND-74](#BACKEND-74)).
 
 The entry is not asked for a roster, since the endpoint has no model listing a key can call. In
 place of [BACKEND-19](#BACKEND-19)'s request, an entry that lists no models is offered a list
@@ -3925,6 +3943,10 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_config::provider::the_compiled_vertex_list_is_the_four_answered_ids_and_no_preview`
 `verified-by: bravebot_config::provider::a_project_and_location_holding_only_allowed_characters_are_accepted`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_google_vertex_host`
+`verified-by: bravebot_config::provider::a_project_or_location_the_endpoint_refuses_names_no_service_and_no_entry`
+`verified-by: bravebot_config::provider::the_entry_a_sign_in_records_reaches_the_host_it_names`
+`verified-by: bravebot_cli::auth::google_vertex_with_a_project_is_recorded_with_its_project_and_location`
+`verified-by: bravebot_cli::auth::a_project_or_location_vertex_ai_cannot_be_reached_with_is_refused_before_the_key`
 `verified-by: bravebot_aichat::client::a_google_vertex_entry_offers_the_compiled_models_without_asking`
 `verified-by: bravebot_tui::app::tests::backends_models::the_picker_offers_the_compiled_models_for_a_google_vertex_service_naming_none`
 `verified-by: bravebot_tui::app::tests::backends_models::a_google_vertex_block_naming_models_is_offered_those_alone`
@@ -3932,6 +3954,9 @@ exactly what is offered, as for any other gateway.
 `verified-by: bravebot_ui_bridge::models::the_window_offers_a_google_vertex_block_its_own_models_alone`
 `verified-by: bravebot_cli::doctor::doctor_names_the_compiled_models_a_google_vertex_service_is_offered`
 `verified-by: bravebot_config::lib::a_name_qualified_by_the_google_vertex_id_names_that_service_and_the_rest_is_sent`
+`verified-by: bravebot_config::lib::the_settings_and_key_a_vertex_sign_in_writes_resolve_the_model_with_no_configuration`
+`verified-by: bravebot_cli::auth::a_project_an_endpoint_cannot_be_built_from_is_refused_before_the_cli_starts`
+`verified-by: bravebot_agent::key_entry::a_google_cloud_offer_needs_a_project_the_endpoint_can_be_built_from`
 
 <a id="BACKEND-50"></a>
 ### BACKEND-50: the environment names a Google Vertex service when no block does
@@ -3956,6 +3981,16 @@ A `provider.google-vertex` entry that configures a service replaces this route, 
 gateways is not given another by a variable. The block names its own project and location and reads
 neither variable for them. Configuring the service changes no model that is in force: nothing is
 sent to Google until a model named `google-vertex/...` is selected ([BACKEND-13](#BACKEND-13)).
+
+A key stored with `bravebot auth login gateway google-vertex` while the environment names the service
+and no block does is read after an exported `GOOGLE_API_KEY` and before one set in the `env` block of the
+settings, so it is sent only while `GOOGLE_API_KEY` is not exported. Where an exported `GOOGLE_API_KEY`
+is the only thing that names the service, the service ends with the export and the stored key is never
+sent. The sign-in records no block, since a block replaces this route. The sign-in says so and names
+both variables ([CLI-18](cli.md#CLI-18)). `bravebot auth login google` records no block in that case
+either. The command says the configuration takes the CLI's token and names its own project where
+`GOOGLE_CLOUD_PROJECT` names the project and no key resolves, and says the service is left as it is where
+a key resolves ([BACKEND-74](#BACKEND-74)), and it asks for no project.
 
 **Why.** `GOOGLE_API_KEY` is a name other Google clients read, and a key exported for one of them
 may be scoped to a service other than this one. What limits that is where the key goes and when: only
@@ -3982,7 +4017,10 @@ project, is dropped as any such entry is, and leaves the route open. A managed l
 `verified-by: bravebot_config::lib::a_google_vertex_block_replaces_the_environment_route`
 `verified-by: bravebot_config::lib::a_managed_gateway_list_takes_no_google_vertex_from_the_environment`
 `verified-by: bravebot_config::lib::a_google_vertex_service_from_the_environment_leaves_the_model_in_force_alone`
+`verified-by: bravebot_cli::auth::google_vertex_the_environment_configures_is_stored_a_key_and_given_no_block`
 `verified-by: bravebot_config::lib::a_google_vertex_service_holds_a_credential_the_record_names_by_host`
+`verified-by: bravebot_cli::auth::a_google_vertex_block_already_there_is_left_as_it_is`
+`verified-by: bravebot_cli::auth::a_google_vertex_configuration_already_there_is_signed_in_with_no_project_asked`
 
 <a id="BACKEND-51"></a>
 ### BACKEND-51: a Vertex key is sent in `x-goog-api-key` and nowhere else
@@ -4484,7 +4522,10 @@ Google's native `generateContent` API at `https://aiplatform.googleapis.com/v1`,
 no project. An entry that states a project is reached through the OpenAI-compatible endpoint
 ([BACKEND-49](#BACKEND-49)), so the project is what picks the route. No region is part of the
 address, and Google chooses where a request is served, so neither `options.location` nor
-`VERTEX_LOCATION` is read here. An entry that states an `options.baseURL` and no project keeps the
+`VERTEX_LOCATION` is read here. `bravebot auth status`, the window and `bravebot doctor` report an entry of this route that holds no key
+as not signed in or as having no key, since the service refuses a request with none, where they report a block of another
+gateway naming no credential as signed in or as needing none ([CLI-23](cli.md#CLI-23)). An entry that carries an
+`authorization` or `x-goog-api-key` header of its own authenticates by that header and is reported as any block naming no credential is. An entry that states an `options.baseURL` and no project keeps the
 OpenAI-compatible route at that endpoint ([BACKEND-17](#BACKEND-17)) unless it names the SDK
 `@ai-sdk/google-vertex`, which says the endpoint takes Vertex's own API: the route below then
 follows the endpoint it states in place of the host and the `/v1` path.
@@ -4560,6 +4601,10 @@ value, while which models read a budget at all is learned from a refusal as BACK
 `verified-by: bravebot_config::provider::a_stated_endpoint_is_where_an_express_entry_is_reached`
 `verified-by: bravebot_config::provider::a_stated_endpoint_with_no_project_keeps_chat_completions_unless_the_sdk_says_otherwise`
 `verified-by: bravebot_config::lib::a_key_alone_names_the_express_service_and_a_blank_project_is_no_project`
+`verified-by: bravebot_cli::auth::google_vertex_with_no_project_is_stored_with_the_express_block`
+`verified-by: bravebot_agent::accounts::google_vertex_stands_as_its_key_is_found`
+`verified-by: bravebot_config::provider::an_express_entry_is_reported_missing_a_key_unless_a_header_of_its_own_authenticates_it`
+`verified-by: bravebot_cli::doctor::doctor_reports_a_bare_express_block_as_missing_a_key_as_status_does`
 `verified-by: bravebot_aichat::client::a_google_express_request_carries_its_key_in_x_goog_api_key_and_nowhere_else`
 `verified-by: bravebot_aichat::client::a_google_express_request_without_a_key_sends_no_credential_header`
 `verified-by: bravebot_aichat::client::a_refused_google_express_request_does_not_repeat_the_key`
@@ -5114,7 +5159,8 @@ stage may write has it taken off, and `gcloud` then signs in as it would with no
 
 The sign-in is asked for before work starts, and only for a model this service answers
 ([BACKEND-9](#BACKEND-9)): where the CLI gives no token, `gcloud auth application-default login` is run and
-each line it writes is shown as it arrives. A CLI that is missing, or that gives no token, ends the request before
+each line it writes is shown as it arrives. A person can run the same sign-in by typing
+`bravebot auth login google` ([BACKEND-74](#BACKEND-74)). A CLI that is missing, or that gives no token, ends the request before
 anything is sent, naming `gcloud auth application-default login`, and the output it printed is not quoted.
 The token is in no trace, no error and no session record.
 
@@ -5139,6 +5185,7 @@ check before a turn is one more run of the program.
 `verified-by: bravebot_agent::backend::only_a_vertex_project_at_a_google_host_with_no_other_credential_is_given_the_cli_token`
 `verified-by: bravebot_agent::backend::the_cli_sign_in_is_due_only_for_a_vertex_project_with_no_key`
 `verified-by: bravebot_cli::doctor::a_vertex_project_with_no_key_is_reported_as_signed_in_by_the_google_cloud_cli`
+`verified-by: bravebot_agent::accounts::google_vertex_stands_as_its_key_is_found`
 `verified-by: bravebot_agent::gcloud::the_token_is_asked_for_with_the_application_default_credentials_command`
 `verified-by: bravebot_agent::gcloud::the_program_is_given_the_application_default_credentials_arguments`
 `verified-by: bravebot_agent::gcloud::a_token_the_cli_prints_is_returned_without_its_newline`
@@ -5162,6 +5209,124 @@ check before a turn is one more run of the program.
 `verified-by: bravebot_agent::gcloud::python_options_are_not_passed_to_gcloud_whatever_they_hold`
 `verified-by: bravebot_agent::gcloud::a_started_gcloud_has_the_generic_code_selectors_removed_as_well`
 `verified-by: bravebot_agent::gcloud::the_sign_in_reports_each_line_the_cli_writes_and_its_failure`
+
+<a id="BACKEND-74"></a>
+### BACKEND-74: `auth login google` signs in with the Google Cloud CLI and records the project, and no key
+
+`bravebot auth login google`, or the way picked by its number from `bravebot auth login`, signs a
+person in to Gemini on Vertex AI with the Google Cloud CLI and records the project a session then
+reaches. It is a way of its own, separate from the key typed for `google-vertex`
+([CLI-18](cli.md#CLI-18)), and it stores no key.
+
+Every check that needs no answer is made before the project is asked for, and each refusal starts no
+program and writes nothing: an incognito session is refused with the failure status, because the
+project is recorded in the person's settings ([INCOG-7](incognito.md#INCOG-7)); a machine-level layer that
+names the gateways and does not name `google-vertex` is refused with the configuration status, because a
+block recorded in the person's file would not be read; no terminal on standard input and standard error
+is refused with the argument status, as is a word after the way; no state directory to write is refused
+with the failure status; and no `gcloud` on the usable part of `PATH` is refused with the failure status,
+saying where to get the Google Cloud CLI and that a key is the other route.
+
+The project is asked for at the terminal where no block or variable configures `google-vertex`. Nothing
+typed, or the end of the input, ends the command successfully having run nothing. The project is held to
+the rule [BACKEND-49](#BACKEND-49) states, and one
+that configures no service ends the command with the argument status before the program starts. The
+refusal does not repeat it. No location is asked for, and the block states `global`, which is where a
+block with none is reached. The settings file is checked to be able to take the block before the program
+starts, so a person does not finish a browser sign-in to learn that it cannot. Where a block or
+`GOOGLE_CLOUD_PROJECT` already configures the service no project is asked for, since that configuration
+names its own and nothing would write or use the one typed, and the command goes to the sign-in.
+
+The sign-in is the one of [BACKEND-65](#BACKEND-65), started by the same function with the same fixed
+arguments and environment. Where the CLI already gives a token no login is run and no browser opens, and
+the command says so. Otherwise `gcloud auth application-default login` runs, each line it writes is shown as
+it arrives with control characters drawn ([BACKEND-9](#BACKEND-9)), and a token is asked for again when it
+ends, so a login that ends well for an account that gives no token is a failure. A failure, a cancel and
+any other end that gives no token exit with the failure status, say so in a fixed sentence, record
+nothing and quote nothing the CLI wrote beyond the lines already shown. The token and the account are
+in no output.
+
+Once the sign-in is made, the person's own settings gain `provider.google-vertex` with `options.project`
+and `options.location` and no `env`, `apiKey`, `keyFile` or `baseURL`, kept as the settings file is kept
+when any other entry is recorded: what the file says stays, it is flushed, and it is refused where it changed
+while the command ran. Where a block or `GOOGLE_CLOUD_PROJECT` already configures the service, the file is
+not written and the project is not asked for: a configuration where nothing resolves a key and the block
+states no `authorization` or `x-goog-api-key` header, so that a session sends the CLI's token, is said to
+name its own project and to be recorded already, and any other configuration, such as one that names a key, is
+left as it is and said to be. The next session answers a `google-vertex/google/...` model with
+the CLI's token as a bearer, as [BACKEND-65](#BACKEND-65) says, and no key is stored.
+
+**Why.** A person whose organisation disallows API keys, or who has `gcloud` and no key, would otherwise
+install the CLI, sign in, find the settings and write the block by hand. Sign-in and the record are one
+command so the person does not stop between them. The checks and the project come first because the
+sign-in opens a browser and waits, and a sign-in that cannot be recorded is the work a person has to repeat.
+The project is the one value a request needs that the CLI does not know, and a location is left at
+`global` because a block with no location is already reached there, so asking for one would add a
+question and change nothing about where requests go. A block already there is the person's own, so this
+command reads it as configuration and does not rewrite it, and does not ask for a project it would not
+use, as the gateway way asks no question where a block configures the service ([CLI-18](cli.md#CLI-18)).
+The decision whether a login is needed is the one place the output of the CLI is looked at: the
+standard output of `print-access-token` is read for whether it is one line holding no whitespace, which is
+what `decode` in `crates/agent/src/gcloud.rs` checks, and that one bit chooses between "already signed in", a
+login, and a fixed failure sentence. The bytes are cleared, never shown, never sent to a model and never
+used to choose anything else, and the exit status is the other input. This is a branch on bytes a program
+wrote, in `bravebot-agent`, that [reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md) does
+not list among its eleven exceptions, and it has the shape of the check [BACKEND-65](#BACKEND-65) already
+makes on the same output before a request.
+
+`verified-by: bravebot_cli::auth::the_google_way_is_listed_by_number_and_word_and_names_gemini_and_the_cli`
+`verified-by: bravebot_cli::auth::the_google_sign_in_records_the_project_block_after_the_login_and_keeps_no_key`
+`verified-by: bravebot_cli::auth::a_failed_google_sign_in_records_nothing_and_quotes_nothing_the_cli_wrote`
+`verified-by: bravebot_cli::auth::each_line_the_google_cli_writes_is_shown_with_its_control_characters_drawn`
+`verified-by: bravebot_cli::auth::a_project_an_endpoint_cannot_be_built_from_is_refused_before_the_cli_starts`
+`verified-by: bravebot_cli::auth::the_google_sign_in_refuses_before_asking_or_starting_anything`
+`verified-by: bravebot_cli::auth::a_google_cli_that_already_gives_a_token_opens_no_browser_and_still_records`
+`verified-by: bravebot_cli::auth::a_google_vertex_block_already_there_is_left_as_it_is`
+`verified-by: bravebot_cli::auth::a_google_vertex_configuration_already_there_is_signed_in_with_no_project_asked`
+`verified-by: bravebot_cli::auth::a_settings_file_that_cannot_take_the_block_is_found_before_the_cli_starts`
+`verified-by: bravebot_cli::running::auth_login_google_signs_in_with_the_cli_and_records_the_project_and_no_key`
+`verified-by: bravebot_cli::running::auth_login_google_records_nothing_when_the_login_fails_or_the_project_is_refused`
+`verified-by: bravebot_cli::running::auth_login_google_says_where_to_get_the_cli_when_it_is_missing`
+`verified-by: bravebot_cli::running::auth_login_google_is_refused_without_a_terminal_and_while_incognito_before_the_cli_starts`
+`verified-by: bravebot_ui_bridge::accounts_tests::the_window_draws_no_row_for_the_google_cloud_cli_sign_in_whatever_its_standing`
+`verified-by: bravebot_agent::gcloud::a_sign_in_asked_for_opens_no_browser_for_a_token_already_given_and_checks_one_after_the_login`
+`verified-by: bravebot_agent::key_entry::a_google_cloud_offer_needs_a_project_the_endpoint_can_be_built_from`
+`verified-by: bravebot_agent::backend::the_block_a_google_sign_in_records_is_answered_with_the_cli_token_and_no_key`
+
+<a id="BACKEND-75"></a>
+### BACKEND-75: `auth logout google` removes the block the sign-in recorded and ends the Google Cloud CLI's sign-in only on a typed yes
+
+`bravebot auth logout google` takes `provider.google-vertex` out of the person's own settings where it is
+exactly what [BACKEND-74](#BACKEND-74) writes: a project that is a valid id, `global`, and nothing else.
+Any other block is left byte for byte and the command says so. A key stored for `google-vertex` also leaves
+the block, since a session sends that key to it, and the command names `auth logout gateway google-vertex`.
+Where no such block is there the command says nothing was removed and exits successfully. A word after the
+way is refused with the argument status. It is allowed in an incognito session, since it removes what an
+earlier sign-in recorded and adds nothing.
+
+The Google Cloud CLI's credentials are the Application Default Credentials every program on the machine
+that uses them reads, so they are not ended by default and every sentence this command says about the
+block says that they are still in place. At a terminal on standard input and standard error, where `gcloud`
+is found, the command then asks whether to end them, naming what stops working. Only a typed yes runs
+`gcloud auth application-default revoke --quiet`. Nothing typed, the end of the input and any other word
+leave them in place. Without a terminal nothing is asked and nothing is run. The arguments are fixed, the
+start is the checked start of [BACKEND-65](#BACKEND-65) and [SANDBOX-30](sandboxing.md#SANDBOX-30), and
+nothing it writes is shown. A revoke that fails exits with the failure status in a fixed sentence and says
+the credentials may still be in place, since a non-zero exit can follow a partial revoke.
+
+**Why.** Signing out of bravebot is bravebot's own record. A person who signed in to Google once for the
+CLI's other uses would lose them to a logout that revoked by default, and the credentials are not
+bravebot's to end without being told to. A typed answer is the choice because the person is at the
+terminal that asked, and a word that revoked on a script's say would end credentials no turn wrote.
+A block that is not exactly what the sign-in writes is the person's own configuration, and a key stored for
+the id is sent to it, so removing it would break a sign-in this command did not make.
+
+`verified-by: bravebot_cli::auth::logging_out_of_google_removes_the_recorded_block_and_says_the_cli_sign_in_stays`
+`verified-by: bravebot_agent::key_entry::the_block_google_sign_in_recorded_is_taken_out_only_where_it_is_still_as_recorded`
+`verified-by: bravebot_cli::auth::the_cli_sign_in_is_ended_only_on_a_yes_typed_at_a_terminal`
+`verified-by: bravebot_agent::gcloud::the_revoke_is_the_application_default_credentials_command_and_reports_only_its_exit_status`
+`verified-by: bravebot_cli::running::auth_logout_google_removes_the_recorded_block_and_leaves_the_cli_sign_in`
+`verified-by: bravebot_cli::running::auth_logout_google_ends_the_cli_sign_in_only_on_a_yes`
 
 <a id="BACKEND-68"></a>
 ### BACKEND-68: a provider entry may narrow a fetched roster with a whitelist and a blacklist
@@ -5472,6 +5637,28 @@ cancel kills it rather than asking it to stop.
   model, where they are not. Two tier variables naming the same ARN record the first tier in
   Opus, Sonnet, Haiku order, whichever row was picked. A pick recorded before the tier word was
   written is an ARN, and is set aside once nothing serves it.
+
+- **The Google way is not offered in the desktop window, and asks for no location.** The window's
+  Accounts settings draw no row for it and name no command for it, since the project is typed at a
+  terminal and the sign-in waits on a browser it cannot show ([BACKEND-74](#BACKEND-74)). The command
+  records `global`, so a person who wants another location edits
+  `options.location` in the block by hand, and `auth logout google` then leaves that block as it is,
+  because it is not what the sign-in writes. A list of ways that is drawn while a block names a
+  project asks the Google Cloud CLI for a token, which costs the CLI's start each time and at most five
+  seconds where it does not answer.
+
+- **Ending the Google Cloud CLI's sign-in ends it for every program that reads it.** The Application
+  Default Credentials are the CLI's and not bravebot's, so `auth logout google` revokes them only on a
+  typed yes ([BACKEND-75](#BACKEND-75)) and names what stops working. A script has no way to ask for the
+  revoke, which is `gcloud auth application-default revoke`.
+
+- **A Google sign-in that needs no Google Cloud CLI is not built.** `auth login google` needs `gcloud`
+  installed. A sign-in of the program's own, with OAuth and PKCE on a loopback redirect and a refresh
+  token kept in a file of the state directory, waits on two decisions that belong to a person: which
+  OAuth client it uses, and whether Google's terms allow a third-party program to use that client for
+  Gemini or Vertex AI requests. Nothing here settles either. What the route needs is in
+  [google-sign-in.md](../design/google-sign-in.md), and the work is tracked by
+  [#4706](https://github.com/brave/bravebot/issues/4706).
 
 - **A pick that is set aside is named at every start.** The record is kept (BACKEND-47), so each
   start says it set the pick aside until another model is picked with `/model`. Somebody who only
@@ -5822,7 +6009,8 @@ cancel kills it rather than asking it to stop.
 - **A Vertex project with no key is listed as not signed in.** `bravebot auth status` and the
   window list a `google-vertex` block whose `env` variable holds nothing, or whose `options.keyFile`
   gives no key, as not signed in, although a request to a Google Vertex host is sent the Google Cloud
-  CLI token ([BACKEND-65](#BACKEND-65)), because the account listing does not ask the CLI.
+  CLI token ([BACKEND-65](#BACKEND-65)), because the account listing does not ask the CLI. A project
+  the environment names alone is listed the same way.
 
 - **A managed block that names only a key file names no credential.** The layer drops
   `options.keyFile` where it drops `options.apiKey`, so a managed block that names only a key file is,

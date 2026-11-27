@@ -388,7 +388,7 @@ pub(crate) const CLOUDFLARE_AI_GATEWAY_ID: &str = "cloudflare-ai-gateway";
 ///
 /// Not in [`KNOWN_ENDPOINTS`] for the reason Bedrock is not: the endpoint carries the project and
 /// the location, so it is built from `options.project` and `options.location`.
-pub(crate) const GOOGLE_VERTEX_ID: &str = "google-vertex";
+pub const GOOGLE_VERTEX_ID: &str = "google-vertex";
 
 /// The models a Vertex AI entry naming none is offered, since no listing will name them for a key.
 ///
@@ -963,6 +963,60 @@ impl Provider {
     pub fn known(id: &str) -> Option<Self> {
         known_endpoint(id)?;
         Self::one(id, &serde_json::Map::new())
+    }
+
+    /// The Vertex AI service for `project` and `location`, with the entry that names it, or `None`
+    /// where either is refused ([`vertex_entry`]).
+    ///
+    /// The service is read from the entry as a block would be, so the host a sign-in names for a
+    /// key is the host a session sends it to. Not [`Self::known`], which Vertex AI is not: its
+    /// endpoint is built from a project.
+    pub fn google_vertex(
+        project: Option<&str>,
+        location: Option<&str>,
+    ) -> Option<(Self, serde_json::Map<String, serde_json::Value>)> {
+        let entry = vertex_entry(project, location)?;
+        let provider = Self::one(GOOGLE_VERTEX_ID, &entry)?;
+        Some((provider, entry))
+    }
+
+    /// Whether this is the `google-vertex` service.
+    pub fn is_google_vertex(&self) -> bool {
+        self.id == GOOGLE_VERTEX_ID
+    }
+
+    /// Whether this is Vertex AI express mode at Google's own host, which a request reaches with a
+    /// key and no other credential ([BACKEND-58](../../../docs/specs/backends.md#BACKEND-58)).
+    ///
+    /// Not a project, which the Google Cloud CLI signs in ([BACKEND-65]), not an entry that states
+    /// an endpoint of its own, which may need no key, and not an entry with an `authorization` or
+    /// `x-goog-api-key` header of its own, which authenticates by that header.
+    ///
+    /// [BACKEND-65]: ../../../docs/specs/backends.md#BACKEND-65
+    pub fn is_vertex_express(&self) -> bool {
+        self.is_google_vertex()
+            && self.protocol == Protocol::GenerateContent
+            && self.base_url == VERTEX_EXPRESS_ENDPOINT
+            && !self.headers.iter().any(|held| {
+                held.name.eq_ignore_ascii_case("authorization")
+                    || held.name.eq_ignore_ascii_case(VERTEX_KEY_HEADER)
+            })
+    }
+
+    /// [`Self::credential_and_source`] as a report states it: an express entry that names no key is
+    /// a key that is missing, since the service refuses a request with none, where a block of
+    /// another gateway that names no credential needs none
+    /// ([BACKEND-58](../../../docs/specs/backends.md#BACKEND-58)).
+    ///
+    /// The one answer `auth status`, the window and `doctor` give, so none of them can differ.
+    pub fn credential_as_reported(
+        &self,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> (Credential, Option<Source>) {
+        match self.credential_and_source(lookup) {
+            (Credential::NotNeeded, _) if self.is_vertex_express() => (Credential::Absent, None),
+            found => found,
+        }
     }
 
     /// Every provider in a settings root, in the order the file listed them.
@@ -1878,14 +1932,7 @@ fn is_openais_endpoint(url: &str) -> bool {
 pub(crate) fn vertex_endpoint(project: Option<&str>, location: Option<&str>) -> Option<String> {
     let project = project?;
     let location = location.unwrap_or(VERTEX_DEFAULT_LOCATION);
-    let project_ok = project.starts_with(|c: char| c.is_ascii_alphanumeric())
-        && project
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
-    let location_ok = location
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    if !project_ok || !location_ok {
+    if !is_vertex_project(project) || !is_vertex_location(location) {
         return None;
     }
     let host = if location == VERTEX_DEFAULT_LOCATION {
@@ -1896,6 +1943,57 @@ pub(crate) fn vertex_endpoint(project: Option<&str>, location: Option<&str>) -> 
     Some(format!(
         "https://{host}/v1/projects/{project}/locations/{location}/endpoints/openapi"
     ))
+}
+
+/// Whether `project` is one a Vertex AI endpoint can be built from: letters, digits, `_`, `.`, `:`
+/// and `-`, starting with a letter or a digit ([BACKEND-49]).
+///
+/// The one place the rule is written, so a block read from a file and one recorded by a sign-in
+/// refuse the same values.
+///
+/// [BACKEND-49]: ../../../docs/specs/backends.md#BACKEND-49
+pub fn is_vertex_project(project: &str) -> bool {
+    project.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && project
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+}
+
+/// Whether `location` is one a Vertex AI host can be built from: lowercase letters, digits and `-`,
+/// and not empty ([BACKEND-49]).
+///
+/// [BACKEND-49]: ../../../docs/specs/backends.md#BACKEND-49
+pub fn is_vertex_location(location: &str) -> bool {
+    !location.is_empty()
+        && location
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// The `provider.google-vertex` entry that reaches Vertex AI for `project` and `location`, or `None`
+/// where either is a value [`vertex_endpoint`] refuses.
+///
+/// No project is express mode ([BACKEND-58]), whose entry holds no field and reads no location, so
+/// `location` is not written then. With a project the entry states `options.project` and
+/// `options.location`, which is `global` where none is given, so the block says where requests go
+/// rather than leaving it to the default.
+///
+/// [BACKEND-58]: ../../../docs/specs/backends.md#BACKEND-58
+pub fn vertex_entry(
+    project: Option<&str>,
+    location: Option<&str>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let mut entry = serde_json::Map::new();
+    let Some(project) = project else {
+        return Some(entry);
+    };
+    let location = location.unwrap_or(VERTEX_DEFAULT_LOCATION);
+    vertex_endpoint(Some(project), Some(location))?;
+    let mut options = serde_json::Map::new();
+    options.insert("project".to_string(), project.into());
+    options.insert("location".to_string(), location.into());
+    entry.insert("options".to_string(), serde_json::Value::Object(options));
+    Some(entry)
 }
 
 /// The variable the key of a Cloudflare entry is read from where the entry names no credential.
@@ -2618,6 +2716,44 @@ mod tests {
         assert_eq!(with_project[0].protocol(), Protocol::ChatCompletions);
     }
 
+    /// BACKEND-58: an express entry is a key that is missing while it names none, and one that
+    /// authenticates by a header of its own is not express mode, so a report says it needs no key
+    /// as it does for any block that names none. The regressions it rejects: an `is_vertex_express`
+    /// that reads only the protocol and the host, which reports the header-authenticated entry as
+    /// missing a key, and a reported credential that stays `NotNeeded` for the express entry.
+    #[test]
+    fn an_express_entry_is_reported_missing_a_key_unless_a_header_of_its_own_authenticates_it() {
+        let express = one_entry("{}");
+        assert!(express.is_vertex_express());
+        assert!(matches!(
+            express.credential_as_reported(|_| None),
+            (Credential::Absent, None)
+        ));
+        for header in ["authorization", "X-Goog-Api-Key"] {
+            let own = one_entry(&format!(
+                r#"{{"options": {{"headers": {{"{header}": "a-value"}}}}}}"#
+            ));
+            assert!(!own.is_vertex_express(), "{header}");
+            assert!(
+                matches!(
+                    own.credential_as_reported(|_| None),
+                    (Credential::NotNeeded, None)
+                ),
+                "{header}"
+            );
+        }
+        let mut stored = one_entry("{}");
+        stored.stored_key = Some(Secret::new("stored-placeholder"));
+        assert!(matches!(
+            stored.credential_as_reported(|_| None),
+            (Credential::Token(_), Some(Source::Stored))
+        ));
+        let project = one_entry(&format!(
+            r#"{{"options": {{"project": "{PLACEHOLDER_PROJECT}"}}}}"#
+        ));
+        assert!(!project.is_vertex_express());
+    }
+
     #[test]
     fn an_express_request_goes_to_the_publisher_and_model_it_names() {
         let express = vertex("{}");
@@ -2755,6 +2891,89 @@ mod tests {
             roster.iter().all(|id| !id.contains("preview")),
             "a preview model was compiled in: {roster:?}"
         );
+    }
+
+    /// A sign-in records the entry [`vertex_entry`] builds and names the host [`Provider::google_vertex`]
+    /// reads from it, so the host a person is told a key goes to is the one a session sends it to: the
+    /// entry written, read back as a block, reaches the same endpoint in the same protocol. No project
+    /// is express mode and the entry holds no field, so a location typed beside none is not written.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_entry_a_sign_in_records_reaches_the_host_it_names() {
+        for (project, location, wanted) in [
+            (None, None, "https://aiplatform.googleapis.com/v1"),
+            (
+                None,
+                Some("us-central1"),
+                "https://aiplatform.googleapis.com/v1",
+            ),
+            (
+                Some(PLACEHOLDER_PROJECT),
+                None,
+                "https://aiplatform.googleapis.com/v1/projects/example-project-1/locations/global/endpoints/openapi",
+            ),
+            (
+                Some(PLACEHOLDER_PROJECT),
+                Some("europe-west4"),
+                "https://europe-west4-aiplatform.googleapis.com/v1/projects/example-project-1/locations/europe-west4/endpoints/openapi",
+            ),
+        ] {
+            let (named, entry) = Provider::google_vertex(project, location).expect("a service");
+            let mut block = serde_json::Map::new();
+            block.insert(GOOGLE_VERTEX_ID.to_string(), entry.clone().into());
+            let mut root = serde_json::Map::new();
+            root.insert("provider".to_string(), block.into());
+            let read = Provider::all(&root)
+                .pop()
+                .expect("the entry names a service");
+            assert_eq!(named.base_url, wanted, "{project:?} {location:?}");
+            assert_eq!(read.base_url, wanted, "{project:?} {location:?}");
+            assert_eq!(
+                read.protocol(),
+                named.protocol(),
+                "{project:?} {location:?}"
+            );
+            assert_eq!(read.host(), named.host(), "{project:?} {location:?}");
+        }
+        let (express, entry) = Provider::google_vertex(None, Some("us-central1")).expect("express");
+        assert!(entry.is_empty(), "express mode wrote {entry:?}");
+        assert_eq!(express.protocol(), Protocol::GenerateContent);
+        let (project, entry) =
+            Provider::google_vertex(Some(PLACEHOLDER_PROJECT), None).expect("a project");
+        assert_eq!(project.protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            serde_json::Value::Object(entry),
+            serde_json::json!({"options": {"project": PLACEHOLDER_PROJECT, "location": "global"}})
+        );
+    }
+
+    /// A project or location the endpoint cannot be built from names no service and no entry, which is
+    /// what a sign-in checks before it asks for a key. Express mode reads no location, so a project-less
+    /// entry is built whatever location is given with it, and the two helpers hold the rule the
+    /// endpoint holds.
+    #[test]
+    fn a_project_or_location_the_endpoint_refuses_names_no_service_and_no_entry() {
+        for project in ["a/b", "a@b", "a?b", "a#b", "-a", "_a", "a b", "", "a\u{e9}"] {
+            assert!(!is_vertex_project(project), "{project:?}");
+            assert!(
+                Provider::google_vertex(Some(project), None).is_none(),
+                "{project:?}"
+            );
+            assert!(vertex_entry(Some(project), None).is_none(), "{project:?}");
+        }
+        for location in ["US", "us central", "us/1", "us@1", "a.b", ""] {
+            assert!(!is_vertex_location(location), "{location:?}");
+            assert!(
+                Provider::google_vertex(Some(PLACEHOLDER_PROJECT), Some(location)).is_none(),
+                "{location:?}"
+            );
+        }
+        for project in ["a", "9", "a_b.c:d-9"] {
+            assert!(is_vertex_project(project), "{project:?}");
+        }
+        for location in ["global", "us-central1", "europe-west4"] {
+            assert!(is_vertex_location(location), "{location:?}");
+        }
     }
 
     /// Every character Google allows is accepted, so a check tightened past the clause does not

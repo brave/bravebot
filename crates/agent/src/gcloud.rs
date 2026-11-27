@@ -141,9 +141,10 @@ fn installed_in(path: &OsStr) -> PathBuf {
 ///
 /// `None` for a `program` with no path separator, which is the empty path [`installed`] gives where
 /// no `gcloud` was found. Only a path [`installed`] returned is started (SANDBOX-30).
-fn command_for(program: &Path) -> Option<Command> {
+fn command_for(program: &Path, args: &[&str]) -> Option<Command> {
     command_for_with(
         program,
+        args,
         std::env::vars_os(),
         &bravebot_sandbox::programs::outside_stage_writable,
     )
@@ -153,6 +154,7 @@ fn command_for(program: &Path) -> Option<Command> {
 /// directories a stage may write.
 fn command_for_with(
     program: &Path,
+    args: &[&str],
     held: impl IntoIterator<Item = (OsString, OsString)>,
     outside_stage_writable: &impl Fn(&Path) -> bool,
 ) -> Option<Command> {
@@ -172,19 +174,28 @@ fn command_for_with(
         &held,
         outside_stage_writable,
     );
+    command.args(args);
     Some(command)
 }
 
+/// The three argument lists the CLI is started with. Each is started by [`command_for`], so the
+/// credential removal, the code selectors and the user site are judged the same for all of them.
+const TOKEN_ARGS: &[&str] = &["auth", "application-default", "print-access-token"];
+const LOGIN_ARGS: &[&str] = &["auth", "application-default", "login"];
+/// `--quiet` answers the CLI's own "do you want to continue" question with its default, which is
+/// yes: the person was asked by `auth logout google` before this is started.
+const REVOKE_ARGS: &[&str] = &["auth", "application-default", "revoke", "--quiet"];
+
 fn token_command(program: &Path) -> Option<Command> {
-    let mut command = command_for(program)?;
-    command.args(["auth", "application-default", "print-access-token"]);
-    Some(command)
+    command_for(program, TOKEN_ARGS)
 }
 
 fn login_command(program: &Path) -> Option<Command> {
-    let mut command = command_for(program)?;
-    command.args(["auth", "application-default", "login"]);
-    Some(command)
+    command_for(program, LOGIN_ARGS)
+}
+
+fn revoke_command(program: &Path) -> Option<Command> {
+    command_for(program, REVOKE_ARGS)
 }
 
 fn start_piped(command: &mut Command) -> std::io::Result<std::process::Child> {
@@ -279,13 +290,76 @@ pub fn sign_in_if_needed(say: impl FnMut(String)) -> Result<(), GcloudError> {
     login_from(&installed(), say)
 }
 
-fn login_from(program: &Path, mut say: impl FnMut(String)) -> Result<(), GcloudError> {
+/// Whether a `gcloud` is on the usable part of `PATH`, so a caller can say it is missing before it
+/// asks for anything.
+pub fn is_installed() -> bool {
+    !installed().as_os_str().is_empty()
+}
+
+/// What [`sign_in_checked`] found or did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signed {
+    /// The CLI already gave a token, so no login was run and no browser was opened.
+    Already,
+    /// The login was run and the CLI gives a token now.
+    Now,
+}
+
+/// [`sign_in_if_needed`] for a person who asked to sign in, which also asks for a token once the
+/// login has ended, since a login can end well for an account that still gives none
+/// ([BACKEND-65](../../../docs/specs/backends.md#BACKEND-65)).
+///
+/// The program, its arguments and its environment are those of the sign-in a turn makes. Each line
+/// the CLI writes goes to `say` as it arrives, and nothing a person typed reaches the program.
+pub fn sign_in_checked(say: impl FnMut(String)) -> Result<Signed, GcloudError> {
+    sign_in_checked_from(&installed(), say)
+}
+
+fn sign_in_checked_from(program: &Path, say: impl FnMut(String)) -> Result<Signed, GcloudError> {
+    if token_from(program).is_ok() {
+        return Ok(Signed::Already);
+    }
+    login_from(program, say)?;
+    token_from(program).map(|_| Signed::Now)
+}
+
+/// End the Application Default Credentials the CLI holds with
+/// `gcloud auth application-default revoke`, for a person who said to at the terminal. Every program
+/// that reads those credentials stops working until a sign-in is made again, which is why this is
+/// asked for by a typed answer and never by a turn.
+///
+/// Nothing the CLI writes is returned or shown: only its exit status decides the outcome.
+pub fn revoke() -> Result<(), GcloudError> {
+    revoke_from(&installed())
+}
+
+fn revoke_from(program: &Path) -> Result<(), GcloudError> {
     if program.as_os_str().is_empty() {
         return Err(GcloudError::NotInstalled);
     }
-    let Some(mut command) = login_command(program) else {
+    let Some(command) = revoke_command(program) else {
         return Err(GcloudError::NotInstalled);
     };
+    run_showing(command, |_| {}, t!(gcloud_revoke_incomplete).to_string())
+}
+
+fn login_from(program: &Path, say: impl FnMut(String)) -> Result<(), GcloudError> {
+    if program.as_os_str().is_empty() {
+        return Err(GcloudError::NotInstalled);
+    }
+    let Some(command) = login_command(program) else {
+        return Err(GcloudError::NotInstalled);
+    };
+    run_showing(command, say, t!(gcloud_login_incomplete).to_string())
+}
+
+/// Run `command`, giving each line it writes to `say` as it arrives, and succeed where it exits 0.
+/// `incomplete` is the detail of the failure of any other end.
+fn run_showing(
+    mut command: Command,
+    mut say: impl FnMut(String),
+    incomplete: String,
+) -> Result<(), GcloudError> {
     let mut child = start_piped(&mut command).map_err(|e| spawn_error(&e))?;
     let (lines, arriving) = mpsc::channel::<String>();
     let mut readers = Vec::new();
@@ -312,9 +386,7 @@ fn login_from(program: &Path, mut say: impl FnMut(String)) -> Result<(), GcloudE
     if status.success() {
         Ok(())
     } else {
-        Err(GcloudError::Refused {
-            detail: t!(gcloud_login_incomplete).to_string(),
-        })
+        Err(GcloudError::Refused { detail: incomplete })
     }
 }
 
@@ -419,14 +491,19 @@ mod tests {
     /// start is refused and reported as not installed, as the empty path is.
     #[test]
     fn a_bare_name_is_not_started_and_is_reported_as_not_installed() {
-        assert!(command_for(Path::new("gcloud")).is_none());
-        assert!(command_for(Path::new("")).is_none());
+        assert!(command_for(Path::new("gcloud"), TOKEN_ARGS).is_none());
+        assert!(command_for(Path::new(""), TOKEN_ARGS).is_none());
         assert_eq!(
             token_from(Path::new("gcloud")).unwrap_err(),
             GcloudError::NotInstalled
         );
         assert_eq!(
             login_from(Path::new("gcloud"), |_| {}).unwrap_err(),
+            GcloudError::NotInstalled
+        );
+        assert!(revoke_command(Path::new("gcloud")).is_none());
+        assert_eq!(
+            revoke_from(Path::new("gcloud")).unwrap_err(),
             GcloudError::NotInstalled
         );
     }
@@ -464,7 +541,11 @@ mod tests {
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_started_gcloud_is_given_a_path_the_lookup_has_reduced() {
         let program = Path::new("/usr/bin/gcloud");
-        for command in [token_command(program), login_command(program)] {
+        for command in [
+            token_command(program),
+            login_command(program),
+            revoke_command(program),
+        ] {
             let command = command.expect("an absolute path");
             let path = command
                 .get_envs()
@@ -473,38 +554,65 @@ mod tests {
         }
     }
 
-    /// Whether `name` is taken off the environment a `gcloud` is started with, when the person's
-    /// environment holds `value` for it and `writable` is the directory a stage may write.
+    /// The token, login and revoke starts of `gcloud` when the person's environment is `held` and
+    /// `writable` is the one directory a stage may write.
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
-    fn withheld(name: &str, value: &Path, writable: &Path) -> bool {
+    fn starts_against(held: &[(OsString, OsString)], writable: &Path) -> Vec<Command> {
         let row = writable.to_path_buf();
         let rows = std::slice::from_ref(&row);
-        let command = command_for_with(
-            Path::new("/usr/bin/gcloud"),
-            [(OsString::from(name), value.as_os_str().to_os_string())],
-            &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
-        )
-        .expect("an absolute path");
-        command
-            .get_envs()
-            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        [TOKEN_ARGS, LOGIN_ARGS, REVOKE_ARGS]
+            .into_iter()
+            .map(|args| {
+                command_for_with(
+                    Path::new("/usr/bin/gcloud"),
+                    args,
+                    held.iter().cloned(),
+                    &|file: &Path| {
+                        bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[])
+                    },
+                )
+                .expect("an absolute path")
+            })
+            .collect()
+    }
+
+    /// The answer of each of the token, login and revoke starts to `asks`, which must be the same
+    /// for all three.
+    fn alike(commands: &[Command], what: &str, asks: impl Fn(&Command) -> bool) -> bool {
+        let answers: Vec<bool> = commands.iter().map(asks).collect();
+        assert!(
+            answers.iter().all(|answer| *answer == answers[0]),
+            "{what}: the token, login and revoke starts differ: {answers:?}"
+        );
+        answers[0]
+    }
+
+    /// Whether `name` is taken off the environment a `gcloud` is started with, when the person's
+    /// environment holds `value` for it and `writable` is the directory a stage may write. The
+    /// token, login and revoke starts have to agree.
+    fn withheld(name: &str, value: &Path, writable: &Path) -> bool {
+        let held = [(OsString::from(name), value.as_os_str().to_os_string())];
+        alike(&starts_against(&held, writable), name, |command| {
+            command
+                .get_envs()
+                .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+        })
     }
 
     /// Whether a `gcloud` start has `PYTHONNOUSERSITE=1`, when the person's `HOME` is `home` and
-    /// `writable` is the one directory a stage may write.
-    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    /// `writable` is the one directory a stage may write. The token, login and revoke starts have
+    /// to agree.
     fn turns_off_the_user_site(home: &Path, writable: &Path) -> bool {
-        let row = writable.to_path_buf();
-        let rows = std::slice::from_ref(&row);
-        let command = command_for_with(
-            Path::new("/usr/bin/gcloud"),
-            [(OsString::from("HOME"), home.as_os_str().to_os_string())],
-            &|file: &Path| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+        let held = [(OsString::from("HOME"), home.as_os_str().to_os_string())];
+        alike(
+            &starts_against(&held, writable),
+            "the user site",
+            |command| {
+                command.get_envs().any(|(name, value)| {
+                    name == "PYTHONNOUSERSITE" && value == Some(OsStr::new("1"))
+                })
+            },
         )
-        .expect("an absolute path");
-        command
-            .get_envs()
-            .any(|(name, value)| name == "PYTHONNOUSERSITE" && value == Some(OsStr::new("1")))
     }
 
     /// SANDBOX-30. The launcher runs Python, which imports `usercustomize` from the user site under
@@ -1124,19 +1232,26 @@ mod tests {
     }
 
     /// The regression it rejects: starting without the credential removal, so the agent's own keys
-    /// reach the CLI ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)).
+    /// reach the CLI ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)), for the
+    /// revoke as for the token and the login.
     #[test]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_started_gcloud_has_this_agents_credentials_removed() {
         let names = bravebot_config::scrub::own_credentials();
-        let command = command_for(Path::new("/usr/bin/gcloud")).expect("an absolute path");
-        for name in &names {
-            assert!(
-                command
-                    .get_envs()
-                    .any(|(set, value)| set == OsStr::new(name) && value.is_none()),
-                "{name} is not removed"
-            );
+        for command in [
+            token_command(Path::new("/usr/bin/gcloud")),
+            login_command(Path::new("/usr/bin/gcloud")),
+            revoke_command(Path::new("/usr/bin/gcloud")),
+        ] {
+            let command = command.expect("an absolute path");
+            for name in &names {
+                assert!(
+                    command
+                        .get_envs()
+                        .any(|(set, value)| set == OsStr::new(name) && value.is_none()),
+                    "{name} is not removed"
+                );
+            }
         }
     }
 
@@ -1159,5 +1274,130 @@ mod tests {
 
         let failing = fake_gcloud("gcloud-login-fails", "echo 'no browser' >&2; exit 1");
         assert!(login_from(&failing, |_| {}).is_err());
+    }
+
+    /// A `gcloud` that gives a token once its login has run, as the real one does after a browser
+    /// sign-in, and records each start in a log beside it.
+    fn gcloud_that_signs_in(name: &str, signed_already: bool, login_gives_token: bool) -> PathBuf {
+        let dir = scratch_dir(name);
+        let marker = dir.join("signed");
+        let log = dir.join("log");
+        let after_login = if login_gives_token {
+            format!(": > '{}'", marker.display())
+        } else {
+            "echo 'cancelled' >&2; exit 1".to_string()
+        };
+        let program = fake_gcloud(
+            name,
+            &format!(
+                r#"echo "$*" >> '{log}'
+case "$3" in
+  print-access-token) [ -e '{marker}' ] && echo placeholder-a-token || exit 1 ;;
+  login) echo 'Go to the following link'; {after_login} ;;
+esac"#,
+                log = log.display(),
+                marker = marker.display(),
+            ),
+        );
+        if signed_already {
+            std::fs::write(&marker, "").unwrap();
+        }
+        program
+    }
+
+    fn starts_of(program: &Path) -> Vec<String> {
+        std::fs::read_to_string(program.with_file_name("log"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The regression it rejects: a revoke that is started with arguments other than the fixed ones
+    /// (a credential file, or the older `auth revoke` that ends every account the CLI holds), one that
+    /// starts the CLI when none is installed, and one that reports success for a CLI that failed.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_revoke_is_the_application_default_credentials_command_and_reports_only_its_exit_status()
+    {
+        assert_eq!(
+            args_of(&revoke_command(Path::new("/usr/bin/gcloud")).expect("an absolute path")),
+            ["auth", "application-default", "revoke", "--quiet"]
+        );
+        let revoking = fake_gcloud(
+            "gcloud-revokes",
+            r#"echo "$*" > "$(dirname "$0")/log"; echo placeholder-revoke-line"#,
+        );
+        revoke_from(&revoking).unwrap();
+        assert_eq!(
+            starts_of(&revoking),
+            ["auth application-default revoke --quiet"]
+        );
+        let failing = fake_gcloud(
+            "gcloud-revoke-fails",
+            "echo placeholder-secret-line >&2; exit 1",
+        );
+        let failure = revoke_from(&failing).unwrap_err();
+        assert!(
+            !failure.to_string().contains("placeholder-secret-line"),
+            "{failure}"
+        );
+        assert_eq!(
+            revoke_from(Path::new("")).unwrap_err(),
+            GcloudError::NotInstalled
+        );
+    }
+
+    /// The regression it rejects: a sign-in a person asked for that opens the browser although the CLI
+    /// gives a token already, which is what the sign-in a turn makes avoids, and one that reports
+    /// success because the login ended well although the CLI still gives no token.
+    #[test]
+    fn a_sign_in_asked_for_opens_no_browser_for_a_token_already_given_and_checks_one_after_the_login()
+     {
+        let had = gcloud_that_signs_in("gcloud-checked-already", true, true);
+        let mut said = Vec::new();
+        assert_eq!(
+            sign_in_checked_from(&had, |line| said.push(line)).unwrap(),
+            Signed::Already
+        );
+        assert!(said.is_empty(), "{said:?}");
+        assert_eq!(
+            starts_of(&had),
+            ["auth application-default print-access-token"],
+            "the login was started for a token already given"
+        );
+
+        let none = gcloud_that_signs_in("gcloud-checked-now", false, true);
+        let mut said = Vec::new();
+        assert_eq!(
+            sign_in_checked_from(&none, |line| said.push(line)).unwrap(),
+            Signed::Now
+        );
+        assert_eq!(said, ["Go to the following link"]);
+        assert_eq!(
+            starts_of(&none),
+            [
+                "auth application-default print-access-token",
+                "auth application-default login",
+                "auth application-default print-access-token"
+            ]
+        );
+
+        let cancelled = gcloud_that_signs_in("gcloud-checked-cancelled", false, false);
+        assert!(sign_in_checked_from(&cancelled, |_| {}).is_err());
+
+        // A login that ends well and leaves no token is a failure too.
+        let hollow = fake_gcloud(
+            "gcloud-checked-hollow",
+            r#"case "$3" in print-access-token) exit 1 ;; login) exit 0 ;; esac"#,
+        );
+        assert!(matches!(
+            sign_in_checked_from(&hollow, |_| {}),
+            Err(GcloudError::Refused { .. })
+        ));
+        assert_eq!(
+            sign_in_checked_from(Path::new(""), |_| {}).unwrap_err(),
+            GcloudError::NotInstalled
+        );
     }
 }

@@ -100,4 +100,6 @@ Ten things still reach the filesystem:
 `bravebot auth logout brave` still works, because removing a stored secret leaves less behind rather
 than more. `bravebot auth login chatgpt` is refused the same way, before a browser opens, and
 `bravebot auth logout chatgpt` still works. `bravebot auth login xai` is refused the same way, before
-the code is asked for, and `bravebot auth logout xai` still works.
+the code is asked for, and `bravebot auth logout xai` still works. `bravebot auth login google` is refused the
+same way, before the project is asked for and before `gcloud` starts, since it records the project in your
+settings. `bravebot auth logout google` and `bravebot auth status google` still work.

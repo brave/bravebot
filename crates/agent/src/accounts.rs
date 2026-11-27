@@ -5,10 +5,11 @@
 //! detail the AWS CLI wrote is not kept either, since it can name an account or a role.
 
 use crate::backend::{Backend, CredentialError};
+use crate::gcloud::GcloudError;
 use crate::home;
 use bravebot_config::bedrock::Bedrock;
 use bravebot_config::keys::{self, Keys};
-use bravebot_config::provider::{Credential, Provider, Source, known_ids};
+use bravebot_config::provider::{Credential, GOOGLE_VERTEX_ID, Provider, Source, known_ids};
 use bravebot_config::{Config, ConfigError, Managed, Settings, brave_key, env_var};
 use bravebot_skus::chatgpt::AccountError;
 use std::borrow::Cow;
@@ -32,6 +33,9 @@ pub enum Way {
     ChatGpt,
     /// The xAI account.
     Xai,
+    /// The Google Cloud CLI's sign-in, which signs a request to a Vertex AI project that has no key
+    /// ([BACKEND-65](../../../docs/specs/backends.md#BACKEND-65)).
+    GoogleCloud,
 }
 
 /// How one way stands.
@@ -68,6 +72,8 @@ pub enum Held {
     Account { expires: String },
     /// The AWS session gives credentials to sign a request with.
     AwsSession,
+    /// The Google Cloud CLI gives an access token for the Vertex AI project the configuration names.
+    GoogleCloudToken,
 }
 
 /// Why a way is not usable.
@@ -97,7 +103,8 @@ pub enum Why {
     NoAwsAccount,
     /// The machine-level layer names the gateways and names none.
     GatewayNoneConfigured,
-    /// A known service no block names, with no key stored for it.
+    /// A known service no block names, with no key stored for it, or a Vertex AI express block with
+    /// no key stored for it.
     GatewayNoneStored,
     /// A known service no block names, with a key stored that no session sends.
     GatewayUnrecorded,
@@ -110,6 +117,16 @@ pub enum Why {
     KeysUnreadable,
     /// Not asked, because the caller said to skip it.
     NotChecked,
+    /// No `google-vertex` service the configuration names is signed in by the Google Cloud CLI: none
+    /// is named, or the one that is names a key, a key file or a header of its own, or reaches
+    /// another host.
+    GoogleCloudNoProject,
+    /// The Google Cloud CLI gives no access token.
+    GoogleCloudLapsed,
+    /// The Google Cloud CLI is not installed.
+    GoogleCloudNoCli,
+    /// The Google Cloud CLI did not answer in the time allowed.
+    GoogleCloudTimedOut,
 }
 
 /// One way, how it stands, and whether bravebot keeps a credential for it on disk.
@@ -140,6 +157,18 @@ pub type InFlight = Arc<Mutex<HashSet<Option<String>>>>;
 
 static IN_FLIGHT: LazyLock<InFlight> = LazyLock::new(InFlight::default);
 
+/// How the Google Cloud CLI is asked whether it gives an access token, which never opens a browser.
+pub type GoogleSession = Arc<dyn Fn() -> Result<(), GcloudError> + Send + Sync>;
+
+/// Whether to ask the Google Cloud CLI for a token, which can take a while.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoogleCheck {
+    /// Ask, and say the CLI did not answer where no answer came within `timeout`.
+    Check { timeout: Duration },
+    /// Report the sign-in as not checked.
+    Skip,
+}
+
 /// Where a gateway's key variables are read from.
 pub type Lookup = Box<dyn Fn(&str) -> Option<String>>;
 
@@ -164,12 +193,14 @@ pub struct Inputs {
     pub in_flight: InFlight,
     pub chatgpt: Loaded,
     pub xai: Loaded,
+    pub google: GoogleCheck,
+    pub google_session: GoogleSession,
 }
 
 impl Inputs {
     /// What a turn would read now: the settings, the machine-level layer, the environment, the state
     /// directory and the stored accounts.
-    pub fn read(bedrock: BedrockCheck) -> Self {
+    pub fn read(bedrock: BedrockCheck, google: GoogleCheck) -> Self {
         let settings = Settings::load();
         let managed = Managed::load();
         Inputs {
@@ -184,6 +215,8 @@ impl Inputs {
             in_flight: Arc::clone(&IN_FLIGHT),
             chatgpt: chatgpt_loaded(),
             xai: xai_loaded(),
+            google,
+            google_session: Arc::new(crate::gcloud::session),
         }
     }
 }
@@ -201,7 +234,7 @@ pub fn xai_loaded() -> Loaded {
 /// Which ways to list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Which {
-    /// Every way, in the order Brave, Bedrock, the gateways, ChatGPT, xAI.
+    /// Every way, in the order Brave, Bedrock, the gateways, ChatGPT, xAI, Google Cloud.
     All,
     Brave,
     Bedrock,
@@ -209,6 +242,7 @@ pub enum Which {
     Gateways(Option<String>),
     ChatGpt,
     Xai,
+    GoogleCloud,
 }
 
 /// Why a gateway asked about by name has no row.
@@ -235,10 +269,26 @@ pub fn list(inputs: Inputs, which: Which) -> Result<Vec<Row>, ListError> {
         in_flight,
         chatgpt,
         xai,
+        google,
+        google_session,
     } = inputs;
     let all = which == Which::All;
     let with_chatgpt = all || which == Which::ChatGpt;
     let with_xai = all || which == Which::Xai;
+    // Asked at once with the AWS accounts and waited for until one deadline of its own, so a listing
+    // takes at most the longer of the two waits. Started only where a project could be signed in.
+    let wants_google = all || which == Which::GoogleCloud;
+    let google_asked = match google {
+        GoogleCheck::Check { timeout }
+            if wants_google && google_cloud_is_asked(&config, &lookup) =>
+        {
+            Some((
+                Instant::now().checked_add(timeout),
+                start_google(&google_session),
+            ))
+        }
+        _ => None,
+    };
     let mut rows = Vec::new();
     if all || which == Which::Brave {
         rows.push(brave(directory.as_deref()));
@@ -273,6 +323,12 @@ pub fn list(inputs: Inputs, which: Which) -> Result<Vec<Row>, ListError> {
             },
         ));
     }
+    let google_row = wants_google.then(|| {
+        google_cloud(&config, &lookup, || match google_asked {
+            Some((deadline, answered)) => await_google(&answered, deadline),
+            None => GoogleAsked::Skipped,
+        })
+    });
     let named = match which {
         Which::Gateways(named) => Some(named),
         Which::All => Some(None),
@@ -285,7 +341,7 @@ pub fn list(inputs: Inputs, which: Which) -> Result<Vec<Row>, ListError> {
             &managed,
             &stored,
             named.as_deref(),
-            lookup,
+            &lookup,
         )?);
     }
     if with_chatgpt {
@@ -294,7 +350,117 @@ pub fn list(inputs: Inputs, which: Which) -> Result<Vec<Row>, ListError> {
     if with_xai {
         rows.push(account(Way::Xai, xai));
     }
+    rows.extend(google_row);
     Ok(rows)
+}
+
+/// What asking the Google Cloud CLI for a token came to.
+#[derive(Debug)]
+pub enum GoogleAsked {
+    Answered(Result<(), GcloudError>),
+    TimedOut,
+    Skipped,
+}
+
+/// Start asking the Google Cloud CLI on a thread of its own, so one that never answers holds up
+/// nothing past the deadline it is waited for until. The program is left to finish or not on that
+/// thread: nothing here can end it.
+fn start_google(session: &GoogleSession) -> mpsc::Receiver<Result<(), GcloudError>> {
+    let (answer, answered) = mpsc::channel();
+    let session = Arc::clone(session);
+    std::thread::spawn(move || {
+        answer.send(session()).unwrap_or_default();
+    });
+    answered
+}
+
+/// What a question started by [`start_google`] came to by `deadline`.
+fn await_google(
+    answered: &mpsc::Receiver<Result<(), GcloudError>>,
+    deadline: Option<Instant>,
+) -> GoogleAsked {
+    let found = match deadline {
+        Some(deadline) => answered.recv_timeout(deadline.saturating_duration_since(Instant::now())),
+        None => answered
+            .recv()
+            .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+    };
+    match found {
+        Ok(found) => GoogleAsked::Answered(found),
+        Err(mpsc::RecvTimeoutError::Timeout) => GoogleAsked::TimedOut,
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            GoogleAsked::Answered(Err(GcloudError::Refused {
+                detail: String::new(),
+            }))
+        }
+    }
+}
+
+/// Ask the Google Cloud CLI on a thread of its own and wait for it until `timeout`.
+pub fn ask_google(session: &GoogleSession, timeout: Duration) -> GoogleAsked {
+    await_google(&start_google(session), Instant::now().checked_add(timeout))
+}
+
+/// Whether a `google-vertex` service the configuration names is one a turn signs in with the CLI's
+/// token, which is the one case the CLI is asked about
+/// ([`Provider::needs_google_cloud_token`]).
+fn google_cloud_is_asked(
+    config: &Result<Config, ConfigError>,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> bool {
+    crate::key_entry::configured_gateways(config).is_ok_and(|providers| {
+        providers.iter().any(|provider| {
+            provider.is_google_vertex() && provider.needs_google_cloud_token(lookup)
+        })
+    })
+}
+
+/// How the Google Cloud CLI's sign-in stands for the configuration a turn reads.
+///
+/// Signed in only where a `google-vertex` service the configuration names is one a turn signs in
+/// with the CLI's token (the same question [`Provider::needs_google_cloud_token`] answers for a turn)
+/// and the CLI gives a token. `ask` is called only then, so a configuration with no such service
+/// starts no program, and it never opens a browser. What the CLI wrote is not looked at: the
+/// standing follows how the question ended.
+pub fn google_cloud(
+    config: &Result<Config, ConfigError>,
+    lookup: impl Fn(&str) -> Option<String>,
+    ask: impl FnOnce() -> GoogleAsked,
+) -> Row {
+    let row = |standing| Row {
+        way: Way::GoogleCloud,
+        standing,
+        stored: false,
+    };
+    if let Err(problem) = crate::key_entry::configured_gateways(config) {
+        return row(Standing::Misconfigured(problem.clone()));
+    }
+    let signed_by_the_cli = google_cloud_is_asked(config, &lookup);
+    if !signed_by_the_cli {
+        return row(Standing::NotSignedIn(Why::GoogleCloudNoProject));
+    }
+    row(match ask() {
+        GoogleAsked::Answered(Ok(())) => Standing::SignedIn(Held::GoogleCloudToken),
+        GoogleAsked::Answered(Err(GcloudError::NotInstalled)) => {
+            Standing::Unusable(Why::GoogleCloudNoCli)
+        }
+        GoogleAsked::Answered(Err(GcloudError::Refused { .. })) => {
+            Standing::NotSignedIn(Why::GoogleCloudLapsed)
+        }
+        GoogleAsked::TimedOut => Standing::Unusable(Why::GoogleCloudTimedOut),
+        GoogleAsked::Skipped => Standing::NotSignedIn(Why::NotChecked),
+    })
+}
+
+/// The Google Cloud CLI's sign-in as a turn would find it now, asked within `timeout`: what the
+/// list of ways draws a held mark from, where no other way is being asked about.
+pub fn google_cloud_now(timeout: Duration) -> Row {
+    let session: GoogleSession = Arc::new(crate::gcloud::session);
+    google_cloud(
+        &Config::from_env(),
+        |name| std::env::var(name).ok(),
+        || ask_google(&session, timeout),
+    )
 }
 
 /// The Brave key, from the file a turn reads in `directory`.
@@ -635,24 +801,60 @@ pub fn write_settings(
 }
 
 /// A service a gateway key can be stored for.
+#[derive(Clone)]
 pub struct Offer<'c> {
     pub provider: Cow<'c, Provider>,
-    /// Whether no block of the configuration names the id. It is then one of the known names, and a
-    /// session sends a key stored for it only once the person's settings name it.
+    /// Whether no block of the configuration names the id. It is then one of the known names or
+    /// Vertex AI, and a session sends a key stored for it only once the person's settings name it.
     pub unconfigured: bool,
+    /// The fields the block recorded for an unconfigured id states: none for a known name, whose
+    /// endpoint is compiled in, and the project and location for Vertex AI, whose endpoint is built
+    /// from them.
+    pub entry: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Offer<'_> {
     pub fn id(&self) -> &str {
         &self.provider.id
     }
+
+    /// The entry recorded for this id as the JSON object it is written as, which is `{}` for a known
+    /// name.
+    pub fn entry_text(&self) -> String {
+        serde_json::Value::Object(self.entry.clone()).to_string()
+    }
+
+    /// Whether the person is asked for a project and a location before a key: Vertex AI where no
+    /// block names it, since the block recorded states them. A block that names it already does.
+    pub fn takes_a_project(&self) -> bool {
+        self.unconfigured && self.provider.is_google_vertex()
+    }
+}
+
+impl Offer<'static> {
+    /// Vertex AI for `project` and `location`, which are not asked for again once they are here, or
+    /// `None` where either is a value its endpoint cannot be built from
+    /// ([`bravebot_config::provider::vertex_entry`]).
+    pub fn google_vertex(project: Option<&str>, location: Option<&str>) -> Option<Self> {
+        let (provider, entry) = Provider::google_vertex(project, location)?;
+        Some(Offer {
+            provider: Cow::Owned(provider),
+            unconfigured: true,
+            entry,
+        })
+    }
 }
 
 /// What a key can be stored for: the gateways the configuration names, then each known id no block
-/// of it names, each with the host a key for it is sent to.
+/// of it names and Vertex AI where none does, each with the host a key for it is sent to.
 ///
-/// No known id where the machine-level layer names the gateways. That layer replaces the blocks a
-/// person wrote, so a block recorded for a known id in the person's file would not be read.
+/// No id that needs a block recorded where the machine-level layer names the gateways. That layer
+/// replaces the blocks a person wrote, so a block recorded for it in the person's file would not be
+/// read.
+///
+/// Vertex AI is offered in express mode, which is the service an entry that states no field reaches
+/// ([BACKEND-58](../../../docs/specs/backends.md#BACKEND-58)). A caller that asks for a project
+/// replaces the offer with [`Offer::google_vertex`].
 pub fn offered<'c>(providers: &'c [Provider], managed: &Managed) -> Vec<Offer<'c>> {
     let mut offers: Vec<Offer<'c>> = providers
         .iter()
@@ -660,6 +862,7 @@ pub fn offered<'c>(providers: &'c [Provider], managed: &Managed) -> Vec<Offer<'c
         .map(|provider| Offer {
             provider: Cow::Borrowed(provider),
             unconfigured: false,
+            entry: serde_json::Map::new(),
         })
         .collect();
     if managed.gateways().is_none() {
@@ -670,8 +873,12 @@ pub fn offered<'c>(providers: &'c [Provider], managed: &Managed) -> Vec<Offer<'c
                 .map(|provider| Offer {
                     provider: Cow::Owned(provider),
                     unconfigured: true,
+                    entry: serde_json::Map::new(),
                 }),
         );
+        if !providers.iter().any(|provider| provider.is_google_vertex()) {
+            offers.extend(Offer::google_vertex(None, None));
+        }
     }
     offers
 }
@@ -755,6 +962,10 @@ pub fn gateways(
 }
 
 /// How a gateway a provider block names stands: whether a turn would find a key for it, and where.
+///
+/// Express mode names no credential in its block and reaches a service that refuses a request with
+/// no key, so a block of it holding no key is not signed in, as a known service's is, although the
+/// block names no variable ([BACKEND-58](../../../docs/specs/backends.md#BACKEND-58)).
 fn configured(
     provider: &Provider,
     keys_unreadable: bool,
@@ -764,6 +975,9 @@ fn configured(
         (Credential::Token(_), Some(Source::Stored)) => Standing::SignedIn(Held::KeyStored),
         (Credential::Token(_), Some(Source::KeyFile)) => Standing::SignedIn(Held::KeyFromFile),
         (Credential::Token(_), _) => Standing::SignedIn(Held::KeyFromEnvironment),
+        (Credential::NotNeeded, _) if provider.is_vertex_express() => {
+            Standing::NotSignedIn(Why::GatewayNoneStored)
+        }
         (Credential::NotNeeded, _) => Standing::SignedIn(Held::KeyNotNeeded),
         (Credential::Absent | Credential::KeyFileUnusable(_), _) if keys_unreadable => {
             Standing::Unusable(Why::KeysUnreadable)
@@ -810,7 +1024,9 @@ pub fn forget(way: &Way, directory: Option<&Path>) -> Result<Forgot, ForgetError
         host: None,
     };
     match way {
-        Way::Bedrock { .. } | Way::Gateways => Err(ForgetError::NotOurs),
+        // The Google Cloud CLI keeps its own credentials, and what bravebot recorded is the block
+        // `auth logout google` takes out, which is not a credential file.
+        Way::Bedrock { .. } | Way::Gateways | Way::GoogleCloud => Err(ForgetError::NotOurs),
         Way::Brave => {
             let Some(directory) = directory else {
                 return Ok(forgot(false));
@@ -851,9 +1067,11 @@ pub fn forget(way: &Way, directory: Option<&Path>) -> Result<Forgot, ForgetError
 }
 
 /// The host a key stored for `id` is good at until whoever issued it revokes it: the host the block
-/// that names the id states, or for a known service no block names the host compiled in for it.
+/// that names the id states, for a known service no block names the host compiled in for it, and
+/// for Vertex AI with no block the host of express mode, which is the host of the global location
+/// as well.
 ///
-/// Nothing for an id that is neither, such as a gateway whose block has since been taken out.
+/// Nothing for an id that is none of these, such as a gateway whose block has since been taken out.
 pub fn host_a_key_works_at(config: &Result<Config, ConfigError>, id: &str) -> Option<String> {
     let block = config.as_ref().ok().and_then(|config| {
         config
@@ -863,7 +1081,14 @@ pub fn host_a_key_works_at(config: &Result<Config, ConfigError>, id: &str) -> Op
     });
     match block {
         Some(provider) => Some(provider.host().to_string()),
-        None => Provider::known(id).map(|provider| provider.host().to_string()),
+        None => Provider::known(id)
+            .or_else(|| {
+                (id == GOOGLE_VERTEX_ID)
+                    .then(|| Provider::google_vertex(None, None))
+                    .flatten()
+                    .map(|(provider, _)| provider)
+            })
+            .map(|provider| provider.host().to_string()),
     }
 }
 
@@ -952,6 +1177,8 @@ mod tests {
             in_flight: InFlight::default(),
             chatgpt: Ok(None),
             xai: Ok(None),
+            google: GoogleCheck::Skip,
+            google_session: Arc::new(|| Ok(())),
         }
     }
 
@@ -1328,6 +1555,7 @@ mod tests {
                 ),
                 (&Way::ChatGpt, false),
                 (&Way::Xai, false),
+                (&Way::GoogleCloud, false),
             ]
         );
         let brave_alone = list(
@@ -1504,5 +1732,428 @@ mod tests {
             std::fs::read_to_string(keys::file(&directory)).expect("left"),
             "not keys"
         );
+    }
+
+    const VERTEX_PROJECT: &str = r#"{"provider": {"google-vertex": {"options":
+        {"project": "example-project-1", "location": "us-east5"}}}}"#;
+
+    /// A Vertex AI offer as `(not named by a block, host, states no field)`.
+    fn vertex_offers(offers: &[Offer<'_>]) -> Vec<(bool, String, bool)> {
+        offers
+            .iter()
+            .filter(|offer| offer.id() == "google-vertex")
+            .map(|offer| {
+                (
+                    offer.unconfigured,
+                    offer.provider.host().to_string(),
+                    offer.entry.is_empty(),
+                )
+            })
+            .collect()
+    }
+
+    /// CLI-18 and BACKEND-17: Vertex AI is offered once, in express mode, where nothing names it, as
+    /// the configured gateway where a block or the environment does, again where an entry names it and
+    /// configures nothing, and never where the machine-level layer names the gateways, since a block
+    /// recorded in the person's file would not be read there. The regressions it rejects are offering
+    /// it beside a managed list, and offering it twice beside the service the environment names, which
+    /// would record a block that replaces that route.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn google_vertex_is_offered_once_in_express_mode_and_not_under_a_machine_level_list() {
+        let express = (true, "aiplatform.googleapis.com".to_string(), true);
+        assert_eq!(
+            vertex_offers(&offered(&[], &Managed::default())),
+            std::slice::from_ref(&express)
+        );
+
+        let block = Settings::parse(VERTEX_PROJECT);
+        assert_eq!(
+            vertex_offers(&offered(block.providers(), &Managed::default())),
+            [(
+                false,
+                "us-east5-aiplatform.googleapis.com".to_string(),
+                true
+            )]
+        );
+
+        let nothing = Settings::parse("");
+        let key = |name: &str| (name == "GOOGLE_API_KEY").then(|| "placeholder-key".to_string());
+        let from_environment = bravebot_config::gateways(&nothing, &Managed::default(), &key);
+        assert_eq!(
+            vertex_offers(&offered(&from_environment, &Managed::default())),
+            [(false, "aiplatform.googleapis.com".to_string(), true)]
+        );
+
+        let configures_nothing =
+            Settings::parse(r#"{"provider": {"google-vertex": {"options": {"project": "a/b"}}}}"#);
+        assert_eq!(
+            vertex_offers(&offered(
+                configures_nothing.providers(),
+                &Managed::default()
+            )),
+            [express]
+        );
+
+        let directory = scratch("vertex-managed");
+        let file = directory.join("managed.json");
+        std::fs::write(
+            &file,
+            r#"{"provider": {"corp": {"options": {"baseURL": "https://corp.example/v1"}}}}"#,
+        )
+        .expect("a machine-level file");
+        let managed = Managed::at(&file);
+        for lookup in [
+            Box::new(|_: &str| None) as Box<dyn Fn(&str) -> Option<String>>,
+            Box::new(key),
+        ] {
+            let pinned = bravebot_config::gateways(&nothing, &managed, &lookup);
+            let ids: Vec<String> = offered(&pinned, &managed)
+                .iter()
+                .map(|offer| offer.id().to_string())
+                .collect();
+            assert_eq!(ids, ["corp"]);
+        }
+        std::fs::remove_dir_all(&directory).expect("the scratch directory removed");
+    }
+
+    /// CLI-23, BACKEND-58, BACKEND-65 and BACKEND-50: how `auth status` stands for Vertex AI. An
+    /// express block holding no key is not signed in, since the service refuses a request with none,
+    /// where a block of a gateway that names no credential needs none. A key stored for it is found,
+    /// a variable the environment names is read before a stored key, and a project with no key is not
+    /// signed in where its block or the environment names `GOOGLE_API_KEY` and it is unset, although
+    /// the Google Cloud CLI would sign the request. The regression it rejects is reporting the
+    /// express block as signed in with a key not needed, which stays true after `auth logout`.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn google_vertex_stands_as_its_key_is_found() {
+        const EXPRESS: &str = r#"{"provider": {"google-vertex": {}}}"#;
+        const PROJECT_NAMING_NO_KEY: &str = VERTEX_PROJECT;
+        const PROJECT_NAMING_THE_VARIABLE: &str = r#"{"provider": {"google-vertex": {
+            "env": ["GOOGLE_API_KEY"], "options": {"project": "example-project-1"}}}}"#;
+        let standing = |settings: &str, stored: &[&str], exported: &[(&str, &str)]| {
+            let lookup = |name: &str| {
+                exported
+                    .iter()
+                    .find(|(exported, _)| *exported == name)
+                    .map(|(_, value)| value.to_string())
+            };
+            let keys = keys_for(stored);
+            let mut config = configured("", &Ok(Keys::default()));
+            config.providers =
+                bravebot_config::gateways(&Settings::parse(settings), &Managed::default(), &lookup);
+            for provider in &mut config.providers {
+                provider.stored_key = keys.get(&provider.id).cloned();
+            }
+            let rows = gateways(
+                Ok(config),
+                &Managed::default(),
+                &Ok(keys),
+                Some("google-vertex"),
+                lookup,
+            )
+            .expect("a row");
+            assert_eq!(rows.len(), 1);
+            rows.into_iter().next().expect("a row").standing
+        };
+        let key = [("GOOGLE_API_KEY", "placeholder-exported-key")];
+        let project = [("GOOGLE_CLOUD_PROJECT", "example-project-1")];
+        let nothing: [(&str, &str); 0] = [];
+
+        assert!(matches!(
+            standing(EXPRESS, &[], &nothing),
+            Standing::NotSignedIn(Why::GatewayNoneStored)
+        ));
+        assert!(matches!(
+            standing(EXPRESS, &["google-vertex"], &nothing),
+            Standing::SignedIn(Held::KeyStored)
+        ));
+        // An entry that authenticates by a header of its own is not express mode, so it names no
+        // credential and needs none, as a block of any gateway does.
+        assert!(matches!(
+            standing(
+                r#"{"provider": {"google-vertex": {"options": {"headers": {"x-goog-api-key": "a-value"}}}}}"#,
+                &[],
+                &nothing
+            ),
+            Standing::SignedIn(Held::KeyNotNeeded)
+        ));
+        assert!(matches!(
+            standing("", &[], &key),
+            Standing::SignedIn(Held::KeyFromEnvironment)
+        ));
+        assert!(matches!(
+            standing("", &["google-vertex"], &key),
+            Standing::SignedIn(Held::KeyFromEnvironment)
+        ));
+        assert!(matches!(
+            standing("", &["google-vertex"], &project),
+            Standing::SignedIn(Held::KeyStored)
+        ));
+        assert!(matches!(
+            standing("", &[], &project),
+            Standing::NotSignedIn(Why::GatewayAbsent)
+        ));
+        assert!(matches!(
+            standing(PROJECT_NAMING_THE_VARIABLE, &[], &nothing),
+            Standing::NotSignedIn(Why::GatewayAbsent)
+        ));
+        assert!(matches!(
+            standing(PROJECT_NAMING_NO_KEY, &[], &nothing),
+            Standing::SignedIn(Held::KeyNotNeeded)
+        ));
+        assert!(matches!(
+            standing("", &[], &nothing),
+            Standing::NotSignedIn(Why::GatewayNoneStored)
+        ));
+        assert!(matches!(
+            standing("", &["google-vertex"], &nothing),
+            Standing::NotSignedIn(Why::GatewayUnrecorded)
+        ));
+    }
+
+    /// CLI-18: forgetting a key stored for Vertex AI names the host the key still works at, which is
+    /// the one its block states, and the express host where no block names it, so the sentence names
+    /// a host as it does for every service the program can sign in to. The regression it rejects is
+    /// the sentence for a key whose issuer is unknown, which says nothing about where it works.
+    #[test]
+    fn a_key_stored_for_google_vertex_is_said_to_work_at_the_host_its_block_or_express_mode_names()
+    {
+        let host = |settings: &str| {
+            host_a_key_works_at(
+                &Ok(configured(settings, &Ok(Keys::default()))),
+                "google-vertex",
+            )
+        };
+        assert_eq!(host("").as_deref(), Some("aiplatform.googleapis.com"));
+        assert_eq!(
+            host(VERTEX_PROJECT).as_deref(),
+            Some("us-east5-aiplatform.googleapis.com")
+        );
+        assert_eq!(
+            host_a_key_works_at(&Err(ConfigError::Missing("a variable")), "google-vertex")
+                .as_deref(),
+            Some("aiplatform.googleapis.com")
+        );
+        assert_eq!(
+            host_a_key_works_at(&Ok(configured("", &Ok(Keys::default()))), "nobody"),
+            None
+        );
+    }
+
+    /// How the Google Cloud CLI's sign-in stands for `settings` and the variables `exported`, and
+    /// whether the CLI was asked, where it answers `answer`.
+    fn google_standing(
+        settings: &str,
+        exported: &[(&str, &str)],
+        answer: GoogleAsked,
+    ) -> (Standing, bool) {
+        let lookup = |name: &str| {
+            exported
+                .iter()
+                .find(|(exported, _)| *exported == name)
+                .map(|(_, value)| value.to_string())
+        };
+        let mut config = configured("", &Ok(Keys::default()));
+        config.providers =
+            bravebot_config::gateways(&Settings::parse(settings), &Managed::default(), &lookup);
+        let asked = std::cell::Cell::new(false);
+        let row = google_cloud(&Ok(config), lookup, || {
+            asked.set(true);
+            answer
+        });
+        assert_eq!(row.way, Way::GoogleCloud);
+        assert!(!row.stored, "bravebot keeps nothing for this way");
+        (row.standing, asked.get())
+    }
+
+    fn refused() -> GoogleAsked {
+        GoogleAsked::Answered(Err(GcloudError::Refused {
+            detail: "placeholder-cli-detail".into(),
+        }))
+    }
+
+    /// CLI-23, BACKEND-65: the Google Cloud CLI's sign-in stands as the CLI answers, and only where a
+    /// turn would ask it. The question is the one a turn asks of a provider block
+    /// (`needs_google_cloud_token`), so status and a turn cannot disagree: a project with no key, and a
+    /// project the environment names alone, are asked about, and express mode, a block with no
+    /// project, and a project whose key variable is set are not and start no program. The regression
+    /// it rejects is a row that asks the CLI whatever the configuration names, which would report a
+    /// sign-in nothing uses, or one that asks only where `google-vertex` is named, which would report
+    /// signed in for a project a key signs.
+    #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn the_google_cloud_sign_in_stands_as_the_cli_answers_and_only_where_a_turn_asks_it() {
+        const EXPRESS: &str = r#"{"provider": {"google-vertex": {}}}"#;
+        const KEY_VARIABLE: &str = r#"{"provider": {"google-vertex": {
+            "env": ["GOOGLE_API_KEY"], "options": {"project": "example-project-1"}}}}"#;
+        const PROXY: &str = r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1",
+            "baseURL": "https://proxy.example.invalid/v1"}}}}"#;
+        let nothing: [(&str, &str); 0] = [];
+
+        for (answer, expected) in [
+            (GoogleAsked::Answered(Ok(())), "signed in"),
+            (refused(), "lapsed"),
+            (
+                GoogleAsked::Answered(Err(GcloudError::NotInstalled)),
+                "no cli",
+            ),
+            (GoogleAsked::TimedOut, "timed out"),
+            (GoogleAsked::Skipped, "not checked"),
+        ] {
+            let (standing, asked) = google_standing(VERTEX_PROJECT, &nothing, answer);
+            assert!(asked, "{expected}: the CLI was not asked");
+            match (expected, standing) {
+                ("signed in", Standing::SignedIn(Held::GoogleCloudToken))
+                | ("lapsed", Standing::NotSignedIn(Why::GoogleCloudLapsed))
+                | ("no cli", Standing::Unusable(Why::GoogleCloudNoCli))
+                | ("timed out", Standing::Unusable(Why::GoogleCloudTimedOut))
+                | ("not checked", Standing::NotSignedIn(Why::NotChecked)) => {}
+                (_, other) => panic!("{expected}: {other:?}"),
+            }
+        }
+
+        let ok = || GoogleAsked::Answered(Ok(()));
+        let project = [("GOOGLE_CLOUD_PROJECT", "example-project-1")];
+        let key = [("GOOGLE_API_KEY", "placeholder-exported-key")];
+        for (how, settings, exported) in [
+            ("nothing configured", "", &nothing[..]),
+            ("express mode", EXPRESS, &nothing[..]),
+            ("a key variable that is set", KEY_VARIABLE, &key[..]),
+            ("a proxy host", PROXY, &nothing[..]),
+        ] {
+            let (standing, asked) = google_standing(settings, exported, ok());
+            assert!(!asked, "{how}: the CLI was asked");
+            assert!(
+                matches!(standing, Standing::NotSignedIn(Why::GoogleCloudNoProject)),
+                "{how}: {standing:?}"
+            );
+        }
+        for (how, settings, exported) in [
+            ("a project the environment names", "", &project[..]),
+            ("a key variable that is not set", KEY_VARIABLE, &nothing[..]),
+        ] {
+            let (standing, asked) = google_standing(settings, exported, ok());
+            assert!(asked, "{how}: the CLI was not asked");
+            assert!(
+                matches!(standing, Standing::SignedIn(Held::GoogleCloudToken)),
+                "{how}: {standing:?}"
+            );
+        }
+
+        let row = google_cloud(
+            &Err(ConfigError::InvalidEndpoint { value: "x".into() }),
+            |_| None,
+            || panic!("a configuration that cannot be read asked the CLI"),
+        );
+        assert!(matches!(
+            row.standing,
+            Standing::Misconfigured(ConfigError::InvalidEndpoint { .. })
+        ));
+        // A configuration that only lacks the Brave credentials names no gateway, as for the list.
+        let row = google_cloud(
+            &Err(ConfigError::Empty("X")),
+            |_| None,
+            || panic!("no project is named, so the CLI is not asked"),
+        );
+        assert!(matches!(
+            row.standing,
+            Standing::NotSignedIn(Why::GoogleCloudNoProject)
+        ));
+    }
+
+    /// CLI-23: a Google Cloud CLI that does not answer within the time allowed is reported as not
+    /// having answered, so `auth status` ends and a list drawn on the way to a question is not held
+    /// up; one that answers is reported as it answered, and the program is asked on a thread so
+    /// that what it never finishes holds up nothing.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_google_cloud_cli_that_never_answers_is_reported_as_timed_out_and_one_that_does_as_it_did()
+    {
+        let (_release, gate) = mpsc::channel::<()>();
+        let gate = Mutex::new(gate);
+        let hanging: GoogleSession = Arc::new(move || {
+            gate.lock()
+                .expect("the gate")
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap_or_default();
+            Ok(())
+        });
+        let started = Instant::now();
+        assert!(matches!(
+            ask_google(&hanging, Duration::from_millis(100)),
+            GoogleAsked::TimedOut
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the question waited for the program"
+        );
+        let signed: GoogleSession = Arc::new(|| Ok(()));
+        assert!(matches!(
+            ask_google(&signed, Duration::from_secs(5)),
+            GoogleAsked::Answered(Ok(()))
+        ));
+        let missing: GoogleSession = Arc::new(|| Err(GcloudError::NotInstalled));
+        assert!(matches!(
+            ask_google(&missing, Duration::from_secs(5)),
+            GoogleAsked::Answered(Err(GcloudError::NotInstalled))
+        ));
+    }
+
+    /// CLI-23: the Google Cloud CLI is asked about only for the way that names it or for every way,
+    /// last in the list, and not at all where the caller skips the check, so asking about the Brave
+    /// key starts no `gcloud`.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_google_cloud_cli_is_asked_only_where_its_row_is_asked_for_and_the_check_is_not_skipped()
+    {
+        let directory = scratch("google-list");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rows = |which: Which, check: GoogleCheck| {
+            let counted = Arc::clone(&calls);
+            let mut given = inputs(Some(directory.clone()), BedrockCheck::Skip, good());
+            given.config = Ok(configured(VERTEX_PROJECT, &Ok(Keys::default())));
+            given.google = check;
+            given.google_session = Arc::new(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
+            list(given, which).expect("rows")
+        };
+        let asked = || calls.load(std::sync::atomic::Ordering::SeqCst);
+        let check = GoogleCheck::Check {
+            timeout: Duration::from_secs(5),
+        };
+
+        let only = rows(Which::GoogleCloud, check);
+        assert!(matches!(
+            only.as_slice(),
+            [Row {
+                way: Way::GoogleCloud,
+                standing: Standing::SignedIn(Held::GoogleCloudToken),
+                stored: false
+            }]
+        ));
+        assert_eq!(asked(), 1);
+
+        let all = rows(Which::All, check);
+        assert_eq!(all.last().map(|row| &row.way), Some(&Way::GoogleCloud));
+        assert_eq!(asked(), 2);
+
+        rows(Which::Brave, check);
+        rows(Which::Xai, check);
+        rows(Which::Gateways(None), check);
+        assert_eq!(asked(), 2, "a row that was not asked for asked the CLI");
+
+        let skipped = rows(Which::GoogleCloud, GoogleCheck::Skip);
+        assert!(matches!(
+            skipped.as_slice(),
+            [Row {
+                standing: Standing::NotSignedIn(Why::NotChecked),
+                ..
+            }]
+        ));
+        assert_eq!(asked(), 2, "a skipped check asked the CLI");
+        std::fs::remove_dir_all(&directory).expect("the scratch directory removed");
     }
 }

@@ -417,10 +417,16 @@ impl Gateway {
     /// All a known id needs to be configured: the endpoint compiled in for it is `endpoint`, and
     /// the entry names no variable and no key.
     pub fn bare(id: &str, endpoint: &str) -> Self {
+        Self::stating(id, endpoint, Map::new())
+    }
+
+    /// An entry that holds `entry`, which names no variable and no key, for an id whose endpoint
+    /// is built from the fields it states, as Vertex AI's is from a project.
+    pub fn stating(id: &str, endpoint: &str, entry: Map<String, Value>) -> Self {
         Self {
             id: id.to_string(),
             endpoint: endpoint.to_string(),
-            entry: Map::new(),
+            entry,
             key: Key::Named,
         }
     }
@@ -1713,6 +1719,21 @@ impl Destination {
         if !self.holds_gateway(&gateway.id) {
             let entry = std::mem::take(&mut gateway.entry);
             block(&mut self.root.0, "provider").insert(gateway.id.clone(), Value::Object(entry));
+        }
+    }
+
+    /// The entry under `provider` for `id`, where it is a block of fields.
+    pub fn gateway_entry(&self, id: &str) -> Option<&Map<String, Value>> {
+        self.root.0.get("provider")?.get(id)?.as_object()
+    }
+
+    /// Take the entry under `provider` for `id` out, and say whether there was one. A `provider`
+    /// block left with no entry is left in the file as an empty block, which the settings reader reads
+    /// as naming nothing.
+    pub fn remove_gateway(&mut self, id: &str) -> bool {
+        match self.root.0.get_mut("provider") {
+            Some(Value::Object(entries)) => entries.remove(id).is_some(),
+            _ => false,
         }
     }
 

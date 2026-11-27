@@ -197,6 +197,55 @@ fn a_configured_gateway_says_its_host_and_the_variable_that_wins() {
     assert!(!user_settings_file(&directory).exists());
 }
 
+/// Vertex AI where no settings entry names it is recorded with a project and a location, which the
+/// window does not ask for, so it is refused before a key is typed and nothing is stored or written.
+/// The regression it rejects is recording the entry of express mode for a person who would have
+/// chosen a project. Where the settings name the service, the window stores a key for it as for any
+/// gateway and writes no entry.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn vertex_ai_no_entry_names_is_refused_before_the_key_and_one_an_entry_names_is_stored() {
+    let directory = scratch("vertex-ai");
+    let vertex = Target::Gateway("google-vertex".into());
+    let unnamed = before(Some(&directory));
+    assert_eq!(
+        answer_before(&vertex, &unnamed),
+        json!({ "ready": false, "sentence": t!(desktop_accounts_key_needs_project) })
+    );
+    assert_eq!(
+        store(&vertex, &unnamed, Secret::new("a-key"), false).err(),
+        Some(t!(desktop_accounts_key_needs_project))
+    );
+    assert!(!keys::file(&directory).exists(), "a key was stored");
+    assert!(
+        !user_settings_file(&directory).exists(),
+        "an entry was recorded"
+    );
+
+    let named = Before {
+        config: configured(
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#,
+        ),
+        ..before(Some(&directory))
+    };
+    let asked = answer_before(&vertex, &named);
+    assert_eq!(asked["ready"], json!(true));
+    assert_eq!(asked["records"], json!(false));
+    assert_eq!(asked["host"], json!("aiplatform.googleapis.com"));
+    assert_eq!(
+        store(&vertex, &named, Secret::new("a-key"), false),
+        Ok(None)
+    );
+    assert_eq!(
+        Keys::read(&directory)
+            .expect("readable")
+            .get("google-vertex")
+            .map(Secret::expose),
+        Some("a-key")
+    );
+    assert!(!user_settings_file(&directory).exists());
+}
+
 /// The page names what a key is for, and anything else is refused rather than guessed at.
 #[test]
 fn a_request_names_brave_or_a_gateway_with_its_id() {

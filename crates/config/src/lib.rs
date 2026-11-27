@@ -1070,7 +1070,7 @@ impl Disposition {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     Missing(&'static str),
     Empty(&'static str),
@@ -1543,7 +1543,10 @@ fn lookup_in<'a>(
 /// A gateway is a destination too, so an approved endpoint pins nothing while anybody can
 /// add one beside it. The managed block replaces the person's rather than merging with
 /// it, empty included, which is the only way to say that there are to be none.
-fn gateways(
+///
+/// Public so a caller that is handed settings and a lookup, as a test of a sign-in is, builds the
+/// list a session reads, the Vertex AI service the environment names included.
+pub fn gateways(
     settings: &Settings,
     managed: &Managed,
     lookup: &impl Fn(&str) -> Option<String>,
@@ -6067,6 +6070,109 @@ mod tests {
             Settings::parse(r#"{"provider": {"google-vertex": {"options": {"project": "p@x"}}}}"#);
         let config = resolved(&unusable, google_env, complete_env).expect("configured");
         assert!(vertex_of(&config).is_some());
+    }
+
+    /// BACKEND-17, BACKEND-18 and BACKEND-49: with no configuration beside them, the settings entry
+    /// and the stored key that `bravebot auth login` writes for Vertex AI make the next session
+    /// resolve `google-vertex/google/gemini-2.5-flash`, with no entry written by hand. The entry is
+    /// built and added to the settings as the sign-in builds and adds it, the key goes through the file
+    /// of keys as it is stored, and the configuration is read from those two alone: nothing exported
+    /// and nothing built in. Express mode and a project each reach the host their entry builds, send
+    /// the stored key in `x-goog-api-key`, and offer the model from the compiled list. The regression
+    /// it rejects is a recorded entry or a stored key that the next session does not read as the
+    /// service it was recorded for, which signs in and then finds no service to send the key to.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn the_settings_and_key_a_vertex_sign_in_writes_resolve_the_model_with_no_configuration() {
+        const MODEL: &str = "google-vertex/google/gemini-2.5-flash";
+        const WIRE: &str = "google/gemini-2.5-flash";
+        const TYPED_KEY: &str = "placeholder-typed-key";
+
+        let nothing = |_: &str| None::<String>;
+        if let Ok(config) = resolved(&Settings::default(), nothing, nothing) {
+            assert!(
+                config.provider_for(MODEL).is_none(),
+                "a model resolved before any sign-in"
+            );
+        }
+        let settings_path = testutil::scratch_dir("vertex-sign-in-resolves").join("settings.json");
+        for (project, host, base_url) in [
+            (
+                None,
+                "aiplatform.googleapis.com",
+                "https://aiplatform.googleapis.com/v1",
+            ),
+            (
+                Some(PLACEHOLDER_PROJECT),
+                "aiplatform.googleapis.com",
+                "https://aiplatform.googleapis.com/v1/projects/example-project-1/locations/global/endpoints/openapi",
+            ),
+        ] {
+            let (service, entry) = provider::Provider::google_vertex(project, None).expect("offer");
+            let mut destination = import::Destination::open(&settings_path).expect("a document");
+            destination.add_gateway(import::Gateway::stating(
+                provider::GOOGLE_VERTEX_ID,
+                &service.base_url,
+                entry,
+            ));
+            let written = destination.text().expect("a settings file");
+            let settings = Settings::parse(written.expose());
+
+            let mut stored = keys::Keys::default();
+            stored.insert(provider::GOOGLE_VERTEX_ID, Secret::new(TYPED_KEY));
+            let stored = keys::Keys::parse(stored.to_text().expose()).expect("a file of keys");
+
+            let config = Config::from_sources(
+                &settings,
+                &Managed::default(),
+                &stored,
+                None,
+                nothing,
+                nothing,
+            )
+            .expect("configured from the settings and the key alone");
+
+            let (vertex, wire) = config
+                .provider_for(MODEL)
+                .unwrap_or_else(|| panic!("{project:?}: {MODEL} names no service"));
+            assert_eq!(vertex.id, provider::GOOGLE_VERTEX_ID, "{project:?}");
+            assert_eq!(wire, WIRE, "{project:?}");
+            assert_eq!(vertex.base_url, base_url, "{project:?}");
+            assert_eq!(vertex.host(), host, "{project:?}");
+            assert!(
+                vertex
+                    .compiled_roster()
+                    .is_some_and(|models| models.contains(&WIRE)),
+                "{project:?}: {WIRE} is not on the compiled list"
+            );
+            assert!(
+                config.provider_for(WIRE).is_none(),
+                "{project:?}: a bare name was routed"
+            );
+            let (credential, source) = vertex.credential_and_source(nothing);
+            assert_eq!(token_of(&credential), Some(TYPED_KEY), "{project:?}");
+            assert_eq!(source, Some(provider::Source::Stored), "{project:?}");
+            assert_eq!(
+                vertex.credential_header(TYPED_KEY),
+                ("x-goog-api-key", TYPED_KEY.to_string()),
+                "{project:?}"
+            );
+            match project {
+                None => {
+                    assert_eq!(vertex.protocol(), provider::Protocol::GenerateContent);
+                    assert_eq!(
+                        vertex.generate_content_url(WIRE, false).as_deref(),
+                        Some(
+                            "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent"
+                        )
+                    );
+                }
+                Some(_) => {
+                    assert_eq!(vertex.protocol(), provider::Protocol::ChatCompletions);
+                }
+            }
+        }
     }
 
     /// RUN-12: the variables a program is not handed include the ones the gateways in force read a
