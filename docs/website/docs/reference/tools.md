@@ -1320,7 +1320,9 @@ The planner is also told not to ask a question your request already answers, and
 to do what you asked or whether to do it automatically, because you asked for it. What is left to
 ask is a choice your request leaves open and that differs in consequence, such as which of two
 accounts to send from. Each question it asks costs your attention, and no
-[permission mode](../security/permission-modes.md) answers it for you.
+[permission mode](../security/permission-modes.md) answers it for you. It is told to word each
+question and option in plain words for someone who has not seen what it read, because you see only
+the question, its options and the reply before it, not files it wrote or results it read.
 
 ## `propose_plan`
 

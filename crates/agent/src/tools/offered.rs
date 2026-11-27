@@ -1660,11 +1660,12 @@ fn table(
                 "required": ["query"]
             }),
         ),
-        // ASK-12. The text does not depend on the mode. The four sentences it adds say that a
-        // question costs the user's attention, and name no mode and no place a question goes,
-        // because the planner is told of no mode but plan mode (MODE-3, MODE-8) and nothing about
-        // what decides (AUTO-7). The older clause that the questions are put to the user one at a
-        // time is unchanged.
+        // ASK-12. The text does not depend on the mode. The sentences it adds say that a question
+        // costs the user's attention and how to word a question for somebody who has not seen
+        // what the planner read, and the `question` and `detail` arguments say the latter in a
+        // shorter form. They name no mode and no place a question goes, because the planner is
+        // told of no mode but plan mode (MODE-3, MODE-8) and nothing about what decides (AUTO-7).
+        // The sentence that the questions are put to the user one at a time is not part of ASK-12.
         Tool::function(
             "ask_user",
             format!(
@@ -1682,7 +1683,11 @@ fn table(
              than a question per turn; they are put to the user one at a time. Offer concrete \
              options where you can; the user may also answer in their own words or skip a \
              question, and a skipped question is an answer to work with rather than a reason to \
-             ask again."
+             ask again. Write each question and option so that somebody who has not seen what \
+             you read can answer it, in plain words saying what they would see or get, with no \
+             issue numbers, clause IDs or internal names; the user sees only the question, its \
+             options and the text of your reply before the call, not files you wrote or results \
+             you read, so state there what each option does and the facts the choice rests on."
             ),
             json!({
                 "type": "object",
@@ -1703,7 +1708,11 @@ fn table(
                                 },
                                 "question": {
                                     "type": "string",
-                                    "description": "The question, in one sentence."
+                                    "description": "The question, in one sentence, in plain \
+                                                    words that somebody who has not seen what \
+                                                    you read can answer, saying what they \
+                                                    would see or get, with no issue numbers, \
+                                                    clause IDs or internal names."
                                 },
                                 "options": {
                                     "type": "array",
@@ -1725,7 +1734,12 @@ fn table(
                                             "detail": {
                                                 "type": "string",
                                                 "description": "Optional line saying what \
-                                                                choosing it means."
+                                                                choosing it means, in plain \
+                                                                words for somebody who has \
+                                                                not seen what you read: what \
+                                                                they would see or get, with \
+                                                                no issue numbers, clause IDs \
+                                                                or internal names."
                                             }
                                         },
                                         "required": ["label"]

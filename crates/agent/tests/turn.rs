@@ -35185,12 +35185,15 @@ fn a_quarantined_read_does_not_stop_the_planner_asking() {
 /// The planner here is a script, so this does not show that a model obeys the description. It
 /// shows that the request the planner is sent carries, in the `ask_user` entry of its tool table,
 /// the sentences that tell it not to ask what the request states, not to ask whether to do what
-/// was asked or to do it automatically, what is left to ask, and what a question costs. That is
-/// the assertion a description without the sentences fails. The assertion that the confirmer was
+/// was asked or to do it automatically, what is left to ask, what a question costs, and how to
+/// word a question for somebody who has not seen what it read, and that the `question` and
+/// `detail` arguments say the last in a shorter form. That is the assertion a description
+/// without the sentences fails. The assertion that the confirmer was
 /// shown no question is a control: the scripted planner asks nothing whatever the description
 /// says.
 #[test]
-fn the_request_carries_the_four_ask_user_sentences_where_a_task_is_to_send_an_email() {
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_request_carries_the_ask_user_sentences_where_a_task_is_to_send_an_email() {
     let scratch = Scratch::new("ask-not-how-to-send");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
@@ -35213,12 +35216,13 @@ fn the_request_carries_the_four_ask_user_sentences_where_a_task_is_to_send_an_em
 
     let request = received.recv().expect("the request of the one round");
     let sent: serde_json::Value = serde_json::from_str(&request).expect("a JSON request");
-    let described = sent["tools"]
+    let ask_user = &sent["tools"]
         .as_array()
         .expect("a table of tools")
         .iter()
         .find(|tool| tool["function"]["name"] == "ask_user")
-        .expect("the turn was offered ask_user")["function"]["description"]
+        .expect("the turn was offered ask_user")["function"];
+    let described = ask_user["description"]
         .as_str()
         .expect("a description")
         .to_string();
@@ -35229,11 +35233,37 @@ fn the_request_carries_the_four_ask_user_sentences_where_a_task_is_to_send_an_em
         "What is left to ask is a choice that the request leaves open and that differs in \
          consequence, such as which of two accounts to send from.",
         "Each question you ask costs the user's attention.",
+        "Write each question and option so that somebody who has not seen what you read can \
+         answer it, in plain words saying what they would see or get, with no issue numbers, \
+         clause IDs or internal names; the user sees only the question, its options and the \
+         text of your reply before the call, not files you wrote or results you read, so state \
+         there what each option does and the facts the choice rests on.",
     ] {
         assert!(
             described.contains(told),
             "the planner was not told '{told}': {described}"
         );
+    }
+    let question = &ask_user["parameters"]["properties"]["questions"]["items"]["properties"];
+    for (argument, field) in [
+        ("question", &question["question"]),
+        (
+            "detail",
+            &question["options"]["items"]["properties"]["detail"],
+        ),
+    ] {
+        let argued = field["description"].as_str().expect("a description");
+        for told in [
+            "in plain words",
+            "somebody who has not seen what you read",
+            "what they would see or get",
+            "with no issue numbers, clause IDs or internal names.",
+        ] {
+            assert!(
+                argued.contains(told),
+                "the planner's {argument} argument does not say '{told}': {argued}"
+            );
+        }
     }
 
     // The control. It cannot fail while the planner is scripted to ask nothing.
