@@ -532,3 +532,135 @@ fn recording_a_list_needs_no_endorsement() {
     assert_eq!(reporter.updates.len(), 1);
     assert!(policy.finish(), "a gate refused something");
 }
+
+/// A task list is written by the planner, which has only reference names, and read by the
+/// person whose directory it is, who has only filenames. The line has to carry both, and the
+/// filename has to be the half that reaches the screen.
+#[test]
+fn a_task_list_names_the_file_a_reference_stands_for() {
+    let untrusted = bravebot_core::label::Label::untrusted_private();
+    let named = vec![
+        (SlotId::new("ref:1"), untrusted, "src/game.js".to_string()),
+        (SlotId::new("ref:10"), untrusted, "server.py".to_string()),
+    ];
+
+    // The reference and its label come with the name: a bare filename would read as
+    // something the planner knows, and it does not.
+    assert_eq!(
+        name_references("Write the fixed ref:1 back to its file", &named),
+        "Write the fixed ref:1(U,priv):src/game.js back to its file"
+    );
+    // A longer name is not the shorter one with something after it.
+    assert_eq!(
+        name_references("ref:10 and ref:1.", &named),
+        "ref:10(U,priv):server.py and ref:1(U,priv):src/game.js."
+    );
+    // A reference with no file behind it is left as the planner wrote it: a processor's
+    // output is content, and there is nothing truer to put in its place.
+    assert_eq!(
+        name_references("what ref:4 produced", &named),
+        "what ref:4 produced"
+    );
+    assert_eq!(name_references("nothing to do", &named), "nothing to do");
+}
+
+/// The advertised statuses come from the kernel, so the instruction cannot describe a
+/// vocabulary the parser does not read.
+#[test]
+fn the_todo_schema_advertises_the_statuses_the_kernel_parses() {
+    let tool = available(
+        Scheduling::ArrangingALook,
+        Arming::Allowed { free: 1 },
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    )
+    .into_iter()
+    .find(|t| t.function.name == "todo_write")
+    .expect("todo_write is offered");
+    let advertised =
+        tool.function.parameters["properties"]["todos"]["items"]["properties"]["status"]["enum"]
+            .as_array()
+            .expect("the statuses are enumerated");
+
+    for value in advertised {
+        let name = value.as_str().expect("a string");
+        assert_eq!(
+            Status::parse(name).to_string(),
+            name,
+            "'{name}' is advertised but does not round-trip"
+        );
+    }
+}
+
+/// The planner can only choose `waiting` if the schema enumerates it and says what it means:
+/// open, with the next step not the planner's.
+#[test]
+fn the_todo_schema_offers_waiting_and_says_what_it_means() {
+    let tool = available(
+        Scheduling::ArrangingALook,
+        Arming::Allowed { free: 1 },
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    )
+    .into_iter()
+    .find(|t| t.function.name == "todo_write")
+    .expect("todo_write is offered");
+    let status = &tool.function.parameters["properties"]["todos"]["items"]["properties"]["status"];
+    let advertised: Vec<&str> = status["enum"]
+        .as_array()
+        .expect("the statuses are enumerated")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect();
+    assert!(advertised.contains(&"waiting"), "{advertised:?}");
+    let description = status["description"].as_str().expect("a description");
+    assert!(
+        description.contains("waiting") && description.contains("still open"),
+        "{description}"
+    );
+}
+
+/// Nothing is touched, so there is no field for a person to approve: the list is the whole of
+/// the call. A destination here, even an optional one, would be a routing argument on the one
+/// tool whose answer to "what would a person be approving?" is "nothing".
+#[test]
+fn the_task_list_tool_offers_no_argument_that_names_a_destination() {
+    let tool = available(
+        Scheduling::ArrangingALook,
+        Arming::Allowed { free: 1 },
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    )
+    .into_iter()
+    .find(|t| t.function.name == "todo_write")
+    .expect("todo_write is offered");
+    let properties = tool.function.parameters["properties"]
+        .as_object()
+        .expect("the arguments are an object");
+
+    assert_eq!(
+        properties.keys().collect::<Vec<_>>(),
+        vec!["todos", "why"],
+        "todo_write advertises an argument beside the list itself and the reason"
+    );
+}
+
+/// The model has to be told the list is replaced wholesale, or it will send only what changed
+/// and the finished tasks will vanish from the display.
+#[test]
+fn the_todo_tool_states_that_the_whole_list_is_required() {
+    let tool = available(
+        Scheduling::ArrangingALook,
+        Arming::Allowed { free: 1 },
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    )
+    .into_iter()
+    .find(|t| t.function.name == "todo_write")
+    .expect("todo_write is offered");
+    assert!(
+        tool.function.description.contains("whole list"),
+        "the description does not ask for the whole list: {}",
+        tool.function.description
+    );
+}

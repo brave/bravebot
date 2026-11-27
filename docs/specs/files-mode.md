@@ -66,7 +66,7 @@ the repository, so it opens no loop there either.
 `verified-by: bravebot_agent::turn::an_edit_whose_lines_were_held_back_still_carries_its_counts`
 `verified-by: bravebot_agent::manifest::a_write_step_carries_its_counts_and_the_file_it_landed_on`
 `verified-by: bravebot_tui::state::open_loops::unfinished_does_not_list_a_file_in_the_session_directory_as_unbuilt`
-`verified-by: bravebot_agent::tools::a_write_into_the_session_directory_is_not_a_changed_file`
+`verified-by: bravebot_agent::tools::tests::loading_skills::a_write_into_the_session_directory_is_not_a_changed_file`
 `verified-by: bravebot_agent::open_loops::a_written_file_outside_the_repository_is_not_uncommitted`
 
 <a id="FILES-2"></a>

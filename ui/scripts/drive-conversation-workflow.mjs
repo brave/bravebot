@@ -4,18 +4,15 @@ import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
 import { eventsFor, idA, installBridge, makeProfile } from './acceptance-fixture.mjs'
+import { launchMocked } from './drive-mock.mjs'
 import { COMPOSER_NAME } from './drive-support.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-conversation-regression')
 mkdirSync(output, { recursive: true })
 const { profile, directory, state } = makeProfile({ copy: true })
-const app = await electron.launch({args:['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling',`--user-data-dir=${profile}`],cwd:process.cwd(),timeout:40000,env:{...process.env,BRAVEBOT_HOME:state}})
-let page
+const { app, page, errors } = await launchMocked({ profile, env: { BRAVEBOT_HOME: state }, viewport: { width: 1350, height: 900 }, timeout: 7000 })
 const originalClipboard = await app.evaluate(({clipboard})=>clipboard.readText())
 try {
-  page = await app.firstWindow(); await page.setViewportSize({ width: 1350, height: 900 }); page.setDefaultTimeout(7000)
-  const errors=[]; page.on('pageerror',e=>{errors.push(e.message);console.error('RENDERER',e.message)})
   await installBridge(app, { directory })
   const snap=async name=>{if(/^2[1245]-memory/.test(name)) await page.locator('.memory-actions').scrollIntoViewIfNeeded();await page.waitForTimeout(400);await page.screenshot({path:join(output,name+'.png'),scale:'css'});console.log('VISUAL',name)}
   const { emit, done } = eventsFor(app)

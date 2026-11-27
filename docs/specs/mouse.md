@@ -11,6 +11,7 @@ governs:
   - crates/tui/src/state/menu.rs
   - crates/tui/src/state/hover.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/mouse.rs
   - crates/tui/src/input.rs
   - crates/tui/src/confirm.rs
   - crates/tui/src/panel.rs

@@ -53,9 +53,10 @@ guards:
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 31
+      - crates/agent/src/tools.rs: 30
       - crates/agent/src/tools/recall.rs: 1
       - crates/agent/src/tools/tests/arguments.rs: 1
+      - crates/agent/src/tools/tests/delegate_offers.rs: 1
       - crates/agent/src/tools/tests/editing.rs: 5
       - crates/agent/src/tools/tests/questions.rs: 1
       - crates/agent/src/tools/tests/scheduling.rs: 3

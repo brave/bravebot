@@ -9,8 +9,8 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
 import { agentInfo, threeModelList } from './acceptance-fixture.mjs'
+import { launchMocked, mockedSessionOpen } from './drive-mock.mjs'
 import { ASSISTANT_BUBBLE, COMPOSER_NAME } from './drive-support.mjs'
 
 const output = process.env.VISUAL_OUTPUT || join(tmpdir(), 'bravebot-visual')
@@ -27,16 +27,11 @@ writeFileSync(join(profile, 'bravebot-ui.json'), JSON.stringify({
   recents: [directory, '/Users/example/Documents/GitHub/a-very-long-project-name-that-needs-truncation'],
 }))
 
-const app = await electron.launch({ args: ['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000, env: { ...process.env, BRAVEBOT_HOME: state } })
+const { app, page, errors } = await launchMocked({ profile, env: { BRAVEBOT_HOME: state }, timeout: 6000 })
 const failures = []
 const small = new Map()
-const errors = []
 try {
-  const page = await app.firstWindow()
-  page.setDefaultTimeout(6000)
-  page.on('pageerror', (e) => { errors.push(e.message); console.error('RENDERER', e.message) })
-
-  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, idA, idB, idC, info, models }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, idA, idB, idC, info, models, opened }) => {
     const now = Math.floor(Date.now() / 1000)
     const rows = [
       { id: idA, title: 'Refactor the session store and add migration tests', updated: now - 60 * 4 },
@@ -59,7 +54,7 @@ try {
       if (method === 'session.list') return { ok: { sessions: globalThis.visual.rows ?? rows } }
       if (method === 'models.list') return { ok: models }
       if (method === 'session.new') return { ok: { session: 's-new', directory, branch: 'main', model: 'sample/fast' } }
-      if (method === 'session.open') return { ok: { session: 's-' + p.id, model: 'sample/fast', record: { ...rows.find((r) => r.id === p.id), started: 1, turns: 1, tokens: 100, build: 'fixture' }, said: p.id === idA ? said : [], todos: { rows: [{ content: 'Split the lock', status: 'done' }, { content: 'Move the migration', status: 'active' }, { content: 'Write migration tests', status: 'pending' }] }, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
+      if (method === 'session.open') return { ok: { ...opened, session: 's-' + p.id, record: { ...rows.find((r) => r.id === p.id), ...opened.record }, said: p.id === idA ? said : [] } }
       if (method === 'turn.send') { emit('turn.started', { turn: 2 }, p.session); return { ok: { turn: 2 } } }
       if (method === 'turn.interject') return { ok: { accepted: true } }
       if (method === 'permissions.list') return { ok: { paths: [{ path: '', shownPath: '""', integrity: 'trusted' }, { path: 'vendor', shownPath: 'vendor', integrity: 'untrusted' }], commands: [{ program: '/usr/bin/git', startedAs: '/usr/bin/git', args: ['status'], directory: '/work', shownDirectory: '.', display: 'git status' }, { program: '/usr/bin/git', startedAs: '/usr/bin/git', args: ['status'], directory: '/work/sub', shownDirectory: 'sub', display: 'git status' }], remembered: { at: Math.floor(Date.now() / 1000) - 86400, path: '/Users/example/Library/Application Support/bravebot-ui-b/trusted', shownPath: '/Users/example/Library/Application Support/bravebot-ui-b/trusted', root: '/Users/example/Library/Application Support/bravebot-ui-b', shownRoot: '/Users/example/Library/Application Support/bravebot-ui-b' } } }
@@ -75,7 +70,7 @@ try {
     replace('bravebot:files:choose-attachments', () => ['src/store.ts', 'src/migrate.ts', 'tests/store.test.ts', 'docs/a-deliberately-long-file-name-that-has-to-truncate.md', 'package.json'].map((path, i) => ({ id: 'att-' + i, path, bytes: 100 + i })))
     replace('bravebot:files:search', () => ({ paths: ['src/store.ts'], incomplete: false }))
     replace('bravebot:files:preview', (_, session, path) => ({ path, text: 'export const store = 1\n', truncated: false }))
-  }, { directory, idA, idB, idC, info: agentInfo, models: threeModelList })
+  }, { directory, idA, idB, idC, info: agentInfo, models: threeModelList, opened: mockedSessionOpen({ turns: 1, tokens: 100, todos: { rows: [{ content: 'Split the lock', status: 'done' }, { content: 'Move the migration', status: 'active' }, { content: 'Write migration tests', status: 'pending' }] } }) })
 
   const emit = (event, data, session = 's-' + idA) => app.evaluate((_, v) => globalThis.visual.emit(v.event, v.data, v.session), { event, data, session })
   const settle = () => page.waitForTimeout(450)

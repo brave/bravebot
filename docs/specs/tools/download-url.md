@@ -99,7 +99,7 @@ status and none of its note, so the content type reaches no editor.
 and given to the planner it is the one channel [FETCH-6](fetch-url.md#FETCH-6) closes for a body.
 
 `verified-by: bravebot_agent::turn::a_downloaded_file_is_untrusted_and_nothing_of_it_reaches_the_planner`
-`verified-by: bravebot_agent::tools::a_content_type_is_shown_without_anything_a_terminal_would_obey`
+`verified-by: bravebot_agent::tools::tests::content_types::a_content_type_is_shown_without_anything_a_terminal_would_obey`
 `verified-by: bravebot_agent::turn::a_download_tells_the_planner_its_status_and_size_and_the_person_a_cleaned_content_type`
 `verified-by: bravebot_tui::render::a_finished_download_draws_its_status_size_and_content_type`
 `verified-by: bravebot_cli::progress::a_finished_download_prints_its_status_size_and_content_type`
@@ -133,7 +133,7 @@ call, and that is all it buys, so `download_url` is in the list of tools no dele
 refuses it before anything is read or sent ([MODE-3](../permission-modes.md#MODE-3)), and so does
 the sandbox mode `read-only` ([SANDBOX-22](../sandboxing.md#SANDBOX-22)).
 
-`verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::no_kind_is_offered_a_tool_that_reaches_the_network`
 `verified-by: bravebot_agent::turn::a_delegate_naming_download_url_is_answered_as_an_unknown_name_and_writes_nothing`
 `verified-by: bravebot_agent::turn::plan_mode_refuses_a_download_before_anything_is_sent`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`

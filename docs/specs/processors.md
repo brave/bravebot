@@ -110,7 +110,7 @@ about every time ([RUN-6](tools/run.md#RUN-6)).
 `verified-by: bravebot_core::policy::a_private_instruction_gives_a_private_answer_over_a_public_page`
 `verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_offered_processors_like_any_other`
 `verified-by: bravebot_core::policy::a_reference_names_a_processor_whatever_the_context_holds`
-`verified-by: bravebot_agent::tools::no_description_says_that_private_content_closes_processors`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::no_description_says_that_private_content_closes_processors`
 `verified-by: bravebot_agent::turn::a_planner_that_holds_private_content_is_pointed_at_a_processor_and_gets_one`
 `verified-by: bravebot_agent::turn::reading_a_quarantined_file_by_reference_names_a_processor_whatever_the_context_holds`
 

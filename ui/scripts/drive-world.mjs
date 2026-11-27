@@ -105,7 +105,7 @@ export async function launchWorld({ profile, env, linuxArgs = [], timeout = 3000
   }
 }
 
-async function launchElectron(options) {
+export async function launchElectron(options) {
   const { _electron: electron } = await import('playwright-core')
   return electron.launch(options)
 }

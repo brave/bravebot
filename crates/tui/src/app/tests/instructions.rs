@@ -3,7 +3,8 @@
 use super::*;
 
 /// INSTR-12. In the terminal a `/loop` tick and a `/goal` round are turns and carry the style
-/// (the test above), while `/btw`, `/recap` and `/compact` start no turn and carry none. The
+/// (`every_turn_the_terminal_starts_carries_the_style_in_force_ticks_and_goal_rounds_included`),
+/// while `/btw`, `/recap` and `/compact` start no turn and carry none. The
 /// style reaches a request only through `with_session_style` on a turn's task, and the senders
 /// of the side requests (the summary, the aside and the recap, the enhanced prompt, the hand-off
 /// brief, the commit message and the goal check, all in `side_requests.rs`) hold no task. This

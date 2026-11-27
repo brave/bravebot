@@ -18,6 +18,7 @@ governs:
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/mouse.rs
   - crates/agent/src/aside.rs
 documented-by: docs/website/docs/using/interactive-mode.md
 ---
@@ -787,7 +788,7 @@ model happened to look, which can be many minutes. Measured from the planner's l
 lines are exactly the ones it has not read, so the row never joins two runs of lines with a gap and
 never draws a line twice, and nothing has to be reconciled between a look and the screen.
 
-`verified-by: bravebot_agent::tools::unread_output_leaves_the_planners_cursor_where_it_was`
+`verified-by: bravebot_agent::tools::tests::job_looks::unread_output_leaves_the_planners_cursor_where_it_was`
 `verified-by: bravebot_agent::turn::a_running_job_nobody_has_looked_at_gives_the_screen_its_lines_and_the_look_keeps_them`
 `verified-by: bravebot_agent::turn::an_unvouched_running_jobs_lines_are_drawn_and_never_reach_the_planner`
 `verified-by: bravebot_agent::turn::a_running_job_that_printed_past_the_bound_gives_the_screen_only_the_newest_lines`

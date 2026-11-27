@@ -23,11 +23,16 @@ import {
   TRUST_APPROVE,
   approveTrust,
   approveTrustIfAsked,
+  cancelDrag,
   checker,
+  copyImage,
+  dragFiles,
   heldTurns,
   launchArguments,
   launchLive,
+  menuPaste,
   openFirstSession,
+  picture,
   readTrust,
   sessionsOrSkip,
   showSessions,
@@ -384,4 +389,113 @@ test('until succeeds on the last check it allows', async () => {
   let checks = 0
   await untilIn(page, 400)(async () => ++checks === 400, 'never')
   assert.equal(checks, 400)
+})
+
+// A page and a CDP session that record every call in one list, in order, so the order of a drag
+// is what is compared. `sessions` counts the sessions the page was asked for.
+function dragPage(box = { x: 10, y: 20, width: 101, height: 51 }) {
+  const calls = []
+  const state = { sessions: 0 }
+  const cdp = { send: async (method, params) => calls.push(['send', method, params.type, params.x, params.y, params.data]) }
+  const page = {
+    context: () => ({ newCDPSession: async (given) => { assert.equal(given, page); state.sessions += 1; return cdp } }),
+    locator: (selector) => ({ first: () => ({ boundingBox: async () => { calls.push(['box', selector]); return box } }) }),
+    waitForTimeout: async (ms) => calls.push(['wait', ms]),
+  }
+  return { page, calls, state }
+}
+
+test('dragFiles enters, hovers three times 100 ms apart over the middle of the composer, then lets go', async () => {
+  const { page, calls } = dragPage()
+  await dragFiles(page, ['/tmp/a.png'])
+  const data = { items: [], files: ['/tmp/a.png'], dragOperationsMask: 1 }
+  // The middle of the box is rounded, not floored: 10 + 101 / 2 is 60.5, and 20 + 51 / 2 is 45.5.
+  const at = (type) => ['send', 'Input.dispatchDragEvent', type, 61, 46, data]
+  assert.deepEqual(calls, [
+    ['box', '.composer textarea'],
+    at('dragEnter'),
+    at('dragOver'), ['wait', 100],
+    at('dragOver'), ['wait', 100],
+    at('dragOver'), ['wait', 100],
+    at('drop'),
+  ])
+})
+
+test('dragFiles aims at the selector it is given, and a drag told not to drop stays over the target', async () => {
+  const { page, calls } = dragPage({ x: 0, y: 0, width: 200, height: 100 })
+  await dragFiles(page, ['/tmp/a.png', '/tmp/b.pdf'], { selector: '.entries', drop: false })
+  assert.deepEqual(calls[0], ['box', '.entries'])
+  const types = calls.filter(([kind]) => kind === 'send').map((call) => call[2])
+  assert.deepEqual(types, ['dragEnter', 'dragOver', 'dragOver', 'dragOver'], 'nothing is dropped')
+  for (const call of calls.filter(([kind]) => kind === 'send')) {
+    assert.deepEqual([call[3], call[4]], [100, 50])
+    assert.deepEqual(call[5].files, ['/tmp/a.png', '/tmp/b.pdf'])
+  }
+})
+
+test('a drag and its cancel go through one CDP session per page, and another page has its own', async () => {
+  const first = dragPage()
+  await dragFiles(first.page, ['/tmp/a.png'], { drop: false })
+  await dragFiles(first.page, ['/tmp/a.png'])
+  await cancelDrag(first.page, ['/tmp/a.png'])
+  assert.equal(first.state.sessions, 1, 'a second session would not know the drag the first one began')
+  const second = dragPage()
+  await dragFiles(second.page, ['/tmp/b.png'])
+  assert.equal(second.state.sessions, 1)
+})
+
+test('cancelDrag sends dragCancel at the origin with the files of the drag, and rejects when the browser does', async () => {
+  const { page, calls } = dragPage()
+  await cancelDrag(page, ['/tmp/a.png'])
+  assert.deepEqual(calls, [['send', 'Input.dispatchDragEvent', 'dragCancel', 0, 0, { items: [], files: ['/tmp/a.png'], dragOperationsMask: 1 }]])
+  const failing = {
+    context: () => ({ newCDPSession: async () => ({ send: async () => { throw new Error('no drag') } }) }),
+  }
+  await assert.rejects(cancelDrag(failing, []), /no drag/)
+})
+
+// An app that runs the function it is given against the fake parts of Electron the helper names.
+function electronApp(parts) {
+  return { evaluate: async (fn, argument) => fn(parts, argument) }
+}
+
+test('picture draws every pixel in the colour it is given, and noise differs from pixel to pixel', async () => {
+  const sizes = []
+  const nativeImage = { createFromBitmap: (pixels, size) => { sizes.push(size); return { toPNG: () => pixels } } }
+  const solid = Buffer.from(await picture(electronApp({ nativeImage }), 4, [0x20, 0x60, 0xd0, 0xff]), 'base64')
+  assert.deepEqual(sizes, [{ width: 4, height: 4 }])
+  assert.equal(solid.length, 4 * 4 * 4)
+  for (let at = 0; at < solid.length; at += 4) assert.deepEqual([...solid.subarray(at, at + 4)], [0x20, 0x60, 0xd0, 0xff])
+  const noisy = Buffer.from(await picture(electronApp({ nativeImage }), 16, null, true), 'base64')
+  const pixels = new Set()
+  for (let at = 0; at < noisy.length; at += 4) {
+    assert.equal(noisy[at + 3], 0xff, 'noise stays opaque')
+    pixels.add(noisy.subarray(at, at + 3).toString('hex'))
+  }
+  assert.ok(pixels.size > 1, 'a noise picture is not one colour')
+})
+
+test('copyImage puts the PNG on the clipboard, with the text beside it only when text is given', async () => {
+  const written = []
+  class ClipboardItem { constructor(entry) { this.entry = entry } }
+  const clipboard = { write: async (items) => written.push(items) }
+  const app = electronApp({ clipboard, ClipboardItem })
+  const bytes = Buffer.from([1, 2, 3, 4]).toString('base64')
+  await copyImage(app, bytes)
+  await copyImage(app, bytes, 'https://example.com/page')
+  assert.equal(written.length, 2)
+  const [alone, withText] = written.map(([item]) => item.entry)
+  assert.deepEqual(Object.keys(alone), ['image/png'])
+  assert.deepEqual(Object.keys(withText), ['image/png', 'text/plain'])
+  assert.equal(withText['text/plain'], 'https://example.com/page')
+  assert.equal(alone['image/png'].type, 'image/png')
+  assert.deepEqual([...Buffer.from(await alone['image/png'].arrayBuffer())], [1, 2, 3, 4])
+})
+
+test('menuPaste pastes into the first window through webContents.paste', async () => {
+  const pasted = []
+  const window = (name) => ({ webContents: { paste: () => { pasted.push(name); return name } } })
+  const BrowserWindow = { getAllWindows: () => [window('first'), window('second')] }
+  assert.equal(await menuPaste(electronApp({ BrowserWindow })), 'first')
+  assert.deepEqual(pasted, ['first'])
 })

@@ -60,8 +60,8 @@ quarantine, but the delegate is handed the same reference ([RUN-14](run.md#RUN-1
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`
 `verified-by: bravebot_core::delegate::a_run_is_offered_the_kinds_its_own_capabilities_reach`
 `verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
-`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
-`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_read_output_it_may_not_read_either`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_planner_is_told_a_delegate_cannot_read_output_it_may_not_read_either`
 `verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_use_a_tool_it_is_not_offered`
 
 <a id="AGENT-2"></a>
@@ -111,14 +111,14 @@ that another call's count does.
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
 `verified-by: bravebot_agent::turn::the_planner_is_asked_again_when_the_first_delegate_ends_and_the_turn_then_waits_for_the_rest`
 `verified-by: bravebot_agent::turn::a_batch_that_asked_to_wake_after_all_of_it_costs_the_planner_one_request_during_the_wait`
-`verified-by: bravebot_agent::tools::the_start_message_says_when_the_planner_is_asked_again_from_the_calls_count`
-`verified-by: bravebot_agent::tools::the_planner_is_offered_a_count_of_delegates_to_wake_after`
-`verified-by: bravebot_agent::tools::a_wake_after_that_is_not_a_count_of_delegates_is_refused`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_start_message_says_when_the_planner_is_asked_again_from_the_calls_count`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_planner_is_offered_a_count_of_delegates_to_wake_after`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_wake_after_that_is_not_a_count_of_delegates_is_refused`
 `verified-by: bravebot_agent::turn::two_delegates_ending_together_are_both_collected_by_one_wake_whatever_their_labels`
 `verified-by: bravebot_agent::turn::a_call_asking_to_wake_after_all_its_delegates_is_not_asked_again_until_the_last_ends`
 `verified-by: bravebot_agent::turn::a_call_waiting_for_all_of_its_delegates_counts_each_end_whatever_its_label`
 `verified-by: bravebot_agent::turn::a_delegates_report_reaches_the_planner_that_asked_for_it`
-`verified-by: bravebot_agent::tools::the_start_message_names_what_a_delegate_was_started_without`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_start_message_names_what_a_delegate_was_started_without`
 `verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
 `verified-by: bravebot_agent::turn::a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_without_writing`
 
@@ -162,9 +162,9 @@ field turning one sentence into an unbounded number of runs at once is worth a b
 `verified-by: bravebot_agent::turn::a_fan_out_past_the_ceiling_is_refused_and_starts_nothing`
 `verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
 `verified-by: bravebot_agent::turn::a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing`
-`verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`
-`verified-by: bravebot_agent::tools::an_empty_each_is_refused_with_a_sentence_saying_it_was_empty`
-`verified-by: bravebot_agent::tools::each_delegate_is_told_the_shared_task_followed_by_its_own_entry`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::an_empty_each_is_refused_with_a_sentence_saying_it_was_empty`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::each_delegate_is_told_the_shared_task_followed_by_its_own_entry`
 `verified-by: bravebot_agent::turn::a_command_approved_always_in_one_delegate_stays_out_of_a_sibling`
 `verified-by: bravebot_core::policy::what_a_person_vouched_for_running_inside_a_delegate_is_kept`
 `verified-by: bravebot_core::policy::a_delegate_that_answered_nothing_takes_nothing_away`
@@ -210,7 +210,7 @@ narrowing, so the most a list can do is leave the worker as it would have been
 `verified-by: bravebot_core::policy::a_server_this_run_holds_no_grant_for_cannot_be_kept`
 `verified-by: bravebot_core::policy::a_private_server_list_cannot_direct_a_delegate`
 `verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
-`verified-by: bravebot_agent::tools::a_server_list_that_is_not_a_list_of_names_is_refused`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_server_list_that_is_not_a_list_of_names_is_refused`
 `verified-by: bravebot_agent::mcp::a_worker_spawned_keeping_no_server_is_offered_no_servers_tool`
 `verified-by: bravebot_core::policy::a_fallen_run_is_refused_before_a_server_list_is_compared_with_its_grants`
 
@@ -238,7 +238,7 @@ is ([AGENT-1](#AGENT-1)); a private figure is refused, as a private `mcp_servers
 it was, so there is nothing for it to widen. [DELEGATE-6](../delegation.md#DELEGATE-6) keeps the
 round bound out of the call because a larger figure would be authority; a smaller one is not.
 
-`verified-by: bravebot_agent::tools::a_budget_that_is_not_a_count_of_tokens_is_refused`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_budget_that_is_not_a_count_of_tokens_is_refused`
 `verified-by: bravebot_core::policy::a_call_budget_can_only_lower_the_definitions`
 `verified-by: bravebot_core::policy::a_private_budget_cannot_direct_a_delegate`
 `verified-by: bravebot_core::policy::each_delegate_of_a_fan_out_carries_the_figure`
@@ -261,6 +261,6 @@ way through.
 most one call starts ([AGENT-5](#AGENT-5)) is a limit on a call and not a bound on the tree, and is
 stated in the text of `each`.
 
-`verified-by: bravebot_agent::tools::each_kind_the_planner_may_pick_names_the_rounds_it_allows`
-`verified-by: bravebot_agent::tools::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
-`verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::each_kind_the_planner_may_pick_names_the_rounds_it_allows`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`

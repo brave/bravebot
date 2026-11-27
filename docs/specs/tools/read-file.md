@@ -130,7 +130,7 @@ UTF-8 over a UTF-16 file.
 `verified-by: bravebot_agent::manifest::a_paged_read_in_a_plan_never_carries_a_decoding_of_another_encoding`
 `verified-by: bravebot_agent::workspace::a_deferred_read_of_a_file_in_another_encoding_is_reported_as_text`
 `verified-by: bravebot_agent::workspace::a_page_for_a_slot_decodes_a_file_in_another_encoding_without_a_note`
-`verified-by: bravebot_agent::tools::a_slot_filled_from_a_file_in_another_encoding_is_marked_and_carries_no_note`
+`verified-by: bravebot_agent::tools::tests::reading_files::a_slot_filled_from_a_file_in_another_encoding_is_marked_and_carries_no_note`
 `verified-by: bravebot_core::slot::a_slot_holding_a_decoding_is_read_but_never_given_to_an_effect`
 `verified-by: bravebot_core::policy::a_decoded_slot_is_read_by_a_processor_and_never_written_back`
 `verified-by: bravebot_agent::turn::a_processor_reads_a_file_in_another_encoding_as_its_text`
@@ -138,7 +138,7 @@ UTF-8 over a UTF-16 file.
 `verified-by: bravebot_agent::turn::a_utf16_file_is_read_as_text_and_an_edit_of_it_is_refused`
 `verified-by: bravebot_agent::turn::a_file_with_a_stray_invalid_byte_is_read_with_a_replacement_character_and_an_edit_is_refused`
 `verified-by: bravebot_agent::turn::a_copy_through_a_reference_never_carries_a_decoding_of_another_encoding`
-`verified-by: bravebot_agent::tools::a_decoded_page_says_how_it_was_decoded`
+`verified-by: bravebot_agent::tools::tests::reading_files::a_decoded_page_says_how_it_was_decoded`
 `verified-by: bravebot_agent::workspace::text_files_are_not_mistaken_for_binary`
 `verified-by: bravebot_agent::workspace::an_empty_file_is_not_binary`
 `verified-by: bravebot_filetype::lib::a_null_byte_in_the_sniffed_head_is_binary`
@@ -304,11 +304,11 @@ when a file changed, a session answered that a loop would be needed and made no 
 leaving the person with neither a watch nor the file's contents. A description that routes a question
 to a technique has to say which end of it happens in the turn that read it.
 
-`verified-by: bravebot_agent::tools::read_file_sends_a_question_about_change_to_a_token_it_can_compare`
-`verified-by: bravebot_agent::tools::read_file_says_what_a_change_token_does_and_does_not_settle`
-`verified-by: bravebot_agent::tools::inside_a_loop_read_file_says_there_is_nothing_to_arrange`
-`verified-by: bravebot_agent::tools::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
-`verified-by: bravebot_agent::tools::a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::read_file_sends_a_question_about_change_to_a_token_it_can_compare`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::read_file_says_what_a_change_token_does_and_does_not_settle`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::inside_a_loop_read_file_says_there_is_nothing_to_arrange`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request`
 
 <a id="READ-7"></a>
 ### READ-7: a read carries a token that differs once the file has been written
@@ -353,7 +353,7 @@ is the one component that has to compare one look with another.
 `verified-by: bravebot_agent::workspace::the_change_token_carries_no_time_the_planner_could_read`
 `verified-by: bravebot_agent::turn::a_read_hands_the_planner_a_token_that_moves_when_the_file_does`
 `verified-by: bravebot_agent::turn::a_read_of_an_empty_file_still_carries_a_token`
-`verified-by: bravebot_agent::tools::a_slot_is_filled_with_the_file_and_a_read_also_carries_its_token`
+`verified-by: bravebot_agent::tools::tests::reading_files::a_slot_is_filled_with_the_file_and_a_read_also_carries_its_token`
 
 <a id="READ-8"></a>
 ### READ-8: a repeat of a read the planner still holds is answered with a notice, not the lines again

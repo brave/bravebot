@@ -127,11 +127,6 @@ impl Approvals {
         self.lines.iter().any(|(held, _)| held == digest)
     }
 
-    /// How many lines are held for the plugin called `plugin`.
-    pub fn count_for(&self, plugin: &str) -> usize {
-        self.lines.iter().filter(|(_, name)| name == plugin).count()
-    }
-
     /// The file's text, one line for each approval.
     pub fn to_text(&self) -> String {
         self.lines
@@ -343,7 +338,10 @@ mod tests {
         );
         let read = Approvals::parse(&text);
         assert!(read.approves(&digest));
-        assert_eq!(read.count_for("demo"), 1);
+        assert_eq!(
+            read.lines.iter().filter(|(_, name)| name == "demo").count(),
+            1
+        );
         assert_eq!(Approvals::parse(&read.to_text()), read);
         assert!(!Approvals::parse(&format!("{digest}\n")).approves(&digest));
         assert!(!Approvals::parse(&format!("{digest} ../x\n")).approves(&digest));

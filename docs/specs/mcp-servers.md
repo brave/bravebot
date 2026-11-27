@@ -1362,7 +1362,7 @@ the server is not started either, and the line says why.
 `verified-by: bravebot_agent::servers::describing_a_server_keeps_nothing_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::servers::a_server_directory_that_is_not_text_is_kept_out_as_it_is_and_not_as_its_lookalike`
 `verified-by: bravebot_agent::servers::a_server_whose_own_directory_cannot_be_made_is_not_started_and_the_note_says_where_and_why`
-`verified-by: bravebot_agent::confine::a_server_started_by_a_runner_is_held_to_its_registry_hosts_and_another_is_not`
+`verified-by: bravebot_agent::confine::tests::a_server_started_by_a_runner_is_held_to_its_registry_hosts_and_another_is_not`
 
 <a id="SERVERS-11"></a>
 ### SERVERS-11: a remote server is an egress destination, and its host is approved as one

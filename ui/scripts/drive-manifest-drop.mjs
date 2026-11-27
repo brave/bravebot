@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME, SHOTS_DIR } from './drive-support.mjs'
+import { COMPOSER_NAME, SHOTS_DIR, dragFiles, picture } from './drive-support.mjs'
 
 // A run asks the planner twice: once for the plan in words, then for its steps. An ordinary turn
 // answers slowly, so a `/manifest` line can be typed while it runs.
@@ -38,11 +38,7 @@ let app, page, errors
 try {
   ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
 
-  const pictureBytes = await app.evaluate(({ nativeImage }) => {
-    const size = 48, pixels = Buffer.alloc(size * size * 4)
-    for (let i = 0; i < size * size; i++) pixels.set([0x20, 0x80, 0xd0, 0xff], i * 4)
-    return nativeImage.createFromBitmap(pixels, { width: size, height: size }).toPNG().toString('base64')
-  })
+  const pictureBytes = await picture(app, 48, [0x20, 0x80, 0xd0, 0xff])
   const png = join(desktop, 'sketch.png')
   writeFileSync(png, Buffer.from(pictureBytes, 'base64'))
 
@@ -52,18 +48,6 @@ try {
   const chips = page.locator('[data-test="dropped-chip"]')
   const stop = page.locator('.composer .stop')
   const card = page.locator('.confirm.manifest')
-  const cdp = await page.context().newCDPSession(page)
-  const drag = async (files) => {
-    const box = await page.locator('.composer textarea').first().boundingBox()
-    const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2)
-    const data = { items: [], files, dragOperationsMask: 1 }
-    await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data })
-    for (let i = 0; i < 3; i++) {
-      await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data })
-      await page.waitForTimeout(100)
-    }
-    await cdp.send('Input.dispatchDragEvent', { type: 'drop', x, y, data })
-  }
   // A shot is taken once what appeared has finished moving in (the card's rise, the composer
   // docking), with the pointer off every control, so nothing is caught mid-move or hovered.
   const settled = async () => {
@@ -86,7 +70,7 @@ try {
 
   // ---- a /manifest line with a dropped picture, sent at once ------------------------------------
   await composer.fill('/manifest build the first notes from ')
-  await drag([png])
+  await dragFiles(page, [png])
   await chips.first().waitFor()
   assert.equal(await composer.inputValue(), '/manifest build the first notes from [Image #1] ')
   await settled()
@@ -121,7 +105,7 @@ try {
   await composer.press('Enter')
   await stop.waitFor({ state: 'visible' })
   await composer.fill('/manifest build the second notes from ')
-  await drag([png])
+  await dragFiles(page, [png])
   await chips.first().waitFor()
   await composer.press('Enter')
   await page.locator('.queued-messages').waitFor()

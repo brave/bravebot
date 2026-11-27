@@ -8,11 +8,12 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 259
+      - crates/agent/src/tools.rs: 257
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 29
       - crates/agent/src/tools/web_search.rs: 8
+      - crates/agent/src/tools/tests/job_looks.rs: 2
       - crates/agent/src/tools/tests/reading_together.rs: 1
   - symbol: Produced::refused_with_a_note
     sites:
@@ -111,8 +112,8 @@ If a person could not approve that field alone, the tool does not get built. A s
 destination and payload at once, which is why the planner has no shell and why `apply_patch` is
 excluded. An argument vector passes the test, which is why running a pipeline of stages does not.
 
-`verified-by: bravebot_agent::tools::the_tool_set_is_reads_plus_gated_writes`
-`verified-by: bravebot_agent::tools::only_run_takes_a_command_line`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::the_tool_set_is_reads_plus_gated_writes`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::only_run_takes_a_command_line`
 
 <a id="TOOL-3"></a>
 ### TOOL-3: an unknown tool or an undeclared argument is reported to the planner rather than ignored
@@ -203,10 +204,10 @@ server is sent the arguments as they stand and the person approving the call rea
 **Why.** A person watching sees every call and what it touches, and without this nothing of what it
 was for, so a session reads as a list of commands.
 
-`verified-by: bravebot_agent::tools::every_tool_offered_asks_why_it_is_being_called`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::every_tool_offered_asks_why_it_is_being_called`
 `verified-by: bravebot_agent::turn::each_call_is_announced_and_summarised_with_its_own_reason`
-`verified-by: bravebot_agent::tools::a_held_call_is_drawn_with_the_reason_the_planner_gave`
-`verified-by: bravebot_agent::tools::a_held_call_to_a_servers_tool_is_drawn_with_its_target`
+`verified-by: bravebot_agent::tools::tests::held_calls::a_held_call_is_drawn_with_the_reason_the_planner_gave`
+`verified-by: bravebot_agent::tools::tests::held_calls::a_held_call_to_a_servers_tool_is_drawn_with_its_target`
 
 <a id="TOOL-6"></a>
 ### TOOL-6: what a tool says names only the tools the same turn is offered
@@ -335,30 +336,30 @@ since `apply_checkout` is never offered to a delegate either (it is in `NEVER_DE
 the collecting turn's list lacks it, the note says only where the files are, which stays true
 without naming a tool to fetch them with.
 
-`verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
-`verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::read_git_names_run_only_where_the_delegate_holds_one`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_declined_repository_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::tests::arguments::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::tests::arguments::read_output_and_job_output_refusals_name_run_only_where_the_turn_holds_one`
-`verified-by: bravebot_agent::tools::ask_user_names_run_only_where_the_turn_holds_one`
-`verified-by: bravebot_agent::tools::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::tests::asking_the_user::ask_user_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::an_addressed_reader_reads_a_read_git_that_names_no_run`
 `verified-by: bravebot_agent::turn::an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run`
 `verified-by: bravebot_core::reference::a_reference_made_for_a_run_without_spawning_or_writing_names_only_the_tools_it_has`
 `verified-by: bravebot_core::policy::a_reference_names_spawn_processor_and_write_file_exactly_when_the_run_is_offered_them`
 `verified-by: bravebot_agent::turn::a_reference_an_addressed_turn_is_handed_names_spawn_processor_and_write_file_only_if_offered`
-`verified-by: bravebot_agent::tools::a_list_holding_every_tool_gets_the_processor_and_read_output_descriptions_it_always_had`
-`verified-by: bravebot_agent::tools::the_processor_description_names_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
-`verified-by: bravebot_agent::tools::the_write_to_a_file_is_described_only_where_the_list_holds_write_file`
-`verified-by: bravebot_agent::tools::the_read_output_description_names_vet_content_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::a_list_holding_every_tool_gets_the_processor_and_read_output_descriptions_it_always_had`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_processor_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_write_to_a_file_is_described_only_where_the_list_holds_write_file`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_read_output_description_names_vet_content_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::the_descriptions_of_the_processor_and_read_output_follow_the_tools_a_turn_is_offered`
 `verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_use_a_tool_it_is_not_offered`
 `verified-by: bravebot_agent::turn::the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered`
-`verified-by: bravebot_agent::tools::a_list_holding_every_tool_gets_the_fetch_job_and_run_texts_it_always_had`
-`verified-by: bravebot_agent::tools::the_fetch_description_names_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::the_job_output_description_names_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::the_job_output_description_says_a_look_is_a_slice_and_earlier_slices_are_earlier_references`
-`verified-by: bravebot_agent::tools::the_run_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::a_list_holding_every_tool_gets_the_fetch_job_and_run_texts_it_always_had`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_fetch_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_job_output_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_job_output_description_says_a_look_is_a_slice_and_earlier_slices_are_earlier_references`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_run_description_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::turn::the_descriptions_of_fetch_job_output_and_run_follow_the_tools_a_turn_is_offered`
 `verified-by: bravebot_agent::turn::reading_a_reference_to_a_file_names_spawn_processor_and_write_file_only_if_offered`
 `verified-by: bravebot_agent::turn::a_delegate_reading_a_reference_to_a_file_is_told_only_what_it_can_do`
@@ -374,35 +375,35 @@ without naming a tool to fetch them with.
 `verified-by: bravebot_agent::turn::sentences::a_list_without_read_file_is_not_pointed_at_it`
 `verified-by: bravebot_agent::turn::sentences::the_history_sentence_is_left_out_where_the_list_lacks_read_git`
 `verified-by: bravebot_agent::turn::sentences::a_result_no_command_printed_has_no_advice_on_a_short_list`
-`verified-by: bravebot_agent::tools::beside_is_read_off_the_list_the_turn_holds`
-`verified-by: bravebot_agent::tools::the_notes_that_start_a_job_name_job_output_only_where_it_is_offered`
-`verified-by: bravebot_agent::tools::the_run_description_on_watching_names_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::tools::search_and_list_files_are_offered_read_only_where_vet_content_is_and_name_no_check_word`
-`verified-by: bravebot_agent::tools::the_job_output_read_argument_names_read_output_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::tools::the_read_file_description_names_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::the_write_file_reference_argument_names_spawn_processor_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::tools::the_edit_file_description_names_write_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::beside_is_read_off_the_list_the_turn_holds`
+`verified-by: bravebot_agent::tools::tests::job_looks::the_notes_that_start_a_job_name_job_output_only_where_it_is_offered`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_run_description_on_watching_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::search_and_list_files_are_offered_read_only_where_vet_content_is_and_name_no_check_word`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_job_output_read_argument_names_read_output_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_read_file_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_write_file_reference_argument_names_spawn_processor_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_edit_file_description_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::tests::untrusted_refusals::the_notebook_refusal_names_only_the_routes_the_turn_holds`
 `verified-by: bravebot_agent::tools::tests::untrusted_refusals::a_notebook_nobody_vouched_for_is_refused_in_the_helpers_words`
 `verified-by: bravebot_agent::tools::tests::untrusted_refusals::the_git_refusal_names_run_only_where_the_turn_holds_it`
 `verified-by: bravebot_agent::tools::tests::untrusted_refusals::an_untrusted_git_answer_is_refused_in_the_helpers_words`
-`verified-by: bravebot_agent::tools::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::a_checkout_refusal_names_read_git_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::a_checkout_refusal_names_read_git_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::workspace::a_checkout_refusal_names_the_reader_its_caller_gives`
 `verified-by: bravebot_agent::tools::tests::editing::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::tests::arguments::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`
 `verified-by: bravebot_agent::tools::tests::arguments::the_processor_and_vet_pointers_name_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::tests::arguments::the_lsp_refusal_names_search_and_read_file_only_where_the_list_holds_them`
-`verified-by: bravebot_agent::tools::the_files_beside_a_skill_name_read_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_files_beside_a_skill_name_read_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::git::the_note_for_a_file_past_the_size_cap_names_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::git::the_notes_for_a_file_past_the_diff_and_search_caps_name_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::git::the_not_compared_heading_names_run_only_where_the_turn_holds_it`
 `verified-by: bravebot_agent::replace::the_empty_pattern_refusal_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::cmdline::the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
-`verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::confine::tests::no_sentence_names_request_path_where_the_list_lacks_it`
+`verified-by: bravebot_agent::confine::tests::the_profile_line_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_quarantined_run_result_names_no_tool_the_definition_was_not_offered`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_names_no_tool_the_definition_was_not_offered`
 `verified-by: bravebot_agent::turn::the_notes_of_a_kept_job_name_job_output_only_where_the_turn_is_offered_it`
@@ -412,4 +413,4 @@ without naming a tool to fetch them with.
 `verified-by: bravebot_agent::turn::the_files_beside_a_named_skill_name_read_file_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::turn::a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::turn::delegate_end::the_apply_checkout_clause_names_the_tool_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::tools::the_checkout_notice_names_lsp_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_checkout_notice_names_lsp_only_where_the_list_holds_it`

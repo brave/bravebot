@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { launchMocked } from './drive-mock.mjs'
 import { COMPOSER_NAME } from './drive-support.mjs'
 
 const profile = mkdtempSync(join(tmpdir(), 'bravebot-turn-details-profile-'))
@@ -11,15 +11,10 @@ const directory = mkdtempSync(join(tmpdir(), 'bravebot-turn-details-project-'))
 const output = join(tmpdir(), 'bravebot-turn-details')
 mkdirSync(output, { recursive: true })
 // XWayland keeps animation frames flowing during Playwright's stability checks.
-const app = await electron.launch({ args: ['.', ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000 })
+// Tiling compositors may ignore BrowserWindow.setSize; the renderer viewport is fixed too.
+const { app, page, errors } = await launchMocked({ profile, x11: true, viewport: { width: 1350, height: 900 }, timeout: 8000 })
 try {
-  const page = await app.firstWindow()
-  // Tiling compositors may ignore BrowserWindow.setSize; fix the renderer viewport too.
-  await page.setViewportSize({ width: 1350, height: 900 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  page.setDefaultTimeout(8000)
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
   await app.evaluate(({ ipcMain, BrowserWindow }, directory) => {
     const rows = ['a', 'b'].map(id => ({ id, directory, project: 'Turn details fixture', branch: 'main', title: `Conversation ${id}`, updated: Math.floor(Date.now() / 1000), bytes: 100 }))
     const counts = { a: 1, b: 1 }

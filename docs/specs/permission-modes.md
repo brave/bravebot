@@ -362,7 +362,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
-`verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
+`verified-by: bravebot_agent::confine::tests::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
 `verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
 `verified-by: bravebot_agent::manifest::under_read_only_a_plan_that_writes_is_refused_and_one_that_writes_nothing_runs`
@@ -774,7 +774,7 @@ invented (MODE-7), so no mode answers it for the person.
 `verified-by: bravebot_agent::tools::tests::questions::the_same_plan_proposed_again_is_put_under_a_new_key`
 `verified-by: bravebot_agent::tools::tests::questions::a_plan_proposed_outside_plan_mode_asks_nobody`
 `verified-by: bravebot_agent::tools::tests::questions::a_plan_from_an_untrusted_context_is_refused_and_changes_no_mode`
-`verified-by: bravebot_agent::tools::propose_plan_takes_a_plan_and_a_reason_and_is_not_in_the_table`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::propose_plan_takes_a_plan_and_a_reason_and_is_not_in_the_table`
 `verified-by: bravebot_agent::tools::tests::questions::a_delegate_dispatching_propose_plan_asks_nobody_and_changes_no_mode`
 `verified-by: bravebot_agent::turn::propose_plan_is_offered_to_the_planner_in_plan_mode_only`
 `verified-by: bravebot_agent::plan_approval::no_answer_selects_bypassing_or_leaves_plan_mode_without_a_choice`

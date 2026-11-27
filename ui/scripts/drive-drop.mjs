@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync, truncateSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME, COMPOSER_SEND, SHOTS_DIR } from './drive-support.mjs'
+import { COMPOSER_NAME, COMPOSER_SEND, SHOTS_DIR, cancelDrag, dragFiles, picture } from './drive-support.mjs'
 
 // Each answer waits a moment, so a message can be queued behind a turn that is still running.
 const { service, rounds: requests } = await startModelService(async () => {
@@ -31,11 +31,7 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
 
   // A real picture, so the thumbnail has something to draw.
-  const pictureBytes = await app.evaluate(({ nativeImage }) => {
-    const size = 48, pixels = Buffer.alloc(size * size * 4)
-    for (let i = 0; i < size * size; i++) pixels.set([0xd0, 0x60, 0x20, 0xff], i * 4)
-    return nativeImage.createFromBitmap(pixels, { width: size, height: size }).toPNG().toString('base64')
-  })
+  const pictureBytes = await picture(app, 48, [0xd0, 0x60, 0x20, 0xff])
   const at = (name, bytes) => { const path = join(desktop, name); writeFileSync(path, bytes); return path }
   const png = at('shot.png', Buffer.from(pictureBytes, 'base64'))
   const second = at('second.png', Buffer.from(pictureBytes, 'base64'))
@@ -54,30 +50,13 @@ try {
   const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
   const chips = page.locator('[data-test="dropped-chip"]')
   const stop = page.locator('.composer .stop')
-  const cdp = await page.context().newCDPSession(page)
-  const point = async (selector) => {
-    const box = await page.locator(selector).first().boundingBox()
-    return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) }
-  }
-  const drag = async (files, selector, { drop = true } = {}) => {
-    const { x, y } = await point(selector)
-    const data = { items: [], files, dragOperationsMask: 1 }
-    await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data })
-    // Chromium lets go only onto a target whose answer to the last dragover allowed a drop, and that
-    // answer comes back from the renderer asynchronously. A person's drag sends a stream of them, so
-    // this sends a few, spaced out, before letting go.
-    for (let i = 0; i < 3; i++) {
-      await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data })
-      await page.waitForTimeout(100)
-    }
-    if (drop) await cdp.send('Input.dispatchDragEvent', { type: 'drop', x, y, data })
-  }
+  const drag = (files, selector, options) => dragFiles(page, files, { selector, ...options })
 
   // ---- dragging over the conversation shows where to let go -------------------------------------
   await drag([png], '.entries', { drop: false })
   await page.locator('[data-test="drop-target"]').waitFor()
   await page.screenshot({ path: join(output, 'drop-target.png') })
-  await cdp.send('Input.dispatchDragEvent', { type: 'dragCancel', x: 0, y: 0, data: { items: [], files: [png], dragOperationsMask: 1 } }).catch(() => undefined)
+  await cancelDrag(page, [png]).catch(() => undefined)
   await page.mouse.move(1, 1)
 
   // ---- one drop of several files, onto the conversation ---------------------------------------

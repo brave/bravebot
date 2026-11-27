@@ -15,10 +15,10 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
 import { agentInfo, oneModelList } from './acceptance-fixture.mjs'
+import { launchMocked, mockedSessionOpen } from './drive-mock.mjs'
 import { CASES, TRUST_CASE } from './shown-cases.mjs'
-import { APPROVE_BUTTON, COMPOSER_NAME, REJECT_BUTTON, readTrust as read } from './drive-support.mjs'
+import { APPROVE_BUTTON, COMPOSER_NAME, REJECT_BUTTON, cancelDrag, dragFiles, readTrust as read } from './drive-support.mjs'
 
 const output = process.env.SHOWN_OUTPUT || join(tmpdir(), 'bravebot-shown')
 mkdirSync(output, { recursive: true })
@@ -29,15 +29,9 @@ const SMALL = { width: 900, height: 560 }
 const WIDER = { width: 1000, height: 560 }
 
 // A window under another stops drawing frames, and the card measures nothing without them.
-const app = await electron.launch({ args: ['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000 })
-let page
+const { app, page, errors } = await launchMocked({ profile, args: ['--disable-backgrounding-occluded-windows'] })
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(10000)
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-
-  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id, info, models }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id, info, models, opened }) => {
     const now = Math.floor(Date.now() / 1000)
     const row = { id, title: 'Write the release notes', updated: now - 60, directory, project: 'sample-project', branch: 'main', bytes: 20 }
     const emit = (event, data) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session: 's-' + id })
@@ -52,10 +46,10 @@ try {
       if (method === 'agent.info') return { ok: info }
       if (method === 'session.list') return { ok: { sessions: [row] } }
       if (method === 'models.list') return { ok: models }
-      if (method === 'session.open') return { ok: { session: 's-' + id, model: 'sample/fast', record: { ...row, started: 1, turns: 1, tokens: 100, build: 'fixture' }, said: [{ kind: 'user', text: 'Write the release notes from the changelog.', prompt: 0 }], todos: { rows: [] }, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
+      if (method === 'session.open') return { ok: { ...opened, session: 's-' + id, record: { ...row, ...opened.record } } }
       return { ok: {} }
     })
-  }, { directory, id, info: agentInfo, models: oneModelList })
+  }, { directory, id, info: agentInfo, models: oneModelList, opened: mockedSessionOpen({ turns: 1, tokens: 100, said: [{ kind: 'user', text: 'Write the release notes from the changelog.', prompt: 0 }], todos: { rows: [] } }) })
   const emit = (event, data) => app.evaluate((_, v) => globalThis.shown.emit(v.event, v.data), { event, data })
   const replies = () => app.evaluate(() => globalThis.shown.replies)
   // A decided card folds to one row without the words its locator found it by, so the reply is what is waited on.
@@ -384,22 +378,14 @@ try {
     await toBottom(card)
     const dragged = join(directory, 'dragged.txt')
     writeFileSync(dragged, 'a file for the drag\n')
-    const cdp = await page.context().newCDPSession(page)
-    const data = { items: [], files: [dragged], dragOperationsMask: 1 }
-    const box = await page.locator('main.transcript').boundingBox()
-    const [x, y] = [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)]
-    await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data })
-    for (let i = 0; i < 3; i++) {
-      await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data })
-      await page.waitForTimeout(100)
-    }
+    await dragFiles(page, [dragged], { selector: 'main.transcript', drop: false })
     await page.locator('[data-test="drop-target"]').waitFor()
     await sweep(card)
     assert.ok(await page.locator('[data-test="drop-target"]').count(), 'confirm: the drag ended during the sweep, so the overlay tested nothing')
     const covered = await states(card)
     assert.ok(covered.filter((button) => button.approve).every((button) => button.closed), `confirm: read under the drop overlay, the approval opened: ${JSON.stringify(covered)}`)
     assert.match(await card.locator('.shown-left').innerText(), /^\d+ more lines? to read before approving$/, 'confirm: the note under the drop overlay')
-    await cdp.send('Input.dispatchDragEvent', { type: 'dragCancel', x: 0, y: 0, data })
+    await cancelDrag(page, [dragged])
     // A cancelled drag sends no dragleave, so the page is told the drag is over by a drop it made
     // up, which resets the overlay and which the preload ignores for being untrusted.
     await page.evaluate(() => document.querySelector('main.transcript').dispatchEvent(new DragEvent('drop', { dataTransfer: new DataTransfer(), bubbles: true, cancelable: true })))

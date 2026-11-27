@@ -32,7 +32,7 @@ The refusals say that nothing was recorded and do not repeat the address.
 `verified-by: bravebot_agent::tools::tests::setting_a_link::a_context_holding_private_content_still_records_a_typed_address_and_nothing_else`
 `verified-by: bravebot_agent::tools::tests::setting_a_link::an_address_on_another_tracker_is_recorded`
 `verified-by: bravebot_agent::tools::tests::setting_a_link::only_the_address_the_planner_names_is_recorded_from_a_line_with_several`
-`verified-by: bravebot_agent::tools::only_a_call_that_dispatches_as_set_link_is_handed_the_typed_lines`
+`verified-by: bravebot_agent::tools::tests::tool_names_at_dispatch::only_a_call_that_dispatches_as_set_link_is_handed_the_typed_lines`
 `verified-by: bravebot_agent::links::the_start_of_a_longer_address_is_not_found`
 `verified-by: bravebot_agent::links::a_whole_word_of_a_typed_line_is_found`
 `verified-by: bravebot_agent::links::an_address_wrapped_in_brackets_or_quotes_is_found`

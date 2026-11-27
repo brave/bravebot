@@ -2424,14 +2424,6 @@ impl Approvals {
                 .any(|(_, held, named)| held == plugin && named == alias)
     }
 
-    /// How many approvals are held for servers of the plugin called `plugin`.
-    pub fn plugin_count(&self, plugin: &str) -> usize {
-        self.plugins
-            .iter()
-            .filter(|(_, held, _)| held == plugin)
-            .count()
-    }
-
     /// Whether `alias` was approved as something other than `digest`, so the declaration it names
     /// now is one the person has not seen.
     pub fn changed(&self, alias: &str, digest: &Digest) -> bool {
@@ -4757,7 +4749,14 @@ mod tests {
             !renewed.approves_plugin(&digest),
             "the old answer was replaced"
         );
-        assert_eq!(renewed.plugin_count("demo"), 1);
+        assert_eq!(
+            renewed
+                .plugins
+                .iter()
+                .filter(|(_, held, _)| held == "demo")
+                .count(),
+            1
+        );
     }
 
     /// S32: withdrawing a plugin's server answers removes that plugin's lines and leaves every

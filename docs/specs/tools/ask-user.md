@@ -428,11 +428,11 @@ choice in how to send it, so asking how, with "send it automatically" among the 
 the request said. The description cannot say that no mode answers the question, because it names no
 mode, so it says what a question costs and which questions are left to ask.
 
-`verified-by: bravebot_agent::tools::ask_user_says_not_to_ask_what_the_request_states_or_whether_to_do_what_was_asked`
-`verified-by: bravebot_agent::tools::ask_user_leaves_a_question_for_a_choice_the_request_leaves_open`
-`verified-by: bravebot_agent::tools::ask_user_says_every_question_costs_the_users_attention_and_names_no_mode`
-`verified-by: bravebot_agent::tools::asking_is_described_as_a_last_resort_after_looking`
-`verified-by: bravebot_agent::tools::ask_user_says_that_looking_first_does_not_forfeit_the_question`
+`verified-by: bravebot_agent::tools::tests::asking_the_user::ask_user_says_not_to_ask_what_the_request_states_or_whether_to_do_what_was_asked`
+`verified-by: bravebot_agent::tools::tests::asking_the_user::ask_user_leaves_a_question_for_a_choice_the_request_leaves_open`
+`verified-by: bravebot_agent::tools::tests::asking_the_user::ask_user_says_every_question_costs_the_users_attention_and_names_no_mode`
+`verified-by: bravebot_agent::tools::tests::asking_the_user::asking_is_described_as_a_last_resort_after_looking`
+`verified-by: bravebot_agent::tools::tests::asking_the_user::ask_user_says_that_looking_first_does_not_forfeit_the_question`
 `verified-by: bravebot_agent::turn::the_request_carries_the_four_ask_user_sentences_where_a_task_is_to_send_an_email`
 
 ## Known costs

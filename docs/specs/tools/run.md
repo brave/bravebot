@@ -234,7 +234,7 @@ entries, that output is untrusted. This includes background output when polled. 
 check can quarantine output after an unrelated file decision; it never broadens command approval.
 
 `verified-by: bravebot_agent::turn::foreground_redirection_quarantines_live_reads_and_all_endings`
-`verified-by: bravebot_agent::tools::an_ended_job_revalidates_its_file_proof_before_releasing_output`
+`verified-by: bravebot_agent::tools::tests::job_looks::an_ended_job_revalidates_its_file_proof_before_releasing_output`
 
 <a id="RUN-5"></a>
 ### RUN-5: every run asks, unless every stage was vouched for, remembered, ruled on, proven, or held in a directory the person trusted
@@ -401,14 +401,14 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_core::policy::a_held_line_asks_when_no_root_is_known`
 `verified-by: bravebot_core::trust::a_map_allows_confined_lines_only_after_a_yes_that_said_so`
 `verified-by: bravebot_core::trust::the_answer_about_confined_lines_stays_with_its_directory_and_the_weaker_map_wins`
-`verified-by: bravebot_agent::confine::a_plain_line_is_held_only_where_every_condition_of_the_answer_holds`
-`verified-by: bravebot_agent::confine::one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line`
-`verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_is_not_held`
-`verified-by: bravebot_agent::confine::a_program_above_the_session_directory_in_its_checkout_is_not_held`
-`verified-by: bravebot_agent::confine::an_interpreter_handed_a_file_the_plan_could_write_is_not_held`
-`verified-by: bravebot_agent::confine::a_wrapper_or_interpreter_is_known_as_one_that_runs_what_it_is_given`
-`verified-by: bravebot_agent::confine::a_file_name_holding_a_separator_is_looked_up_as_one_name`
-`verified-by: bravebot_agent::confine::a_quoted_name_in_a_command_string_names_the_file_it_runs`
+`verified-by: bravebot_agent::confine::tests::a_plain_line_is_held_only_where_every_condition_of_the_answer_holds`
+`verified-by: bravebot_agent::confine::tests::one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line`
+`verified-by: bravebot_agent::confine::tests::a_program_the_plan_could_have_written_is_not_held`
+`verified-by: bravebot_agent::confine::tests::a_program_above_the_session_directory_in_its_checkout_is_not_held`
+`verified-by: bravebot_agent::confine::tests::an_interpreter_handed_a_file_the_plan_could_write_is_not_held`
+`verified-by: bravebot_agent::confine::tests::a_wrapper_or_interpreter_is_known_as_one_that_runs_what_it_is_given`
+`verified-by: bravebot_agent::confine::tests::a_file_name_holding_a_separator_is_looked_up_as_one_name`
+`verified-by: bravebot_agent::confine::tests::a_quoted_name_in_a_command_string_names_the_file_it_runs`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
 `verified-by: bravebot_agent::confined_lines::trust_of_the_directory_answers_a_held_line_and_nothing_else`
 `verified-by: bravebot_core::policy::the_answer_given_for_the_working_directory_does_not_cover_a_checkout`
@@ -658,8 +658,8 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_core::policy::vouching_does_not_follow_a_binary_onto_another_path_it_is_started_by`
 `verified-by: bravebot_core::policy::a_program_started_by_another_name_or_from_the_project_is_not_proven`
 `verified-by: bravebot_session::sessions::the_path_a_command_was_started_by_comes_back_with_it`
-`verified-by: bravebot_agent::confine::a_program_whose_path_is_not_text_is_started_by_its_own_bytes`
-`verified-by: bravebot_agent::confine::an_argument_that_is_not_text_is_carried_by_its_own_bytes`
+`verified-by: bravebot_agent::confine::tests::a_program_whose_path_is_not_text_is_started_by_its_own_bytes`
+`verified-by: bravebot_agent::confine::tests::an_argument_that_is_not_text_is_carried_by_its_own_bytes`
 `verified-by: bravebot_sandbox::linux::a_program_and_an_argument_that_are_not_text_reach_the_command_as_their_bytes`
 `verified-by: bravebot_sandbox::macos::a_program_and_an_argument_that_are_not_text_reach_the_program_as_their_bytes`
 `verified-by: bravebot_sandbox::macos::a_policy_path_that_is_not_text_is_refused_rather_than_granted_as_another`
@@ -1016,10 +1016,10 @@ where it also cannot tell success from failure.
 `verified-by: bravebot_agent::exec::a_stage_ended_by_sigpipe_behind_head_counts_as_closed_and_the_run_succeeded`
 `verified-by: bravebot_agent::exec::only_sigpipe_with_a_later_stage_that_exited_zero_is_forgiven`
 `verified-by: bravebot_agent::exec::a_background_stage_ended_by_sigpipe_behind_head_is_closed`
-`verified-by: bravebot_agent::tools::a_step_closed_by_the_next_is_not_a_failure_and_another_kill_beside_it_is`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_step_closed_by_the_next_is_not_a_failure_and_another_kill_beside_it_is`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown`
-`verified-by: bravebot_agent::tools::each_failed_step_is_named_by_its_place_and_how_it_ended`
-`verified-by: bravebot_agent::tools::a_signal_with_no_name_is_told_by_its_number_alone`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::each_failed_step_is_named_by_its_place_and_how_it_ended`
+`verified-by: bravebot_agent::tools::tests::failed_run_lines::a_signal_with_no_name_is_told_by_its_number_alone`
 `verified-by: bravebot_agent::turn::a_job_output_call_names_the_signal_that_ended_a_finished_job`
 `verified-by: bravebot_agent::exec::a_substitution_ended_by_a_signal_is_refused_naming_the_signal`
 
@@ -1148,8 +1148,8 @@ with its own three wordings ([VET-5](vet-content.md#VET-5)).
 `verified-by: bravebot_agent::turn::sentences::a_list_without_read_output_is_not_told_of_vouching_where_the_mode_answers_runs`
 `verified-by: bravebot_agent::turn::a_turn_left_without_read_output_is_not_told_of_vouching_where_permissions_are_bypassed`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_not_told_of_vouching_where_permissions_are_bypassed`
-`verified-by: bravebot_agent::tools::the_run_description_on_watching_names_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_run_description_on_watching_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
 
 <a id="RUN-15"></a>
 ### RUN-15: a pipeline may be left running, and what started it ends it
@@ -1275,7 +1275,7 @@ the job names the driver minted.
 `verified-by: bravebot_agent::exec::background_stages_are_chained_so_one_feeds_the_next`
 `verified-by: bravebot_agent::exec::dropping_a_background_pipeline_kills_it`
 `verified-by: bravebot_agent::exec::killing_a_background_job_ends_what_its_stage_started`
-`verified-by: bravebot_agent::tools::jobs_that_ignore_the_request_to_end_share_one_grace_at_the_turns_end`
+`verified-by: bravebot_agent::tools::tests::job_looks::jobs_that_ignore_the_request_to_end_share_one_grace_at_the_turns_end`
 `verified-by: bravebot_agent::exec::a_background_pipeline_with_missing_resolutions_does_not_start`
 `verified-by: bravebot_agent::turn::a_job_a_session_keeps_is_running_in_the_next_turn_and_ends_with_the_session`
 `verified-by: bravebot_agent::turn::a_delegate_handed_the_sessions_jobs_ends_what_it_starts_with_its_own_turn`
@@ -1298,13 +1298,13 @@ the job names the driver minted.
 `verified-by: bravebot_agent::turn::asking_about_a_job_that_does_not_exist_says_so`
 `verified-by: bravebot_agent::turn::a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own`
 `verified-by: bravebot_core::policy::the_delegates_a_run_started_are_the_numbers_it_minted`
-`verified-by: bravebot_agent::tools::a_look_counts_the_lines_the_job_has_handed_over_across_looks`
-`verified-by: bravebot_agent::tools::a_line_cut_between_two_looks_is_counted_once`
-`verified-by: bravebot_agent::tools::the_sentence_beside_a_look_is_the_same_words_for_every_count`
-`verified-by: bravebot_agent::tools::a_look_with_no_trailing_newline_counts_its_last_line_and_the_next_look_does_not_again`
-`verified-by: bravebot_agent::tools::standard_error_between_looks_does_not_shift_the_next_start`
-`verified-by: bravebot_agent::tools::the_notes_that_start_a_job_say_each_look_is_a_slice`
-`verified-by: bravebot_agent::tools::a_look_recorded_against_a_job_that_is_not_held_is_dropped`
+`verified-by: bravebot_agent::tools::tests::job_looks::a_look_counts_the_lines_the_job_has_handed_over_across_looks`
+`verified-by: bravebot_agent::tools::tests::job_looks::a_line_cut_between_two_looks_is_counted_once`
+`verified-by: bravebot_agent::tools::tests::job_looks::the_sentence_beside_a_look_is_the_same_words_for_every_count`
+`verified-by: bravebot_agent::tools::tests::job_looks::a_look_with_no_trailing_newline_counts_its_last_line_and_the_next_look_does_not_again`
+`verified-by: bravebot_agent::tools::tests::job_looks::standard_error_between_looks_does_not_shift_the_next_start`
+`verified-by: bravebot_agent::tools::tests::job_looks::the_notes_that_start_a_job_say_each_look_is_a_slice`
+`verified-by: bravebot_agent::tools::tests::job_looks::a_look_recorded_against_a_job_that_is_not_held_is_dropped`
 
 <a id="RUN-16"></a>
 ### RUN-16: what a background job printed keeps the label its plan was given
@@ -1497,15 +1497,15 @@ the window.
 `verified-by: bravebot_agent::turn::a_line_typed_during_a_delegates_job_output_wait_does_not_end_it`
 `verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
 `verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
-`verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
-`verified-by: bravebot_agent::tools::the_longest_wait_follows_the_cache_lifetime_chosen`
-`verified-by: bravebot_agent::tools::the_descriptions_quote_the_wait_in_force_and_its_cache_cost`
-`verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
-`verified-by: bravebot_agent::tools::until_exit_is_a_boolean_that_needs_a_wait_and_no_kill_beside_it`
-`verified-by: bravebot_agent::tools::job_output_offers_a_wait_that_output_does_not_end`
+`verified-by: bravebot_agent::tools::tests::job_output_waits::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
+`verified-by: bravebot_agent::tools::tests::job_output_waits::the_longest_wait_follows_the_cache_lifetime_chosen`
+`verified-by: bravebot_agent::tools::tests::job_output_waits::the_descriptions_quote_the_wait_in_force_and_its_cache_cost`
+`verified-by: bravebot_agent::tools::tests::job_output_waits::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
+`verified-by: bravebot_agent::tools::tests::job_output_waits::until_exit_is_a_boolean_that_needs_a_wait_and_no_kill_beside_it`
+`verified-by: bravebot_agent::tools::tests::job_output_waits::job_output_offers_a_wait_that_output_does_not_end`
 `verified-by: bravebot_agent::report::a_look_that_waited_is_described_with_both_the_window_and_the_warning`
 `verified-by: bravebot_agent::report::one_second_is_described_in_the_singular`
-`verified-by: bravebot_agent::tools::job_output_says_its_wait_stays_inside_the_turn`
+`verified-by: bravebot_agent::tools::tests::job_output_waits::job_output_says_its_wait_stays_inside_the_turn`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed`
 `verified-by: bravebot_agent::turn::a_look_at_a_job_says_it_is_a_slice_with_its_line_range_and_names_the_earlier_looks`
@@ -1519,7 +1519,7 @@ the window.
 `verified-by: bravebot_agent::report::a_stage_stopped_by_a_signal_is_not_described_as_running_or_as_out_of_time`
 `verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
 `verified-by: bravebot_agent::report::a_look_that_waited_says_nothing_is_watching_the_job_now`
-`verified-by: bravebot_agent::tools::job_output_says_its_wait_ends_with_the_turn`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::job_output_says_its_wait_ends_with_the_turn`
 
 <a id="RUN-18"></a>
 ### RUN-18: the tool's own description routes a request to watch something to one of two techniques
@@ -1580,9 +1580,9 @@ file changed, a session replied that a loop would be needed and made no tool cal
 worse answer than the single read this pair of clauses set out to correct, because the person was left
 without even the file. Hence the first look happens in the turn that was asked.
 
-`verified-by: bravebot_agent::tools::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`
-`verified-by: bravebot_agent::tools::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
-`verified-by: bravebot_agent::tools::a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_routes_a_watch_request_to_one_of_the_two_techniques`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_change`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request`
 
 <a id="RUN-19"></a>
 ### RUN-19: a prompt may record its answer past the session, and it stops only the asking
@@ -2136,7 +2136,7 @@ states and from nothing the output holds: a size at or below the cap, or none st
 `verified-by: bravebot_config::settings::a_settings_file_names_what_a_commands_output_may_spend`
 `verified-by: bravebot_config::settings::a_cap_of_zero_or_of_nonsense_leaves_the_built_in_one`
 `verified-by: bravebot_config::settings::the_nearest_layer_that_named_an_output_cap_wins`
-`verified-by: bravebot_agent::tools::output_is_cut_to_the_cap_it_was_given`
+`verified-by: bravebot_agent::tools::tests::output_caps::output_is_cut_to_the_cap_it_was_given`
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_run_is_cut_to`
 `verified-by: bravebot_agent::turn::a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it`
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked`
@@ -2301,7 +2301,7 @@ decide it.
 `fetch_url` and a server's tool take the same argument and release by `vet_content`'s path
 ([VET-6](vet-content.md#VET-6)).
 
-`verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
+`verified-by: bravebot_agent::tools::tests::run_arguments::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::a_job_look_that_asks_to_read_is_handed_its_output_where_nobody_is_asked`
 `verified-by: bravebot_agent::turn::a_job_look_that_asks_to_read_what_printed_nothing_makes_no_check`
@@ -2319,7 +2319,7 @@ decide it.
 `verified-by: bravebot_agent::turn::a_stop_during_the_check_on_an_ended_jobs_account_ends_the_turn_stopped`
 `verified-by: bravebot_agent::turn::a_look_after_a_released_account_of_an_ended_job_lists_its_reference`
 `verified-by: bravebot_agent::turn::a_checks_tokens_do_not_warn_a_delegate_whose_run_read_its_own_output`
-`verified-by: bravebot_agent::tools::the_job_output_read_argument_names_read_output_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_job_output_read_argument_names_read_output_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
@@ -2410,8 +2410,8 @@ stop being theirs because the work moved ([DELEGATE-1](../delegation.md)).
 `verified-by: bravebot_agent::exec::a_file_naming_both_holds_the_default_to_the_ceiling_it_named`
 `verified-by: bravebot_agent::exec::a_call_is_held_to_the_ceiling_in_force`
 `verified-by: bravebot_agent::exec::a_ceiling_too_large_to_count_in_seconds_does_not_collapse_every_deadline`
-`verified-by: bravebot_agent::tools::a_configured_deadline_is_what_a_call_runs_under`
-`verified-by: bravebot_agent::tools::the_run_tool_quotes_the_deadlines_in_force`
+`verified-by: bravebot_agent::tools::tests::run_arguments::a_configured_deadline_is_what_a_call_runs_under`
+`verified-by: bravebot_agent::tools::tests::run_arguments::the_run_tool_quotes_the_deadlines_in_force`
 `verified-by: bravebot_agent::turn::a_configured_deadline_is_what_a_run_that_names_none_is_stopped_at`
 `verified-by: bravebot_agent::turn::the_planner_is_told_the_deadlines_the_settings_named`
 `verified-by: bravebot_agent::turn::a_delegate_runs_under_the_deadlines_of_the_turn_that_spawned_it`
@@ -2563,8 +2563,8 @@ with nothing going.
 `verified-by: bravebot_agent::turn::a_look_that_stops_a_job_is_its_finish_under_its_name`
 `verified-by: bravebot_agent::turn::a_turn_ending_with_a_job_running_says_so_before_it_stops_it`
 `verified-by: bravebot_agent::turn::every_finish_found_between_rounds_is_reported_before_the_first_is_handed_over`
-`verified-by: bravebot_agent::tools::a_job_that_exited_by_itself_is_reported_by_its_codes_at_the_turns_end`
-`verified-by: bravebot_agent::tools::the_turns_end_does_not_wait_for_a_jobs_pipes_to_drain`
+`verified-by: bravebot_agent::tools::tests::job_looks::a_job_that_exited_by_itself_is_reported_by_its_codes_at_the_turns_end`
+`verified-by: bravebot_agent::tools::tests::job_looks::the_turns_end_does_not_wait_for_a_jobs_pipes_to_drain`
 `verified-by: bravebot_agent::shared::a_delegates_job_is_reported_as_its_own`
 `verified-by: bravebot_tui::remote_confirm::a_job_event_travels_without_an_answer`
 `verified-by: bravebot_tui::status::the_report_lists_every_job_and_how_it_came_to_run_in_the_background`
@@ -2636,8 +2636,8 @@ the wrong target, could only stop the whole turn and lose the rest of its work.
 `verified-by: bravebot_core::cancel::a_job_stop_reaches_the_turn_and_no_other_job`
 `verified-by: bravebot_core::policy::stopping_a_background_job_is_recorded_in_the_audit_trail`
 `verified-by: bravebot_agent::exec::a_wait_for_more_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn`
-`verified-by: bravebot_agent::tools::a_stop_no_round_read_is_reported_at_the_turns_end_as_the_persons`
-`verified-by: bravebot_agent::tools::a_job_that_exited_before_its_stop_was_read_is_reported_by_its_exit`
+`verified-by: bravebot_agent::tools::tests::job_looks::a_stop_no_round_read_is_reported_at_the_turns_end_as_the_persons`
+`verified-by: bravebot_agent::tools::tests::job_looks::a_job_that_exited_before_its_stop_was_read_is_reported_by_its_exit`
 `verified-by: bravebot_agent::turn::a_job_the_person_stops_is_killed_at_the_next_round_and_the_planner_told_why`
 `verified-by: bravebot_agent::report::a_stop_says_it_can_leave_files_behind_and_a_run_still_going_does_not`
 `verified-by: bravebot_agent::turn::a_look_at_a_job_the_person_stopped_stops_it_and_says_who_did`
@@ -2734,7 +2734,7 @@ a processor is for, so that sentence says that a summary or other text made from
 processor's to write. A program cannot summarise an output. It can only cut the output's own
 sentences into the body.
 
-`verified-by: bravebot_agent::tools::the_run_description_points_text_made_from_an_output_at_the_processor`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_points_text_made_from_an_output_at_the_processor`
 `verified-by: bravebot_agent::turn::a_summary_of_a_fetched_page_reaches_the_sending_program_on_its_standard_input`
 
 <a id="RUN-30"></a>
@@ -2781,7 +2781,7 @@ on ([TOOL-6](tool-surface.md#TOOL-6)). They tell the planner what to try. A test
 the request carries them and that a planner which follows them asks the person nothing, and cannot
 show that a model follows them.
 
-`verified-by: bravebot_agent::tools::the_run_description_says_to_probe_a_browsers_debugging_port_before_asking_about_quitting_it`
+`verified-by: bravebot_agent::tools::tests::run_and_read_file_text::the_run_description_says_to_probe_a_browsers_debugging_port_before_asking_about_quitting_it`
 `verified-by: bravebot_agent::turn::a_planner_that_follows_the_run_description_probes_the_debugging_port_and_makes_no_ask_user_call`
 
 ## Open questions

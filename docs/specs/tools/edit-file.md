@@ -108,7 +108,7 @@ is applied without a prompt ([TRUST-4](../trust-map.md#TRUST-4)), and that elsew
 approves each edit as a diff unless a permission rule or mode answers for them. It does not say
 every edit is put to the user.
 
-`verified-by: bravebot_agent::tools::the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces`
 `verified-by: bravebot_agent::turn::an_edit_is_reviewed_as_a_diff`
 `verified-by: bravebot_agent::turn::a_reviewed_edit_carries_both_sides_of_the_diff`
 `verified-by: bravebot_agent::turn::edits_far_apart_in_a_long_file_are_approved_as_two_changes`
@@ -299,8 +299,8 @@ what a read of the notebook shows.
 `verified-by: bravebot_agent::turn::an_insert_at_zero_puts_a_markdown_cell_first`
 `verified-by: bravebot_agent::turn::an_insert_after_a_cell_defaults_to_a_code_cell_placed_after_it`
 `verified-by: bravebot_agent::turn::a_delete_removes_only_the_numbered_cell`
-`verified-by: bravebot_agent::tools::a_malformed_cell_argument_is_refused`
-`verified-by: bravebot_agent::tools::a_well_formed_cell_argument_is_accepted_as_what_it_names`
+`verified-by: bravebot_agent::tools::tests::editing::a_malformed_cell_argument_is_refused`
+`verified-by: bravebot_agent::tools::tests::editing::a_well_formed_cell_argument_is_accepted_as_what_it_names`
 `verified-by: bravebot_agent::notebook::a_replace_changes_one_cell_and_keeps_every_other_byte`
 `verified-by: bravebot_agent::notebook::a_replaced_code_cell_loses_its_outputs_and_keeps_its_metadata_and_id`
 `verified-by: bravebot_agent::notebook::a_replace_with_the_same_source_changes_nothing`

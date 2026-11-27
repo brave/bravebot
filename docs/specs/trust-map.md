@@ -1075,7 +1075,7 @@ outlive the answer that allowed it. Closing one takes both halves for the same r
 `verified-by: bravebot_agent::workspace::a_second_path_that_passed_the_first_check_is_refused_under_the_lock`
 `verified-by: bravebot_agent::workspace::another_spelling_of_an_ancestor_of_the_root_is_refused_and_the_plain_ancestor_is_not`
 `verified-by: bravebot_agent::workspace::moving_the_root_onto_a_second_path_of_an_added_directory_closes_it`
-`verified-by: bravebot_agent::tools::a_request_path_grant_to_another_path_to_the_working_directory_is_refused`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::a_request_path_grant_to_another_path_to_the_working_directory_is_refused`
 `verified-by: bravebot_tui::app::tests::trust_paths::add_dir_refuses_another_path_to_the_working_directory`
 `verified-by: bravebot_tui::sessions::a_second_path_to_a_tree_is_reported_on_resume_and_not_reopened`
 `verified-by: bravebot_core::trust::withdrawing_trust_keeps_every_rule_that_lowers_a_path`
@@ -1761,8 +1761,8 @@ programs left and writes entries onto files that are not the session's. A `TEMP`
 itself assigns is the line's, as `TMPDIR` is. With no directory of its own the session keeps the
 account's temporary directory.
 
-`verified-by: bravebot_agent::confine::a_windows_stage_is_given_a_temporary_directory_of_the_sessions_and_not_the_accounts`
-`verified-by: bravebot_agent::confine::a_stage_is_told_the_sessions_temporary_directory_and_the_lines_own_wins`
+`verified-by: bravebot_agent::confine::tests::a_windows_stage_is_given_a_temporary_directory_of_the_sessions_and_not_the_accounts`
+`verified-by: bravebot_agent::confine::tests::a_stage_is_told_the_sessions_temporary_directory_and_the_lines_own_wins`
 `verified-by: bravebot_agent::confine::a_stage_is_given_the_sessions_temp_and_cannot_write_the_accounts`
 `verified-by: bravebot_agent::exec::a_stage_is_told_where_the_sessions_own_directory_is`
 `verified-by: bravebot_agent::exec::a_background_stage_is_told_where_the_sessions_own_directory_is`

@@ -73,7 +73,7 @@ moment the old contents could have been seen. `edit_file` says the same of its e
 a write inside a directory the user vouched for is applied without a prompt, and any other write
 is shown to the user for approval first.
 
-`verified-by: bravebot_agent::tools::the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces`
 `verified-by: bravebot_agent::turn::prompts::the_planner_is_told_when_a_write_is_shown_and_when_it_is_applied_unasked`
 `verified-by: bravebot_agent::turn::an_approved_write_is_recorded_as_endorsed`
 `verified-by: bravebot_agent::turn::a_refused_write_does_not_happen`
@@ -263,7 +263,7 @@ person's text and reach the planner as they do for any write.
 `verified-by: bravebot_agent::turn::a_value_the_file_already_held_is_written_down_once_however_often_it_is_edited`
 `verified-by: bravebot_agent::turn::a_credential_added_in_an_edit_is_refused`
 `verified-by: bravebot_agent::turn::a_write_from_a_reference_is_not_offered_an_edit_and_one_sent_anyway_writes_nothing`
-`verified-by: bravebot_agent::tools::an_edit_is_offered_only_for_the_planners_own_text_in_a_trusted_context`
+`verified-by: bravebot_agent::tools::tests::editing::an_edit_is_offered_only_for_the_planners_own_text_in_a_trusted_context`
 `verified-by: bravebot_agent::confirm::a_saved_body_refuses_and_carries_nothing_else`
 `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public`
 `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it`

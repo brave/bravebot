@@ -30,7 +30,7 @@ drawn for the person and recorded, and decides nothing ([TOOL-5](tool-surface.md
 read through the display release alone, so a call with none, or a blank one, is asked about like any
 other. A call without a path is answered with an error and asks nobody.
 
-`verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
 `verified-by: bravebot_agent::turn::a_request_for_a_path_is_asked_about_with_no_reason_a_blank_one_or_a_given_one`
 `verified-by: bravebot_agent::turn::a_request_for_a_path_that_names_none_or_a_flag_that_is_no_boolean_asks_nobody`
@@ -123,8 +123,8 @@ beside the session's directories is refused by the operating system, and the sen
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
 `verified-by: bravebot_agent::tools::tests::arguments::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
-`verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
-`verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::confine::tests::no_sentence_names_request_path_where_the_list_lacks_it`
+`verified-by: bravebot_agent::confine::tests::the_profile_line_names_request_path_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
 
 <a id="PATHREQ-6"></a>
@@ -133,7 +133,7 @@ beside the session's directories is refused by the operating system, and the sen
 The tool is in the set no delegate is offered, and a call naming it anyway is answered as an
 unknown name ([DELEGATE-12](../delegation.md#DELEGATE-12)).
 
-`verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
 `verified-by: bravebot_agent::tools::tests::confinement::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 
 <a id="PATHREQ-7"></a>
@@ -259,8 +259,8 @@ delegate, which has a workspace of its own under `isolation: checkout`.
 `verified-by: bravebot_agent::turn::the_reads_of_one_round_beside_the_session_hold_the_reach_the_mode_gives_them`
 `verified-by: bravebot_agent::turn::under_bypass_read_output_of_a_reference_to_a_listed_file_opens_nothing`
 `verified-by: bravebot_agent::turn::outside_bypass_a_reference_to_a_listed_file_beside_the_session_is_refused`
-`verified-by: bravebot_agent::tools::the_tools_that_open_a_reference_are_given_a_read_reach_only_under_bypass`
-`verified-by: bravebot_agent::tools::a_tool_outside_the_tables_called_after_one_holding_the_reach_gets_none`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::the_tools_that_open_a_reference_are_given_a_read_reach_only_under_bypass`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::a_tool_outside_the_tables_called_after_one_holding_the_reach_gets_none`
 `verified-by: bravebot_agent::turn::a_reference_made_under_bypass_is_refused_once_the_mode_leaves_bypass`
 `verified-by: bravebot_agent::turn::under_bypass_with_read_only_a_reference_to_a_listed_file_is_opened`
 `verified-by: bravebot_agent::turn::under_bypass_a_reference_to_a_link_into_the_credentials_is_refused`
@@ -274,10 +274,10 @@ delegate, which has a workspace of its own under `isolation: checkout`.
 `verified-by: bravebot_agent::workspace::a_path_a_request_would_be_refused_is_not_reached_under_bypass`
 `verified-by: bravebot_agent::workspace::a_new_entry_directly_in_the_home_directory_or_a_persistence_location_is_refused`
 `verified-by: bravebot_agent::workspace::the_persons_deny_lists_and_the_kept_inside_setting_hold_under_bypass`
-`verified-by: bravebot_agent::tools::every_tool_that_names_a_path_is_given_the_reach_or_says_why_not`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::every_tool_that_names_a_path_is_given_the_reach_or_says_why_not`
 `verified-by: bravebot_agent::tools::tests::reading_together::reads_taken_beforehand_hold_the_reach_the_mode_gives_them`
 `verified-by: bravebot_tui::status::the_report_lists_the_directories_bypass_took_the_file_tools_into`
-`verified-by: bravebot_agent::tools::request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_inside_the_project_is_not_opened`
 `verified-by: bravebot_agent::turn::under_bypass_a_file_or_a_kept_in_workspace_is_not_opened`

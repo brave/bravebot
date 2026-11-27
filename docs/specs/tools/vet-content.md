@@ -85,15 +85,15 @@ and not left to a task ([AGENT-1](spawn-agent.md#AGENT-1)).
 `verified-by: bravebot_core::policy::text_is_never_attached_as_a_picture`
 `verified-by: bravebot_agent::turn::a_model_listed_as_taking_no_pictures_is_never_asked_about_one`
 `verified-by: bravebot_agent::turn::a_picture_with_nowhere_to_copy_it_is_kept_back`
-`verified-by: bravebot_agent::tools::a_delegate_is_never_offered_a_way_to_promote_a_slot`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegate_is_never_offered_a_way_to_promote_a_slot`
 `verified-by: bravebot_agent::turn::a_delegate_naming_vet_content_is_told_there_is_no_such_tool`
 `verified-by: bravebot_agent::turn::a_reference_a_delegate_is_handed_does_not_send_it_to_vet_content`
 `verified-by: bravebot_core::policy::a_reference_names_vet_content_exactly_when_the_run_is_offered_it`
 `verified-by: bravebot_core::reference::a_reference_made_for_a_run_without_vetting_names_no_vet_content_and_keeps_the_other_moves`
 `verified-by: bravebot_agent::turn::an_unread_reference_to_a_picture_is_opened_as_a_picture`
 `verified-by: bravebot_agent::tools::tests::arguments::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`
-`verified-by: bravebot_agent::tools::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
 
 <a id="VET-3"></a>
 ### VET-3: the result is the bytes, or a refusal that says to work without them
@@ -362,8 +362,8 @@ never in a result, which a planner could aim at.
 
 `verified-by: bravebot_agent::turn::the_vet_content_description_says_who_answers_for_the_session`
 `verified-by: bravebot_agent::turn::the_vet_content_description_follows_a_mode_changed_between_requests`
-`verified-by: bravebot_agent::tools::a_delegate_is_never_offered_a_way_to_promote_a_slot`
-`verified-by: bravebot_agent::tools::who_answers_vet_content_is_stated_only_on_a_list_that_holds_it`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegate_is_never_offered_a_way_to_promote_a_slot`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::who_answers_vet_content_is_stated_only_on_a_list_that_holds_it`
 `verified-by: bravebot_browser::tools::no_description_says_a_person_answers_vet_content`
 
 <a id="VET-6"></a>
@@ -506,5 +506,5 @@ as outside the workspace ([PATHREQ-7](request-path.md#PATHREQ-7)). The reference
 `verified-by: bravebot_agent::turn::sentences::a_read_past_the_cap_says_the_cap_the_size_the_cost_and_that_it_is_released_whole`
 `verified-by: bravebot_agent::turn::sentences::a_read_of_unknown_size_says_it_is_too_long_and_states_no_figure`
 `verified-by: bravebot_agent::turn::sentences::a_fetch_past_the_cap_names_run_with_curl_only_where_run_is_on_the_list`
-`verified-by: bravebot_agent::tools::the_read_argument_of_fetch_url_and_web_search_states_the_cap`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_read_argument_of_fetch_url_and_web_search_states_the_cap`
 `verified-by: bravebot_agent::web_search::a_search_that_asks_to_read_past_the_output_cap_is_told_the_cap_the_size_and_the_cost`

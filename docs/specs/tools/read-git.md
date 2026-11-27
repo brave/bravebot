@@ -346,7 +346,7 @@ from the one git would, and the rules were held against files it did not read.
 `verified-by: bravebot_agent::git::the_per_worktree_configuration_is_held_to_the_same_rules`
 `verified-by: bravebot_agent::git::a_ref_in_another_worktrees_directory_is_never_read`
 `verified-by: bravebot_agent::git::a_loop_of_symbolic_refs_is_declined`
-`verified-by: bravebot_agent::tools::read_git_says_a_dot_git_that_is_a_file_is_declined`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::read_git_says_a_dot_git_that_is_a_file_is_declined`
 `verified-by: bravebot_agent::git::a_configuration_naming_programs_and_remotes_changes_no_answer_and_runs_nothing`
 
 <a id="GIT-9"></a>
@@ -382,7 +382,7 @@ though it were the whole draws conclusions from what is missing.
 `verified-by: bravebot_agent::git::a_large_file_added_deleted_or_binary_is_diffed_as_a_small_one_is`
 `verified-by: bravebot_agent::git::the_notes_for_a_file_past_the_diff_and_search_caps_name_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::git::a_read_out_of_time_says_so`
-`verified-by: bravebot_agent::tools::a_status_out_of_time_names_what_narrows_a_status_and_a_log_keeps_its_advice`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::a_status_out_of_time_names_what_narrows_a_status_and_a_log_keeps_its_advice`
 `verified-by: bravebot_agent::git::a_listing_or_a_diff_that_fills_the_answer_says_it_was_cut_only_when_more_was_left`
 `verified-by: bravebot_agent::turn::a_log_lists_twenty_commits_unasked_and_never_more_than_two_hundred`
 

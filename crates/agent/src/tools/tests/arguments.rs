@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use super::job_looks::{job_running_commands, wait_for_the_job_to_end};
 use super::*;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, RecordingSink};

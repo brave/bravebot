@@ -656,11 +656,6 @@ export interface UsagePingReport {
   reason: UsagePingReason | null
 }
 
-/** `usage_ping.set`: the report after the change, and whether the switch file was written. */
-export interface UsagePingSaved extends UsagePingReport {
-  saved: boolean
-}
-
 /** What keeps crash reports off where their switch cannot: `variable` is set for `environment`. */
 export interface CrashReportsReason {
   code: 'environment' | 'admin' | 'incognito'
@@ -672,11 +667,6 @@ export interface CrashReportsReport {
   enabled: boolean
   changeable: boolean
   reason: CrashReportsReason | null
-}
-
-/** `crash_reports.set`: the report after the change, and whether `crashReports` was written. */
-export interface CrashReportsSaved extends CrashReportsReport {
-  saved: boolean
 }
 
 /** A diagnostic log level, as `bravebot-rpc --log-level` and `diagnostic_log.set` take it. */

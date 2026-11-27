@@ -177,7 +177,7 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 `verified-by: bravebot_agent::turn::in_auto_a_line_that_only_connects_to_a_local_port_needs_no_loopback_and_one_that_asks_goes_to_the_person`
 `verified-by: bravebot_agent::turn::a_line_with_a_git_stage_is_not_put_to_the_classifier_and_goes_to_the_person`
 `verified-by: bravebot_agent::turn::a_stage_is_git_by_its_file_and_not_by_a_word_in_the_line`
-`verified-by: bravebot_agent::confine::only_a_step_whose_program_is_git_lifts_the_git_hold_back_for_the_classifier_gate`
+`verified-by: bravebot_agent::confine::tests::only_a_step_whose_program_is_git_lifts_the_git_hold_back_for_the_classifier_gate`
 
 <a id="AUTO-4"></a>
 ### AUTO-4: the classifier answers no question that a mode may not answer, and none whose bytes can derive from untrusted content

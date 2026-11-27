@@ -245,8 +245,8 @@ result decides only whether there was anything to advise about.
 `verified-by: bravebot_agent::workspace::a_rule_covering_nothing_the_include_selected_is_not_blamed_for_an_empty_search`
 `verified-by: bravebot_agent::turn::a_search_a_rule_emptied_names_the_rule_and_not_the_glob`
 `verified-by: bravebot_agent::workspace::an_include_may_use_a_brace_group`
-`verified-by: bravebot_agent::tools::a_glob_leaning_on_missing_syntax_is_named`
-`verified-by: bravebot_agent::tools::a_glob_the_matcher_can_read_is_left_alone`
+`verified-by: bravebot_agent::tools::tests::glob_arguments::a_glob_leaning_on_missing_syntax_is_named`
+`verified-by: bravebot_agent::tools::tests::glob_arguments::a_glob_the_matcher_can_read_is_left_alone`
 `verified-by: bravebot_agent::turn::an_empty_search_says_whether_the_glob_or_the_pattern_is_why`
 
 <a id="SEARCH-6"></a>
@@ -524,4 +524,4 @@ result that found matches says the answer may be partial. `repo_map` does not re
 
 `verified-by: bravebot_agent::tools::tests::editing::a_search_counts_the_links_it_did_not_enter_and_does_not_name_them`
 `verified-by: bravebot_agent::turn::sentences::links_not_entered_are_counted_beside_the_reference_and_no_note_means_none`
-`verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`
+`verified-by: bravebot_agent::tools::tests::glob_arguments::list_files_names_every_directory_its_walk_skips`

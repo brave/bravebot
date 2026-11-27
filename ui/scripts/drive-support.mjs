@@ -201,6 +201,68 @@ export async function showSessions(page) {
   await page.waitForTimeout(250)
 }
 
+// One CDP session per page. A drag is a stream of `Input.dispatchDragEvent` calls, and the
+// browser keeps its state for it per session, so the whole of a drag and a cancel of it go through
+// the same one.
+const dragSessions = new WeakMap()
+async function dragSession(page) {
+  let session = dragSessions.get(page)
+  if (!session) {
+    session = await page.context().newCDPSession(page)
+    dragSessions.set(page, session)
+  }
+  return session
+}
+
+/**
+ * Drag `files` (absolute paths) over the middle of the first element `selector` matches, by default
+ * the composer's text box, and let go there unless `drop` is false. It is a trusted drag driven
+ * through Chromium's input pipeline, so the preload sees the `drop` an operating system drag would
+ * make. Chromium lets go only onto a target whose answer to the last dragover allowed a drop, and
+ * that answer comes back from the renderer asynchronously, so three dragovers, spaced out, go
+ * before the drop, as a person's stream of them does.
+ */
+export async function dragFiles(page, files, { selector = COMPOSER_INPUT, drop = true } = {}) {
+  const cdp = await dragSession(page)
+  const box = await page.locator(selector).first().boundingBox()
+  const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2)
+  const data = { items: [], files, dragOperationsMask: 1 }
+  await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data })
+  for (let i = 0; i < 3; i++) {
+    await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data })
+    await page.waitForTimeout(100)
+  }
+  if (drop) await cdp.send('Input.dispatchDragEvent', { type: 'drop', x, y, data })
+}
+
+/** End a drag of `files` that `dragFiles` left open with `drop: false`. It rejects when the browser does. */
+export async function cancelDrag(page, files) {
+  const cdp = await dragSession(page)
+  await cdp.send('Input.dispatchDragEvent', { type: 'dragCancel', x: 0, y: 0, data: { items: [], files, dragOperationsMask: 1 } })
+}
+
+/**
+ * A solid picture of `size` pixels in `colour` (RGBA bytes), or noise, which no PNG encoder can
+ * shrink, as base64 PNG. The main process draws it.
+ */
+export const picture = (app, size, colour, noise = false) => app.evaluate(({ nativeImage }, [size, colour, noise]) => {
+  const pixels = Buffer.alloc(size * size * 4)
+  for (let i = 0; i < size * size; i++) {
+    pixels.set(noise ? [Math.random() * 256, Math.random() * 256, Math.random() * 256, 0xff] : colour, i * 4)
+  }
+  return nativeImage.createFromBitmap(pixels, { width: size, height: size }).toPNG().toString('base64')
+}, [size, colour, noise])
+
+/** Put a base64 PNG, and optionally text beside it, on the operating system's clipboard. */
+export const copyImage = (app, png, text) => app.evaluate(async ({ clipboard, ClipboardItem }, [png, text]) => {
+  const entry = { 'image/png': new Blob([Buffer.from(png, 'base64')], { type: 'image/png' }) }
+  if (text) entry['text/plain'] = text
+  await clipboard.write([new ClipboardItem(entry)])
+}, [png, text])
+
+/** The menu's Paste: `webContents.paste()` on the first window. */
+export const menuPaste = (app) => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.paste())
+
 /** Each driver sets its own wait after this returns. */
 export async function launchLive(start = launch) {
   const app = await start()

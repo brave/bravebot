@@ -322,7 +322,7 @@ take the tool from a turn the person was watching.
 they did not set, and the prompt of [WEBSEARCH-2](#WEBSEARCH-2) is for a person reading the query.
 
 `verified-by: bravebot_agent::web_search::a_delegate_naming_web_search_is_answered_as_an_unknown_name_and_sends_nothing`
-`verified-by: bravebot_agent::tools::no_kind_is_offered_a_tool_that_reaches_the_network`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::no_kind_is_offered_a_tool_that_reaches_the_network`
 
 <a id="WEBSEARCH-9"></a>
 ### WEBSEARCH-9: a search may ask for its results in the same result, and gets them where the mode or a check answers

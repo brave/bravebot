@@ -21,7 +21,7 @@ a confirmation. The latest accepted list is sent again after a compaction
 The plan is shown to the user and reaches nothing else. It is the one tool with no destination.
 The call holds no capability, decides no destination, and touches no path.
 
-`verified-by: bravebot_agent::tools::the_task_list_tool_offers_no_argument_that_names_a_destination`
+`verified-by: bravebot_agent::tools::tests::todos::the_task_list_tool_offers_no_argument_that_names_a_destination`
 `verified-by: bravebot_agent::tools::tests::todos::a_task_list_decides_no_destination_and_needs_no_capability`
 
 <a id="TODO-2"></a>
@@ -74,6 +74,6 @@ tasks are waiting, as counts only.
 `verified-by: bravebot_core::todo::a_waiting_task_is_open_and_not_struck`
 `verified-by: bravebot_core::todo::the_waiting_marker_differs_from_every_other_marker`
 `verified-by: bravebot_core::todo::a_waiting_task_is_counted_apart_from_done_and_cancelled`
-`verified-by: bravebot_agent::tools::the_todo_schema_offers_waiting_and_says_what_it_means`
+`verified-by: bravebot_agent::tools::tests::todos::the_todo_schema_offers_waiting_and_says_what_it_means`
 `verified-by: bravebot_agent::tools::tests::todos::an_accepted_list_carries_the_count_of_its_waiting_tasks_at_its_own_label`
 `verified-by: bravebot_ui_bridge::wire::a_waiting_task_crosses_as_waiting`

@@ -210,8 +210,8 @@ that is the TUI's shell mode and nothing else.
 Not behind a capability, not behind an approval prompt, not via MCP. If it could ask for one,
 everything above is void.
 
-`verified-by: bravebot_agent::tools::the_tool_set_is_reads_plus_gated_writes`
-`verified-by: bravebot_agent::tools::no_shell_is_offered`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::the_tool_set_is_reads_plus_gated_writes`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::no_shell_is_offered`
 `verified-by: bravebot_agent::turn::a_shell_the_planner_names_is_not_dispatched`
 
 <a id="SHELL-8"></a>

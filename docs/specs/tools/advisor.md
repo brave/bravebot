@@ -29,7 +29,7 @@ planner that already has the tool.
 `verified-by: bravebot_agent::turn::the_advisor_tool_is_offered_only_when_a_model_is_named`
 `verified-by: bravebot_agent::turn::a_session_without_an_advisor_cannot_call_one`
 `verified-by: bravebot_agent::tools::tests::scheduling::a_call_to_an_advisor_nobody_was_offered_is_answered_as_an_unknown_name`
-`verified-by: bravebot_agent::tools::every_tool_offered_asks_why_it_is_being_called`
+`verified-by: bravebot_agent::tools::tests::the_tool_table::every_tool_offered_asks_why_it_is_being_called`
 
 <a id="ADVISOR-2"></a>
 ### ADVISOR-2: the question is the only thing the planner decides
