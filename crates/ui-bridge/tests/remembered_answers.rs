@@ -83,11 +83,12 @@ impl Window {
     /// Send `prompt`, answer each series the planner puts with the next of `answers`, and return
     /// the turn's final event. A series with no answer left to give fails the test.
     fn turn(&mut self, session: &str, prompt: &str, answers: &[Value]) -> Event {
-        let params = message_ids::with_fresh(
-            json!({"session": session, "prompt": prompt, "model": "undo-test/test"}),
-        );
-        self.once_finished(|window| window.dispatch("turn.send", params.clone()))
-            .unwrap();
+        let params = json!({"session": session, "prompt": prompt, "model": "undo-test/test"});
+        // A retry is a new send, since the bridge answers an id it has seen with what it recorded.
+        self.once_finished(|window| {
+            window.dispatch("turn.send", message_ids::with_fresh(params.clone()))
+        })
+        .unwrap();
         let mut answers = answers.iter();
         let until = std::time::Instant::now() + endpoint::LIMIT;
         loop {

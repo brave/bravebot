@@ -71,11 +71,12 @@ impl Window {
 
     /// Send `prompt` and return the response, which names the turn and its target.
     fn send(&mut self, session: &str, prompt: &str) -> Value {
-        let params = message_ids::with_fresh(
-            json!({"session": session, "prompt": prompt, "model": "undo-test/test"}),
-        );
-        self.once_finished(|window| window.dispatch("turn.send", params.clone()))
-            .unwrap()
+        let params = json!({"session": session, "prompt": prompt, "model": "undo-test/test"});
+        // A retry is a new send, since the bridge answers an id it has seen with what it recorded.
+        self.once_finished(|window| {
+            window.dispatch("turn.send", message_ids::with_fresh(params.clone()))
+        })
+        .unwrap()
     }
 
     /// Approve every write until the running turn's final event, and return it.
@@ -289,11 +290,12 @@ fn a_rewind_while_a_turn_runs_is_refused() {
     );
     let (mut window, session) = Window::on(&project, &config.endpoint);
     window.turn(&session, "first");
-    let params = message_ids::with_fresh(
-        json!({"session": session, "prompt": "second", "model": "undo-test/test"}),
-    );
+    let params = json!({"session": session, "prompt": "second", "model": "undo-test/test"});
+    // A retry is a new send, since the bridge answers an id it has seen with what it recorded.
     window
-        .once_finished(|window| window.dispatch("turn.send", params.clone()))
+        .once_finished(|window| {
+            window.dispatch("turn.send", message_ids::with_fresh(params.clone()))
+        })
         .unwrap();
     // The second turn's request is held unanswered, so the turn is still running.
     for _ in 0..3 {
