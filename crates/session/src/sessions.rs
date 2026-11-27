@@ -1470,6 +1470,10 @@ impl StoredRewind {
                             (was, true)
                         }
                         true => (Before::NotKept, false),
+                        // A path that climbs lands on a file whose trust the spelling does not
+                        // name, so what it held is not put back (TRUST-2). A turn records the
+                        // path a write resolved to and never one with a `..`.
+                        false if climbs(&path) => (Before::NotKept, false),
                         false => (was, false),
                     };
                     Backup {
@@ -1512,6 +1516,13 @@ fn may_record_kept(state: Option<&Path>, path: &Path, held: &[u8]) -> bool {
             bravebot_agent::recall::fact::Fact::parse("", text).label
                 == bravebot_core::label::Confidentiality::Public
         })
+}
+
+/// Whether `path` has a `..` component, so that the file it names is not the one its spelling
+/// reads as.
+fn climbs(path: &Path) -> bool {
+    path.components()
+        .any(|step| matches!(step, std::path::Component::ParentDir))
 }
 
 /// Whether `path` is in the person's fact or rule stores under `state`, or is `<state>/AGENTS.md`:
@@ -8000,6 +8011,39 @@ mod tests {
             .remove("kept");
         let old: StoredRewind = serde_json::from_value(encoded).unwrap();
         assert!(!old.into_point(Path::new("/work")).backups[0].kept);
+    }
+
+    /// TRUST-2, RECALL-5. A backup that is not marked kept but names a path with a `..` is not
+    /// put back: the trust map keys a rule under the spelling, and the file the path lands on
+    /// would keep its trust. The same file named without the `..` goes back. The fault this
+    /// rejects is `root.join(path)` taken as it is for every backup that is not kept.
+    #[test]
+    fn a_backup_path_with_a_dotdot_read_from_a_record_is_not_put_back() {
+        for (path, back) in [
+            ("sub/../target.txt", false),
+            ("../outside.txt", false),
+            ("sub/deeper/../../target.txt", false),
+            ("sub/target.txt", true),
+            ("target.txt", true),
+        ] {
+            let stored = a_stored_point(vec![StoredBackup {
+                kept: false,
+                path: path.into(),
+                before: BYTES.into(),
+                bytes: Some("b3JpZ2luYWw=".into()),
+                captured_trust: Some(UNTRUSTED.into()),
+            }]);
+            let point = stored.into_point_with_state(Path::new("/work"), Some(Path::new("/state")));
+            assert_eq!(
+                point.backups[0].was,
+                if back {
+                    bravebot_agent::workspace::Before::Bytes(b"original".to_vec())
+                } else {
+                    bravebot_agent::workspace::Before::NotKept
+                },
+                "{path}"
+            );
+        }
     }
 
     /// RECALL-5. A backup marked as kept that names a path outside the fact and rule stores is not

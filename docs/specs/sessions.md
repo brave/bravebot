@@ -918,6 +918,9 @@ at each path, including inherited prefix rules and nested exceptions:
   after success. A failed attempt may have partly written the file and stays untrusted.
 - Removing a file that did not exist before the turn leaves explicit distrust at that path, so
   the removal does not grant trust to future contents.
+- A restored file is distrusted under the name its path lands on, not under a spelling with a
+  `..` in it ([TRUST-2](trust-map.md#TRUST-2)). A record read on resume does not carry a backup
+  whose path has a `..` as bytes to put back: what it held is not kept.
 
 Explicit distrust in either input survives the meet for untouched paths. An absent rule stays
 absent unless the other input explicitly distrusts the path; it never supplies a grant. This
@@ -930,6 +933,8 @@ on failure and cancellation too; a pre-turn fallback is not current state.
 `verified-by: bravebot_agent::rewind::restored_trusted_bytes_keep_an_undecided_target_decision`
 `verified-by: bravebot_agent::rewind::failed_restore_leaves_distrust_and_attempts_other_files`
 `verified-by: bravebot_agent::rewind::restore_distrusts_before_entering_the_effect`
+`verified-by: bravebot_agent::rewind::a_backup_path_with_a_dotdot_distrusts_the_file_it_lands_on`
+`verified-by: bravebot_session::sessions::a_backup_path_with_a_dotdot_read_from_a_record_is_not_put_back`
 
 What is kept is bounded twice over. A session remembers its last five turns, and what those turns
 wrote over is held to one budget between them rather than to one each: past it the turns furthest
