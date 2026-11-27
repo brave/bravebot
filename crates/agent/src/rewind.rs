@@ -213,11 +213,27 @@ fn restore_with(
             }
             continue;
         }
+        // Where a path that climbs lands, which is the file the bytes go into and so the file
+        // whose trust is lowered: a spelling with a `..` is another name for it and is not the key
+        // (TRUST-2). One that cannot be resolved cannot be keyed, so it is refused like one that
+        // would not write. A path without a `..` is the name the write resolved to and is keyed
+        // as it is, since a removal unlinks that name and not what it points at.
+        let landed = if climbs(&backup.path) {
+            match crate::workspace::destination(&backup.path) {
+                Some(landed) => landed,
+                None => {
+                    refused.push(backup.path);
+                    continue;
+                }
+            }
+        } else {
+            backup.path.clone()
+        };
         // The key the file's rules are held under, which on a drive letter is not the name the
         // host resolved it to.
-        let own = crate::workspace::key_of(&backup.path);
+        let own = crate::workspace::key_of(&landed);
         // Every name the file has, this one first (TRUST-4).
-        let (every, complete) = every_name(own, names(&backup.path));
+        let (every, complete) = every_name(own, names(&landed));
         for name in &every {
             current.distrust(name);
         }
@@ -252,6 +268,13 @@ fn restore_with(
     }
     crate::memory::after_rewind(home, current, &restored, folds);
     refused
+}
+
+/// Whether `path` has a `..` component, so the file it lands on is not the one its spelling reads
+/// as.
+fn climbs(path: &Path) -> bool {
+    path.components()
+        .any(|step| matches!(step, std::path::Component::ParentDir))
 }
 
 /// Put back a file of the person's fact or rule stores, which the workspace refuses to touch.
@@ -743,6 +766,52 @@ mod tests {
             );
             let _ = std::fs::remove_dir_all(home);
         }
+    }
+
+    /// TRUST-2. A backup whose path has a `..` is put back where it lands, and the file there is
+    /// the one distrusted, as it is for the same backup spelled without the `..`. The fault this
+    /// rejects is keying the map by the spelling, which distrusts a name no read of the file uses
+    /// and leaves the restored file trusted.
+    #[test]
+    fn a_backup_path_with_a_dotdot_distrusts_the_file_it_lands_on() {
+        let root = crate::testutil::scratch_dir("rewind-dotdot-root");
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("target.txt"), "replacement").unwrap();
+        std::fs::write(root.join("control.txt"), "replacement").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trusting = crate::workspace::trust_store(workspace.root());
+        trusting.trust(".");
+        for (spelling, path) in [
+            ("with a ..", workspace.root().join("sub/../target.txt")),
+            ("plain", workspace.root().join("target.txt")),
+        ] {
+            let mut current = trusting.clone();
+            let refused = restore(
+                &workspace,
+                vec![Backup {
+                    kept: false,
+                    path,
+                    was: Before::Bytes(b"original".to_vec()),
+                    captured_trust: Integrity::Untrusted,
+                }],
+                &mut current,
+                &trusting,
+                &mut None,
+                None,
+                &mut crate::confirm::ApproveWrites,
+            );
+            assert!(refused.is_empty(), "{spelling}: {refused:?}");
+            assert_eq!(
+                std::fs::read(root.join("target.txt")).unwrap(),
+                b"original",
+                "{spelling}"
+            );
+            assert!(!current.is_trusted("target.txt"), "{spelling}");
+            assert!(current.is_trusted("control.txt"), "{spelling}");
+            std::fs::write(root.join("target.txt"), "replacement").unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Unwinding from an entered effect cannot leave the earlier grant over changed bytes.
