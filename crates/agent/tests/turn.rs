@@ -61094,11 +61094,13 @@ fn an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run() {
         "the definition did not keep ask_user and drop run: {request}"
     );
     assert!(
-        request.contains("look with list_files, search or read_file instead"),
-        "ask_user was not written for a turn without run: {request}"
+        request.contains("look with read_file instead"),
+        "ask_user was not written for a turn holding only read_file: {request}"
     );
     assert!(
-        !request.contains("search, read_file or run instead"),
+        !request.contains("list_files")
+            && !request.contains("search or read_file")
+            && !request.contains("search, read_file or run instead"),
         "ask_user sent the turn to a tool it was not offered: {request}"
     );
 }
