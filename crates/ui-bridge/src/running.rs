@@ -633,6 +633,24 @@ impl Running {
     }
 }
 
+impl Running {
+    /// Refuse the question waiting where only a connection that is not a device may answer it and
+    /// its kind is not among `local`, the kinds such connections can still answer, with its number
+    /// published first as [`Running::refuse_pending_unless`] does. Any other question stays waiting.
+    pub fn refuse_local_only_unless(&self, local: &[crate::turn::Kind], refused: impl FnOnce(u64)) {
+        let Ok(mut pending) = self.pending.lock() else {
+            return;
+        };
+        let Some(question) =
+            pending.take_if(|question| question.local_only && !local.contains(&question.kind))
+        else {
+            return;
+        };
+        refused(question.id);
+        self.answers.send(question.kind.refusal()).ok();
+    }
+}
+
 /// From now on only `kinds` can be answered, and the question `running` waits on is refused if
 /// its kind is not among them, with its number published first as [`Running::refuse_pending_with`]
 /// does. A question whose kind is still answerable stays waiting.

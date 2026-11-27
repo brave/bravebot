@@ -744,6 +744,17 @@ impl Served {
         }
     }
 
+    /// The kinds a connection attached to `handle` that is held to no ceiling, and so is no device,
+    /// can answer there, as [`answered_locally`] decides each.
+    fn answerable_locally(&self, handle: &str) -> Vec<Kind> {
+        allowlist::answerable(&Answer::ALL)
+            .into_iter()
+            .filter(|kind| {
+                answered_locally(&self.output, &self.owners, &self.viewed, handle, *kind)
+            })
+            .collect()
+    }
+
     /// The connections attached to `handle`, none where they cannot be read.
     fn attached_to(&self, handle: &str) -> BTreeSet<u64> {
         self.owners
@@ -997,6 +1008,9 @@ impl Served {
                 let kinds = self.answerable_by(&handle, &rest);
                 self.bridge.narrow_answerable(&handle, &kinds);
                 self.settle_kinds(&handle, seen);
+                // A question a device is not offered waits only on a connection that is not one.
+                let local = self.answerable_locally(&handle);
+                self.bridge.refuse_local_only_unless(&handle, &local);
             }
         }
     }
@@ -2552,6 +2566,10 @@ mod tests {
             json!({"withheld": true})
         );
         assert_eq!(held_sent[0]["data"]["rows"][1]["id"], 2);
+        assert_eq!(
+            held_sent[0]["data"]["rows"][1]["data"],
+            json!({"withheld": true, "answer": "on the computer"})
+        );
         assert!(held_sent[0]["data"]["pending"].is_null());
 
         let free_sent = sent_so_far(&host.output, 2, &mut free);
@@ -2600,5 +2618,64 @@ mod tests {
 
         host.viewed.lock().unwrap().clear();
         assert!(!local(&host), "answered before the view started");
+    }
+
+    /// What a held connection was not offered in a session is forgotten once the session has closed,
+    /// with what it was stopped for and approved for there.
+    #[test]
+    fn a_closed_session_leaves_nothing_withheld_stopped_or_approved() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().canonicalize().unwrap();
+        let mut host = Served::new(Setup {
+            workspaces: vec![directory.clone()],
+            settings: None,
+            inspection: "refused",
+        });
+        let _free = a_reading_client(&host.output, 2, &Answer::ALL, None);
+        let _held = a_reading_client(
+            &host.output,
+            1,
+            &Answer::ALL,
+            Some(bravebot_listener::registry::narrow_ceiling("\"/work\"")),
+        );
+        let opened = host
+            .new_session(
+                2,
+                &Request {
+                    id: 1,
+                    method: "session.new".into(),
+                    params: json!({"directory": directory.display().to_string()}),
+                },
+            )
+            .unwrap();
+        let handle = opened["session"].as_str().unwrap().to_string();
+        {
+            let mut output = host.output.lock().unwrap();
+            let held = output.get_mut(&1).unwrap();
+            held.withheld.insert((handle.clone(), 5));
+            held.suspended.insert(handle.clone());
+            held.approved.insert(
+                handle.clone(),
+                bravebot_listener::registry::narrow_ceiling("x"),
+            );
+        }
+        host.close(2, &handle).unwrap();
+        host.responded();
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let left = {
+                let output = host.output.lock().unwrap();
+                let held = &output[&1];
+                !held.withheld.is_empty() || !held.suspended.is_empty() || !held.approved.is_empty()
+            };
+            if !left {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "the closed session was not forgotten"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

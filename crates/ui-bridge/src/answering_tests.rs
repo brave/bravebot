@@ -190,7 +190,8 @@ fn only_the_kinds_an_attached_client_can_answer_are_asked() {
         turn.waiting(),
         Some(Question {
             id: request,
-            kind: Kind::Write
+            kind: Kind::Write,
+            local_only: false,
         })
     );
     assert!(
@@ -888,6 +889,122 @@ fn an_untrusted_write_is_refused_unasked_where_only_a_device_could_answer_it() {
             assert!(!decision.approved(), "untrusted {untrusted}, local {local}");
             assert!(turn.nothing_was_published(), "the question was shown");
             assert_eq!(turn.ids.load(Ordering::SeqCst), 0);
+        }
+    }
+}
+
+/// A question a device is not offered, asked while a connection that is not a device could answer
+/// it, is refused when the last such connection goes, and the turn gets its no rather than waiting
+/// on a device that is not shown it. A question any connection may answer stays waiting then.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_question_only_a_local_connection_may_answer_is_refused_when_the_last_one_goes() {
+    use bravebot_agent::confirm::{Intent, WriteRequest};
+    use bravebot_agent::diff::Diff;
+    let a_write = |untrusted: bool| WriteRequest {
+        written_since_checkout: false,
+        path: "notes.md".to_string(),
+        contents: "new\n".to_string(),
+        existing: None,
+        diff: Diff::compute("", "new\n"),
+        intent: Intent::Create,
+        untrusted,
+        remark: None,
+        protected: false,
+        credentials: Vec::new(),
+        may_always: false,
+        record: None,
+        may_edit: false,
+    };
+    for untrusted in [true, false] {
+        let answerers = Answerers::default();
+        let mut turn = a_turn(&answerers);
+        let locally: crate::device_view::Locally = Arc::new(|_: &str, _: Kind| true);
+        let mut confirmer = turn
+            .confirmer
+            .take()
+            .expect("the confirmer is free")
+            .answered_locally_by(Some(locally));
+        let (done, decided) = mpsc::channel();
+        std::thread::spawn(move || {
+            done.send(confirmer.confirm_write(&a_write(untrusted))).ok();
+        });
+        let shown = turn.the_question_shown_as("confirm.request");
+        let request = shown["request"].as_u64().expect("a number");
+        let mut refused = None;
+        turn.running
+            .refuse_local_only_unless(&[Kind::Run], |id| refused = Some(id));
+        if untrusted {
+            assert_eq!(refused, Some(request));
+            let decision = decided
+                .recv_timeout(PATIENCE)
+                .expect("the write was left waiting");
+            assert!(!decision.approved());
+        } else {
+            assert_eq!(
+                refused, None,
+                "a question any connection may answer was refused"
+            );
+            assert!(turn.waiting().is_some());
+            assert!(
+                turn.running
+                    .answer(request, Reply::Write(Decision::Approve))
+            );
+            decided
+                .recv_timeout(PATIENCE)
+                .expect("the write was left waiting");
+        }
+    }
+}
+
+/// A fetch a redirect led to is not offered to a device, so where no connection that is not a
+/// device can answer, it is refused unasked; one the planner asked for is asked as before.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_redirected_fetch_is_refused_unasked_where_only_a_device_could_answer_it() {
+    for (redirected, asked) in [(Some("example.com".to_string()), false), (None, true)] {
+        let answerers = Answerers::default();
+        let mut turn = a_turn(&answerers);
+        let locally: crate::device_view::Locally = Arc::new(|_: &str, _: Kind| false);
+        let mut confirmer = turn
+            .confirmer
+            .take()
+            .expect("the confirmer is free")
+            .answered_locally_by(Some(locally));
+        let fetch = bravebot_agent::confirm::FetchRequest {
+            url: "https://elsewhere.example/".into(),
+            host: "elsewhere.example".into(),
+            redirected_from: redirected.clone(),
+            classified: Default::default(),
+        };
+        let (done, decided) = mpsc::channel();
+        std::thread::spawn(move || {
+            done.send(confirmer.confirm_fetch(&fetch)).ok();
+        });
+        if asked {
+            let shown = turn.the_question_shown_as("fetch.request");
+            let request = shown["request"].as_u64().expect("a number");
+            assert!(
+                turn.running
+                    .answer(request, Reply::Fetch(Decision::Approve))
+            );
+            assert_eq!(
+                decided
+                    .recv_timeout(PATIENCE)
+                    .expect("the fetch was left waiting"),
+                Decision::Approve
+            );
+        } else {
+            assert_eq!(
+                decided
+                    .recv_timeout(PATIENCE)
+                    .expect("the fetch was left waiting"),
+                Decision::Reject
+            );
+            assert!(
+                turn.nothing_was_published(),
+                "the redirected fetch was shown"
+            );
         }
     }
 }

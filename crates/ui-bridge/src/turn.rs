@@ -72,6 +72,9 @@ pub enum Kind {
 pub struct Question {
     pub id: u64,
     pub kind: Kind,
+    /// Whether only a connection that is not a device may answer it, because a device is not
+    /// offered it ([`crate::device_view`]).
+    pub local_only: bool,
 }
 
 /// What is waiting, if anything.
@@ -1006,6 +1009,19 @@ impl BridgeConfirmer {
         event: &'static str,
         data: impl FnOnce(u64) -> Value,
     ) -> Option<Reply> {
+        self.ask_where(kind, false, event, data)
+    }
+
+    /// As [`Self::ask`], for a question that only a connection that is not a device may answer
+    /// where `local_only` is set: it is refused unasked where none can, checked under the same lock
+    /// that registers it, and registered so that the loss of the last one refuses it.
+    fn ask_where(
+        &mut self,
+        kind: Kind,
+        local_only: bool,
+        event: &'static str,
+        data: impl FnOnce(u64) -> Value,
+    ) -> Option<Reply> {
         if self.cancel.is_cancelled() {
             return None;
         }
@@ -1022,10 +1038,22 @@ impl BridgeConfirmer {
         if !self.answerers.can_answer(kind) {
             return None;
         }
+        if local_only
+            && self
+                .locally
+                .as_ref()
+                .is_some_and(|locally| !locally(&self.session, kind))
+        {
+            return None;
+        }
         // From the session's own counter, so a later turn does not reuse a number. A counter with
         // nothing left refuses the question, like every other way of not asking.
         let id = next_question(&self.ids)?;
-        *pending = Some(Question { id, kind });
+        *pending = Some(Question {
+            id,
+            kind,
+            local_only,
+        });
         self.emitter
             .send(Event::new(event, &self.session, data(id)));
         // Answering cannot consume a question before its display is published.
@@ -1096,9 +1124,18 @@ impl Confirmer for BridgeConfirmer {
     /// consent to that one request: what comes back stays quarantined whatever is answered, and
     /// nothing is remembered, so the next fetch asks again (FETCH-1, FETCH-3).
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
-        let decision = self.yes_or_no(Kind::Fetch, "fetch.request", |id| {
-            wire::fetch_request(id, request)
-        });
+        // A redirect's address is a remote server's choice, which a device is not shown, so the
+        // question waits only on a connection that is not one.
+        let decision = self
+            .ask_where(
+                Kind::Fetch,
+                request.redirected_from.is_some(),
+                "fetch.request",
+                |id| wire::fetch_request(id, request),
+            )
+            .filter(|reply| reply.kind() == Kind::Fetch)
+            .and_then(|reply| reply.decision())
+            .unwrap_or(Decision::Reject);
         if decision == Decision::Approve {
             self.granted(crate::widening::Grant::Fetch);
         }
@@ -1240,17 +1277,10 @@ impl Confirmer for BridgeConfirmer {
     }
 
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
-        // A body nobody vouched for is not shown to a device, so the question waits only on a
-        // connection that is not one.
-        if request.untrusted
-            && self
-                .locally
-                .as_ref()
-                .is_some_and(|locally| !locally(&self.session, Kind::Write))
-        {
-            return WriteDecision::reject();
-        }
-        match self.ask(Kind::Write, "confirm.request", |id| {
+        // A body nobody vouched for, or an isolated processor's remark, is not shown to a device,
+        // so the question waits only on a connection that is not one.
+        let local_only = request.untrusted || request.remark.is_some();
+        match self.ask_where(Kind::Write, local_only, "confirm.request", |id| {
             wire::write_request(id, request)
         }) {
             Some(Reply::Write(decision)) => decision.into(),

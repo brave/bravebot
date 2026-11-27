@@ -1966,6 +1966,18 @@ impl Bridge {
         });
     }
 
+    /// The connections of the session that are not devices can now answer only `local`, so a
+    /// question only such a connection may answer, of a kind not among them, is refused and shown as
+    /// resolved. Any other question stays waiting.
+    pub fn refuse_local_only_unless(&mut self, handle: &str, local: &[Kind]) {
+        let Some(running) = self.open.get(handle).and_then(|open| open.running.as_ref()) else {
+            return;
+        };
+        running.refuse_local_only_unless(local, |request| {
+            self.emitter.view_answered(handle, request, Acting::Nobody);
+        });
+    }
+
     /// Give a session's view to a client that is joining it.
     ///
     /// `hand_over` adds the client to those the session's events go to, and runs between the end

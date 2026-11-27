@@ -51,6 +51,7 @@ fn waiting_on_a_write(request: u64) -> (Running, mpsc::Receiver<Reply>) {
     let pending: Pending = Arc::new(Mutex::new(Some(Question {
         id: request,
         kind: Kind::Write,
+        local_only: false,
     })));
     let running = Running {
         cancel: Cancel::new(),
@@ -695,6 +696,7 @@ fn a_hand_over_that_fails_refuses_a_question_only_the_joining_client_could_answe
                 *asked.lock().unwrap() = Some(Question {
                     id: 3,
                     kind: Kind::Write,
+                    local_only: false,
                 });
                 Err(Failure::bad_request("the owners cannot be written"))
             },
