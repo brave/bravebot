@@ -32,7 +32,9 @@ use crate::allowlist::{self, Answer};
 use crate::bridge::Bridge;
 use crate::protocol::{ErrorCode, Event, Failure, Request, Unreadable, response};
 use crate::turn::Kind;
+use crate::widening::{Grant, ScopeWatch, Widening};
 use crate::workers::Workers;
+use bravebot_core::scope::{Coverage, Scope};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
@@ -55,6 +57,15 @@ pub const MAX_LINE: usize = 8 * 1024 * 1024;
 struct Attached {
     /// The answers the person let this connection give.
     answers: Vec<Answer>,
+    /// The most a session this connection is shown may reach, which the person approved when the
+    /// device was paired, or `None` for a connection held to none. An approval never changes it.
+    ceiling: Option<Scope>,
+    /// The scope the person approved this connection for in each session that went past `ceiling`,
+    /// which holds it in that session alone, in place of the ceiling.
+    approved: HashMap<String, Scope>,
+    /// The sessions that went past what this connection is held to there, which it is not shown and
+    /// cannot act on until the person approves it again.
+    suspended: HashSet<String>,
     lines: mpsc::SyncSender<String>,
     /// The bytes of the lines in `lines` that the writer has not yet taken.
     waiting: Arc<AtomicUsize>,
@@ -63,12 +74,20 @@ struct Attached {
 }
 
 impl Attached {
+    /// What this connection is held to in the session `handle`: the scope the person approved it
+    /// for there, else its ceiling, or `None` for a connection held to none.
+    fn held_in(&self, handle: &str) -> Option<&Scope> {
+        let ceiling = self.ceiling.as_ref()?;
+        Some(self.approved.get(handle).unwrap_or(ceiling))
+    }
+
     /// Start writing `channel`'s queue, giving up on it in `output` when a write fails or waits
     /// more than `patience`.
     fn start(
         output: &Sink,
         connection: u64,
         answers: &[Answer],
+        ceiling: Option<Scope>,
         channel: &UnixStream,
         patience: Duration,
     ) -> io::Result<Self> {
@@ -96,6 +115,9 @@ impl Attached {
         });
         Ok(Self {
             answers: answers.to_vec(),
+            ceiling,
+            approved: HashMap::new(),
+            suspended: HashSet::new(),
             lines,
             waiting,
             channel: channel.try_clone()?,
@@ -104,6 +126,23 @@ impl Attached {
 }
 
 /// Every connection being served, by its number.
+///
+/// # The order locks are taken in
+///
+/// A thread that holds more than one of these takes them in this order, and holds none of the
+/// later ones while it takes an earlier one:
+///
+/// 1. [`Served`], the lock a request is answered under;
+/// 2. the bridge's emitter lock, which every event and snapshot is sent under;
+/// 3. a session's answerers, which [`crate::answerers::Answerers::set_by`] holds while it calls
+///    the scope watch;
+/// 4. [`Owners`], which [`on_widening`] holds from start to end and a join's hand-over takes;
+/// 5. [`Latest`], then this sink, then [`Viewed`], each taken under the owners and let go quickly.
+///
+/// A turn's thread never takes [`Served`], and the scope watch never takes the emitter, the
+/// answerers or a session's pending question. A new path that holds the owners, this sink, the
+/// latest scopes or the viewed sessions and then takes the emitter or the answerers would make a
+/// cycle, and so would one that calls the scope watch while it holds the emitter.
 type Sink = Arc<Mutex<HashMap<u64, Attached>>>;
 
 /// The connection whose request is being answered, or 0 for none. An event that names no session,
@@ -113,6 +152,34 @@ type Dispatching = Arc<AtomicU64>;
 /// The connections attached to each session, for routing its events. A session whose connections
 /// have all left keeps an empty set, so its events go to nobody.
 type Owners = Arc<Mutex<HashMap<String, BTreeSet<u64>>>>;
+
+/// The sessions whose view has started.
+type Viewed = Arc<Mutex<HashSet<String>>>;
+
+/// What the bridge last told the host of each session, by session.
+type Latest = Arc<Mutex<HashMap<String, Seen>>>;
+
+/// What the host was last told of a session: the scope it held, `None` where that could not be
+/// read, and each grant for one turn the person approved in it. The session's view goes on holding
+/// what a grant brought in after its turn ends, so the grants are kept for as long as the session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Seen {
+    scope: Option<Scope>,
+    granted: Vec<Grant>,
+}
+
+impl Seen {
+    /// What a connection that would join or be approved for the session is held to: the session's
+    /// scope `now` where it can be read, else the one the host was last told of, and the grants.
+    fn standing(seen: Option<Self>, now: Option<Scope>) -> Self {
+        let granted = seen
+            .as_ref()
+            .map(|seen| seen.granted.clone())
+            .unwrap_or_default();
+        let scope = now.or_else(|| seen.and_then(|seen| seen.scope));
+        Self { scope, granted }
+    }
+}
 
 /// Events of a session that go only to the connection whose request is being answered, where it
 /// is attached: the snapshot a joining or resyncing client asked for, and the startup question
@@ -204,7 +271,13 @@ struct Served {
     /// credits a send, answer or cancel to it (RPCVIEW-14).
     names: HashMap<u64, String>,
     /// Sessions whose view has started, from which their attached connections can answer.
-    viewed: HashSet<String>,
+    viewed: Viewed,
+    /// What the host was last told of each session, for a join or an approval made while a turn
+    /// holds the session's state, and the grants for one turn approved in it.
+    latest: Latest,
+    /// How many times a connection was stopped, so kinds worked out on this thread before a stop
+    /// made on a turn's thread can be found and worked out again ([`Served::settle_kinds`]).
+    stops: Arc<AtomicU64>,
 }
 
 impl Host {
@@ -230,12 +303,32 @@ impl Host {
     ///
     /// Sessions the client was attached to stay open when this returns, with their work going on.
     pub fn serve(&self, channel: UnixStream, name: &str, answers: &[Answer]) -> io::Result<Ended> {
+        self.serve_held_to(channel, name, answers, None)
+    }
+
+    /// As [`Host::serve`], with the connection held to `ceiling`: a session it is attached to that
+    /// comes to reach more than the ceiling covers is not shown to it, and cannot be acted on by it,
+    /// until the person approves it again ([`Host::approve`]). No client the host starts is held to
+    /// a ceiling; this is the path a paired device's connection takes.
+    pub fn serve_held_to(
+        &self,
+        channel: UnixStream,
+        name: &str,
+        answers: &[Answer],
+        ceiling: Option<Scope>,
+    ) -> io::Result<Ended> {
         let connection = {
             let mut served = self.lock()?;
             served.connections += 1;
             let connection = served.connections;
-            let attached =
-                Attached::start(&self.output, connection, answers, &channel, WRITE_PATIENCE)?;
+            let attached = Attached::start(
+                &self.output,
+                connection,
+                answers,
+                ceiling,
+                &channel,
+                WRITE_PATIENCE,
+            )?;
             served.answers.insert(connection, answers.to_vec());
             served.names.insert(connection, name.to_string());
             if let Ok(mut output) = self.output.lock() {
@@ -286,6 +379,29 @@ impl Host {
         Ok(ended)
     }
 
+    /// The person approved, on the host, the session `handle` as it stands for the connection
+    /// numbered `connection`, which it went past the ceiling of. The connection's ceiling becomes
+    /// what the session holds now, it is sent the session's view again, and it can act on it and
+    /// answer in it as before.
+    pub fn approve(&self, connection: u64, handle: &str) -> Result<(), Failure> {
+        self.lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "the host serves no more"))?
+            .approve(connection, handle)
+    }
+
+    /// The scope a new session in `directory` would hold now, which is what a device paired on it
+    /// is approved for. `None` where it cannot be read.
+    pub fn scope_of_a_new_session(
+        &self,
+        directory: &std::path::Path,
+    ) -> Option<bravebot_core::scope::Scope> {
+        self.served
+            .lock()
+            .ok()?
+            .bridge
+            .scope_of_a_new_session(directory, &bravebot_agent::servers::Machine::current())
+    }
+
     /// Close every session and wait up to `limit` for the threads working for them, so a turn
     /// that is still writing its record is not cut off by the process ending. Returns whether
     /// they had all ended.
@@ -323,9 +439,27 @@ impl Served {
             Arc::clone(&owners),
             Arc::clone(&dispatching),
         );
+        let viewed: Viewed = Arc::new(Mutex::new(HashSet::new()));
+        let latest: Latest = Arc::new(Mutex::new(HashMap::new()));
+        let stops = Arc::new(AtomicU64::new(0));
+        let watch: ScopeWatch = {
+            let (output, owners, viewed, latest, stops) = (
+                Arc::clone(&output),
+                Arc::clone(&owners),
+                Arc::clone(&viewed),
+                Arc::clone(&latest),
+                Arc::clone(&stops),
+            );
+            Arc::new(move |handle: &str, widening: &Widening| {
+                on_widening(&output, &owners, &viewed, &latest, &stops, handle, widening)
+            })
+        };
         let bridge = Bridge::new(Box::new(move |event: Event| {
             write_event(&events, &routes, &asking, &for_a_client(event));
         }))
+        // A connection held to a ceiling is stopped before a session it is attached to sends
+        // anything past it.
+        .with_scope_watch(watch)
         .with_settings(setup.settings)
         // Nobody can answer a session's questions until its client has the view of it.
         .refusing_questions_until_set()
@@ -353,7 +487,9 @@ impl Served {
             after_response: Vec::new(),
             answers: HashMap::new(),
             names: HashMap::new(),
-            viewed: HashSet::new(),
+            viewed,
+            latest,
+            stops,
         }
     }
 
@@ -373,6 +509,7 @@ impl Served {
         let handle = request.optional_string("session");
         if let Some(handle) = &handle {
             self.may_act(connection, handle, operation.method)?;
+            self.not_stopped(connection, handle)?;
         }
         match operation.method {
             "session.new" => self.new_session(connection, request),
@@ -385,9 +522,13 @@ impl Served {
                 // The view is the session's state and the subscription, so from here the session's
                 // attached clients can answer.
                 if let Some(handle) = &handle {
-                    self.viewed.insert(handle.clone());
+                    if let Ok(mut viewed) = self.viewed.lock() {
+                        viewed.insert(handle.clone());
+                    }
+                    let seen = self.stops.load(Ordering::SeqCst);
                     let kinds = self.answerable_by(handle, &self.attached_to(handle));
                     self.bridge.set_answerable(handle, &kinds)?;
+                    self.settle_kinds(handle, seen);
                 }
                 Ok(started)
             }
@@ -434,6 +575,133 @@ impl Served {
         }
     }
 
+    /// Refuse a request about `handle` from a connection stopped for it, which sees and does
+    /// nothing in it until the person approves it again.
+    fn not_stopped(&self, connection: u64, handle: &str) -> Result<(), Failure> {
+        let stopped = self.output.lock().map_or(true, |output| {
+            output
+                .get(&connection)
+                .is_some_and(|attached| attached.suspended.contains(handle))
+        });
+        if stopped {
+            return Err(Failure::new(
+                ErrorCode::NotAllowed,
+                "that session reaches more than this connection was approved for; the person approves it again on the host",
+            ));
+        }
+        Ok(())
+    }
+
+    /// What a connection that joins or is approved for `handle` is held to: the session's scope now
+    /// where a turn does not hold its state, else the one the host was last told of, which is `None`
+    /// where that could not be read, and the grants for one turn approved in it.
+    fn standing_of(&self, handle: &str) -> Seen {
+        let now = self
+            .bridge
+            .scope_of_session(handle, &bravebot_agent::servers::Machine::current());
+        let seen = self
+            .latest
+            .lock()
+            .ok()
+            .and_then(|latest| latest.get(handle).cloned());
+        Seen::standing(seen, now)
+    }
+
+    /// The ceiling `connection` is held to, or `None` for one held to none.
+    fn ceiling_of(&self, connection: u64) -> Option<Scope> {
+        self.output.lock().ok()?.get(&connection)?.ceiling.clone()
+    }
+
+    /// What `connection` is held to in the session `handle`: the scope the person approved it for
+    /// there, else its ceiling, or `None` for one held to none.
+    fn held_in(&self, connection: u64, handle: &str) -> Option<Scope> {
+        self.output
+            .lock()
+            .ok()?
+            .get(&connection)?
+            .held_in(handle)
+            .cloned()
+    }
+
+    /// Lift the stop on `connection` for `handle`, which the person approved on the host. The
+    /// connection is held in that session alone to the session's scope now, or the one the host was
+    /// last told of while a turn holds the session's state; its ceiling, which holds it in every
+    /// other session, does not change. The connection is sent the session's view again and counts again
+    /// among those that can answer in it.
+    fn approve(&mut self, connection: u64, handle: &str) -> Result<(), Failure> {
+        let scope = self.standing_of(handle).scope.ok_or_else(|| {
+            Failure::new(
+                ErrorCode::NotAllowed,
+                "the session's scope cannot be read now; approve it again when its turn ends",
+            )
+        })?;
+        let stopped = self.output.lock().is_ok_and(|output| {
+            output
+                .get(&connection)
+                .is_some_and(|attached| attached.suspended.contains(handle))
+        });
+        if !stopped {
+            return Err(Failure::bad_request(
+                "that connection is not stopped for that session",
+            ));
+        }
+        let output = Arc::clone(&self.output);
+        let session = handle.to_string();
+        let lift = move || {
+            let mut output = output
+                .lock()
+                .map_err(|_| Failure::new(ErrorCode::Internal, "the host serves no more"))?;
+            let attached = output.get_mut(&connection).ok_or_else(|| {
+                Failure::new(ErrorCode::NotAllowed, "no connection has that number")
+            })?;
+            attached.suspended.remove(&session);
+            attached.approved.insert(session, scope);
+            Ok(())
+        };
+        if !self
+            .viewed
+            .lock()
+            .is_ok_and(|viewed| viewed.contains(handle))
+        {
+            return lift();
+        }
+        let seen = self.stops.load(Ordering::SeqCst);
+        let attached = self.attached_to(handle);
+        let before = self.answerable_by(handle, &attached);
+        let mut kinds = before.clone();
+        if let Some(answers) = self.answers.get(&connection) {
+            for kind in allowlist::answerable(answers) {
+                if !kinds.contains(&kind) {
+                    kinds.push(kind);
+                }
+            }
+        }
+        // The stop is lifted where a join is handed over, between the end of what the connection was
+        // not sent and the snapshot, so no event of the session reaches it before its view. The
+        // snapshot is addressed to the connection being answered, which is this one.
+        self.dispatching.store(connection, Ordering::SeqCst);
+        let rejoined = self.bridge.attach_view(handle, &kinds, &before, lift);
+        self.dispatching.store(0, Ordering::SeqCst);
+        self.settle_kinds(handle, seen);
+        rejoined.map(|_| ())
+    }
+
+    /// Kinds this thread worked out for `handle` and set may name those of a connection a turn's
+    /// thread stopped after they were worked out and before they were set, which would put a
+    /// question to nobody who can answer it. Where a stop was counted since `seen`, work them out
+    /// again and narrow to them, until no stop comes between.
+    fn settle_kinds(&mut self, handle: &str, mut seen: u64) {
+        loop {
+            let now = self.stops.load(Ordering::SeqCst);
+            if now == seen {
+                return;
+            }
+            seen = now;
+            let kinds = self.answerable_by(handle, &self.attached_to(handle));
+            self.bridge.narrow_answerable(handle, &kinds);
+        }
+    }
+
     /// The connections attached to `handle`, none where they cannot be read.
     fn attached_to(&self, handle: &str) -> BTreeSet<u64> {
         self.owners
@@ -447,11 +715,32 @@ impl Served {
     /// kind one of them may answer, once the session's view has started, and none before.
     fn answerable_by(&self, handle: &str, connections: &BTreeSet<u64>) -> Vec<Kind> {
         let mut kinds = Vec::new();
-        if !self.viewed.contains(handle) {
+        if !self
+            .viewed
+            .lock()
+            .is_ok_and(|viewed| viewed.contains(handle))
+        {
             return kinds;
         }
+        // A connection stopped for the session answers nothing in it.
+        let stopped: HashSet<u64> = self
+            .output
+            .lock()
+            .map(|output| {
+                connections
+                    .iter()
+                    .copied()
+                    .filter(|connection| {
+                        output
+                            .get(connection)
+                            .is_some_and(|attached| attached.suspended.contains(handle))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         for answers in connections
             .iter()
+            .filter(|connection| !stopped.contains(connection))
             .filter_map(|connection| self.answers.get(connection))
         {
             for kind in allowlist::answerable(answers) {
@@ -487,6 +776,19 @@ impl Served {
                 "that workspace's name is not text, which the bridge cannot be given",
             ));
         };
+        if self.ceiling_of(connection).is_some() {
+            let scope = self.bridge.scope_of_a_new_session(
+                std::path::Path::new(directory),
+                &bravebot_agent::servers::Machine::current(),
+            );
+            within_ceiling(
+                self.ceiling_of(connection),
+                Seen {
+                    scope,
+                    granted: Vec::new(),
+                },
+            )?;
+        }
         let checked = Request {
             id: request.id,
             method: request.method.clone(),
@@ -508,22 +810,35 @@ impl Served {
 
     /// Attach `connection` to a session beside any connections already attached.
     fn attach(&mut self, connection: u64, handle: &str) -> Result<Value, Failure> {
+        if self.ceiling_of(connection).is_some() {
+            within_ceiling(self.held_in(connection, handle), self.standing_of(handle))?;
+        }
+        let seen = self.stops.load(Ordering::SeqCst);
         let attached = self.attached_to(handle);
         let before = self.answerable_by(handle, &attached);
         let mut joined = attached;
         joined.insert(connection);
         let kinds = self.answerable_by(handle, &joined);
-        let owners = Arc::clone(&self.owners);
+        let (owners, output, latest) = (
+            Arc::clone(&self.owners),
+            Arc::clone(&self.output),
+            Arc::clone(&self.latest),
+        );
         let session = handle.to_string();
-        self.bridge.attach_view(handle, &kinds, &before, move || {
+        let joined = self.bridge.attach_view(handle, &kinds, &before, move || {
             // Not joined if the owners cannot be written: the client would be told it is attached
             // to a session whose events do not reach it.
             let mut owners = owners
                 .lock()
                 .map_err(|_| Failure::bad_request("the host cannot change who is attached"))?;
+            // Checked again under the lock a grant is recorded under, for a grant approved since the
+            // join was first checked.
+            joins_past_a_grant(&output, &latest, &session, connection)?;
             owners.entry(session).or_default().insert(connection);
             Ok(())
-        })
+        });
+        self.settle_kinds(handle, seen);
+        joined
     }
 
     fn close(&mut self, connection: u64, handle: &str) -> Result<Value, Failure> {
@@ -539,7 +854,7 @@ impl Served {
             *closing = Some(Arc::clone(&workers));
         }
         let (output, owners) = (Arc::clone(&self.output), Arc::clone(&self.owners));
-        let dispatching = Arc::clone(&self.dispatching);
+        let (dispatching, latest) = (Arc::clone(&self.dispatching), Arc::clone(&self.latest));
         let session = handle.to_string();
         let (answered, go) = mpsc::channel();
         self.after_response.push(answered);
@@ -551,8 +866,22 @@ impl Served {
                 &output,
                 &owners,
                 &dispatching,
-                &Event::new("session.closed", session, json!({"saved": "unknown"})),
+                &Event::new(
+                    "session.closed",
+                    session.clone(),
+                    json!({"saved": "unknown"}),
+                ),
             );
+            // A closed session is past nobody's ceiling: what the host held about it goes.
+            if let Ok(mut output) = output.lock() {
+                for attached in output.values_mut() {
+                    attached.suspended.remove(&session);
+                    attached.approved.remove(&session);
+                }
+            }
+            if let Ok(mut latest) = latest.lock() {
+                latest.remove(&session);
+            }
         });
         Ok(json!({"state": "closing"}))
     }
@@ -621,8 +950,10 @@ impl Served {
         };
         for (handle, rest) in left {
             if self.sessions.get(&handle).is_some_and(Option::is_none) {
+                let seen = self.stops.load(Ordering::SeqCst);
                 let kinds = self.answerable_by(&handle, &rest);
                 self.bridge.narrow_answerable(&handle, &kinds);
+                self.settle_kinds(&handle, seen);
             }
         }
     }
@@ -685,11 +1016,173 @@ fn write_event(output: &Sink, owners: &Owners, dispatching: &AtomicU64, event: &
     let line = event.to_value().to_string();
     for connection in connections {
         if output.get(&connection).is_some_and(|attached| {
-            event.name != "trust.request" || attached.answers.contains(&Answer::Trust)
+            (event.name != "trust.request" || attached.answers.contains(&Answer::Trust))
+                && !stopped_for(attached, event)
         }) {
             queue(&mut output, connection, line.clone());
         }
     }
+}
+
+/// Refuse to let a connection held to a ceiling open or join a session whose scope the ceiling
+/// does not cover, whose scope cannot be read, or in which a grant for one turn was approved.
+/// Refused before anything of the session reaches it, so it is never shown a session past its
+/// ceiling.
+fn within_ceiling(held: Option<Scope>, standing: Seen) -> Result<(), Failure> {
+    let Some(ceiling) = held else {
+        return Ok(());
+    };
+    let mut reasons = past(&ceiling, &Widening::TurnStarting(standing.scope)).unwrap_or_default();
+    for grant in standing.granted {
+        reasons.extend(past(&ceiling, &Widening::Granted(grant)).unwrap_or_default());
+    }
+    match reasons.is_empty() {
+        true => Ok(()),
+        false => Err(Failure::new(
+            ErrorCode::NotAllowed,
+            format!(
+                "that session reaches more than this connection was approved for: {}",
+                reasons.join(", ")
+            ),
+        )),
+    }
+}
+
+/// Whether `attached` is stopped for the session `event` belongs to. A session that closes is
+/// still said to have closed, which shows nothing of it.
+fn stopped_for(attached: &Attached, event: &Event) -> bool {
+    event.name != "session.closed"
+        && event
+            .session
+            .as_deref()
+            .is_some_and(|session| attached.suspended.contains(session))
+}
+
+/// What took `widening` past `ceiling`, in the words a person reads, or `None` where the ceiling
+/// covers it. A scope that could not be read is not shown to be inside the ceiling, and no ceiling
+/// holds a grant for one turn.
+fn past(ceiling: &Scope, widening: &Widening) -> Option<Vec<&'static str>> {
+    match widening {
+        Widening::TurnStarting(Some(scope)) | Widening::TrustAnswered(Some(scope)) => match ceiling
+            .covers(scope)
+        {
+            Coverage::Covered => None,
+            Coverage::Widened(fields) => Some(fields.iter().map(|field| field.name()).collect()),
+        },
+        Widening::TurnStarting(None) | Widening::TrustAnswered(None) => {
+            Some(vec!["a scope that could not be read"])
+        }
+        Widening::Granted(Grant::Fetch) => {
+            Some(vec!["a fetch of a web host approved for this turn"])
+        }
+        Widening::Granted(Grant::UnconfinedRun) => {
+            Some(vec!["a line approved to run with no sandbox"])
+        }
+    }
+}
+
+/// Refuse `connection` joining `handle` where it is held to a ceiling and a grant for one turn was
+/// approved in the session, which no ceiling covers. Called while the owners are held, which
+/// [`on_widening`] holds while it records a grant and reads who is attached, so a grant approved as
+/// the connection joins is found here or stops the connection there.
+fn joins_past_a_grant(
+    output: &Sink,
+    latest: &Latest,
+    handle: &str,
+    connection: u64,
+) -> Result<(), Failure> {
+    let held = output.lock().map_or(true, |output| {
+        output
+            .get(&connection)
+            .is_some_and(|attached| attached.ceiling.is_some())
+    });
+    let granted = latest.lock().map_or(true, |latest| {
+        latest
+            .get(handle)
+            .is_some_and(|seen| !seen.granted.is_empty())
+    });
+    if held && granted {
+        return Err(Failure::new(
+            ErrorCode::NotAllowed,
+            "that session reaches more than this connection was approved for: a grant for one turn was approved in it",
+        ));
+    }
+    Ok(())
+}
+
+/// Stop each connection attached to `handle` whose ceiling `widening` went past, and tell it why
+/// before anything that follows. Returns the kinds the session can still be asked, where one was
+/// stopped and the session's view has started, and `None` where nothing changed.
+fn on_widening(
+    output: &Sink,
+    owners: &Owners,
+    viewed: &Viewed,
+    latest: &Latest,
+    stops: &AtomicU64,
+    handle: &str,
+    widening: &Widening,
+) -> Option<Vec<Kind>> {
+    // Held to the end, so a connection joining the session is either among those read here or
+    // finds the grant recorded when its join is handed over ([`joins_past_a_grant`]).
+    let owners = owners.lock().ok()?;
+    if let Ok(mut latest) = latest.lock() {
+        let seen = latest.entry(handle.to_string()).or_insert(Seen {
+            scope: None,
+            granted: Vec::new(),
+        });
+        match widening {
+            Widening::TurnStarting(scope) | Widening::TrustAnswered(scope) => {
+                seen.scope = scope.clone();
+            }
+            Widening::Granted(grant) if !seen.granted.contains(grant) => seen.granted.push(*grant),
+            Widening::Granted(_) => {}
+        }
+    }
+    let attached = owners.get(handle).cloned().unwrap_or_default();
+    let mut output = output.lock().ok()?;
+    let mut stopped = Vec::new();
+    for connection in &attached {
+        let Some(served) = output.get_mut(connection) else {
+            continue;
+        };
+        let Some(ceiling) = served.held_in(handle) else {
+            continue;
+        };
+        if served.suspended.contains(handle) {
+            continue;
+        }
+        if let Some(reasons) = past(ceiling, widening) {
+            served.suspended.insert(handle.to_string());
+            stopped.push((*connection, reasons));
+        }
+    }
+    if stopped.is_empty() {
+        return None;
+    }
+    // Counted while the output is held, which the stop was made under, and on a turn's thread
+    // while who can answer is held too, so a writer of kinds on the host's thread that reads the
+    // count after setting them sees every stop made before.
+    stops.fetch_add(1, Ordering::SeqCst);
+    for (connection, reasons) in stopped {
+        let notice = Event::new("session.suspended", handle, json!({ "widened": reasons }));
+        queue(&mut output, connection, notice.to_value().to_string());
+    }
+    if !viewed.lock().is_ok_and(|viewed| viewed.contains(handle)) {
+        return None;
+    }
+    let mut kinds = Vec::new();
+    for served in attached
+        .iter()
+        .filter_map(|connection| output.get(connection))
+        .filter(|served| !served.suspended.contains(handle))
+    {
+        for kind in allowlist::answerable(&served.answers) {
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+    }
+    Some(kinds)
 }
 
 /// The connections `event` goes to: those attached to its session, else the connection whose
@@ -930,7 +1423,7 @@ mod tests {
         // The descriptors share one socket, so the writer's writes wait again from here.
         filling.set_nonblocking(false).unwrap();
         let sink: Sink = Arc::new(Mutex::new(HashMap::new()));
-        let attached = Attached::start(&sink, 1, &Answer::ALL, &host_end, patience).unwrap();
+        let attached = Attached::start(&sink, 1, &Answer::ALL, None, &host_end, patience).unwrap();
         sink.lock().unwrap().insert(1, attached);
         (host_end, client_end, sink)
     }
@@ -1022,6 +1515,7 @@ mod tests {
             &sink,
             2,
             &Answer::ALL,
+            None,
             &other_end,
             PATIENCE_LONGER_THAN_TEST,
         )
@@ -1170,8 +1664,15 @@ mod tests {
     fn a_client_that_keeps_up_is_sent_more_than_the_byte_budget() {
         let (host_end, client_end) = UnixStream::pair().unwrap();
         let sink: Sink = Arc::new(Mutex::new(HashMap::new()));
-        let attached =
-            Attached::start(&sink, 1, &Answer::ALL, &host_end, PATIENCE_LONGER_THAN_TEST).unwrap();
+        let attached = Attached::start(
+            &sink,
+            1,
+            &Answer::ALL,
+            None,
+            &host_end,
+            PATIENCE_LONGER_THAN_TEST,
+        )
+        .unwrap();
         sink.lock().unwrap().insert(1, attached);
         let owners: Owners = Arc::new(Mutex::new(HashMap::new()));
         client_end
@@ -1204,4 +1705,676 @@ mod tests {
 
     /// Longer than any test waits, so a write that waits this long is one the test sees waiting.
     const PATIENCE_LONGER_THAN_TEST: Duration = Duration::from_secs(600);
+
+    /// The end a client reads its lines from, for a connection `sink` serves as `connection`, held
+    /// to `ceiling`.
+    fn a_reading_client(
+        sink: &Sink,
+        connection: u64,
+        answers: &[Answer],
+        ceiling: Option<Scope>,
+    ) -> BufReader<UnixStream> {
+        let (host_end, client_end) = UnixStream::pair().unwrap();
+        client_end
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let attached = Attached::start(
+            sink,
+            connection,
+            answers,
+            ceiling,
+            &host_end,
+            PATIENCE_LONGER_THAN_TEST,
+        )
+        .unwrap();
+        sink.lock().unwrap().insert(connection, attached);
+        BufReader::new(client_end)
+    }
+
+    /// The events a client was sent, up to a marker written to it now, so a test reads what was
+    /// queued before it without waiting for something that may not come.
+    fn sent_so_far(sink: &Sink, connection: u64, client: &mut BufReader<UnixStream>) -> Vec<Value> {
+        write_line(sink, connection, &json!({"marker": true}));
+        let mut sent = Vec::new();
+        loop {
+            let mut line = String::new();
+            client.read_line(&mut line).unwrap();
+            let value: Value = serde_json::from_str(&line).unwrap();
+            if value["marker"] == true {
+                return sent;
+            }
+            sent.push(value);
+        }
+    }
+
+    fn names(sent: &[Value]) -> Vec<String> {
+        sent.iter()
+            .map(|value| value["event"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// A ceiling, and a scope past it in the programs vouched for and the permission mode.
+    fn a_ceiling_and_a_wider_scope() -> (Scope, Scope) {
+        let ceiling = bravebot_listener::registry::narrow_ceiling("\"/work\"");
+        let mut wider = ceiling.clone();
+        wider.programs = vec!["\"git\"".into()];
+        wider.approvals = bravebot_core::scope::Approvals::Ask;
+        (ceiling, wider)
+    }
+
+    struct Watched {
+        sink: Sink,
+        owners: Owners,
+        viewed: Viewed,
+        latest: Latest,
+        held: BufReader<UnixStream>,
+        free: BufReader<UnixStream>,
+    }
+
+    /// A session `s1` with its view started, connection 1 held to `ceiling` and connection 2 held to
+    /// none, each attached to it. Connection 1 may answer confirms and connection 2 runs.
+    fn watched(ceiling: Scope) -> Watched {
+        let sink: Sink = Arc::new(Mutex::new(HashMap::new()));
+        let held = a_reading_client(&sink, 1, &[Answer::Confirm], Some(ceiling));
+        let free = a_reading_client(&sink, 2, &[Answer::Run], None);
+        Watched {
+            sink,
+            owners: Arc::new(Mutex::new(HashMap::from([(
+                "s1".to_string(),
+                BTreeSet::from([1, 2]),
+            )]))),
+            viewed: Arc::new(Mutex::new(HashSet::from(["s1".to_string()]))),
+            latest: Arc::default(),
+            held,
+            free,
+        }
+    }
+
+    impl Watched {
+        fn widen(&self, widening: &Widening) -> Option<Vec<Kind>> {
+            on_widening(
+                &self.sink,
+                &self.owners,
+                &self.viewed,
+                &self.latest,
+                &AtomicU64::new(0),
+                "s1",
+                widening,
+            )
+        }
+
+        fn event(&self, name: &'static str) {
+            write_event(
+                &self.sink,
+                &self.owners,
+                &AtomicU64::new(0),
+                &Event::new(name, "s1", json!({})),
+            );
+        }
+
+        fn sent(&mut self) -> (Vec<Value>, Vec<Value>) {
+            (
+                sent_so_far(&self.sink, 1, &mut self.held),
+                sent_so_far(&self.sink, 2, &mut self.free),
+            )
+        }
+    }
+
+    /// Decision 18: a connection held to a ceiling is stopped when a turn starts in a session it is
+    /// attached to whose scope the ceiling does not cover. It is told so, with what went past, and
+    /// is sent nothing more of the session but that it closed. A connection held to none is served
+    /// on, and who can answer is narrowed to the kinds of those left. A connection that was sent the
+    /// session's events after the widening would be shown more than the person approved.
+    #[test]
+    fn a_held_connection_is_stopped_before_what_follows_a_widening() {
+        let (ceiling, wider) = a_ceiling_and_a_wider_scope();
+        let mut watched = watched(ceiling);
+        watched.event("session.view.update");
+        let kinds = watched.widen(&Widening::TurnStarting(Some(wider.clone())));
+        assert_eq!(kinds, Some(vec![Kind::Run]));
+        watched.event("turn.started");
+        watched.event("session.closed");
+
+        let (held, free) = watched.sent();
+        assert_eq!(
+            names(&held),
+            ["session.view.update", "session.suspended", "session.closed"]
+        );
+        assert_eq!(
+            held[1]["data"]["widened"],
+            json!(["the programs vouched for", "the permission mode"])
+        );
+        assert_eq!(
+            names(&free),
+            ["session.view.update", "turn.started", "session.closed"]
+        );
+        assert_eq!(
+            watched.latest.lock().unwrap().get("s1"),
+            Some(&Seen {
+                scope: Some(wider.clone()),
+                granted: Vec::new()
+            })
+        );
+        // Stopped once: the next widening says nothing again and changes nobody.
+        assert_eq!(watched.widen(&Widening::TurnStarting(Some(wider))), None);
+        assert!(watched.sent().0.is_empty());
+    }
+
+    /// A scope the ceiling covers, a narrower one included, stops nobody, and a scope that could not
+    /// be read stops the held connection, since it was not shown to be inside the ceiling.
+    #[test]
+    fn a_covered_scope_stops_nobody_and_one_that_could_not_be_read_stops_a_held_connection() {
+        let (ceiling, wider) = a_ceiling_and_a_wider_scope();
+        let mut watched = watched(wider.clone());
+        assert_eq!(watched.widen(&Widening::TurnStarting(Some(wider))), None);
+        assert_eq!(watched.widen(&Widening::TrustAnswered(Some(ceiling))), None);
+        watched.event("turn.started");
+        assert_eq!(names(&watched.sent().0), ["turn.started"]);
+
+        assert_eq!(
+            watched.widen(&Widening::TurnStarting(None)),
+            Some(vec![Kind::Run])
+        );
+        watched.event("turn.started");
+        let (held, _) = watched.sent();
+        assert_eq!(names(&held), ["session.suspended"]);
+        assert_eq!(
+            held[0]["data"]["widened"],
+            json!(["a scope that could not be read"])
+        );
+    }
+
+    /// The person's yes to a fetch or to a line run with no sandbox is a grant for one turn that no
+    /// ceiling holds, so it stops every held connection, whatever its ceiling, and no other.
+    #[test]
+    fn a_grant_for_one_turn_stops_every_held_connection_and_no_other() {
+        for (grant, said) in [
+            (Grant::Fetch, "a fetch of a web host approved for this turn"),
+            (
+                Grant::UnconfinedRun,
+                "a line approved to run with no sandbox",
+            ),
+        ] {
+            let (_, wider) = a_ceiling_and_a_wider_scope();
+            let mut watched = watched(wider);
+            assert_eq!(
+                watched.widen(&Widening::Granted(grant)),
+                Some(vec![Kind::Run])
+            );
+            watched.event("tool.finished");
+            let (held, free) = watched.sent();
+            assert_eq!(names(&held), ["session.suspended"], "{grant:?}");
+            assert_eq!(held[0]["data"]["widened"], json!([said]));
+            assert_eq!(names(&free), ["tool.finished"], "{grant:?}");
+        }
+    }
+
+    /// Where the session's view has not started, nobody can answer in it yet, so the watch does not
+    /// name kinds that would let somebody answer before the view.
+    #[test]
+    fn a_stop_before_the_view_names_no_kinds() {
+        let (ceiling, wider) = a_ceiling_and_a_wider_scope();
+        let watched = watched(ceiling);
+        watched.viewed.lock().unwrap().clear();
+        assert_eq!(watched.widen(&Widening::TurnStarting(Some(wider))), None);
+    }
+
+    /// A stopped connection's requests about the session are refused and those of another are not,
+    /// and it counts for no kind in it. The person's approval makes the session's scope its ceiling
+    /// and lifts the stop, after which the same scope stops nothing. Approving a connection that is
+    /// not stopped is refused.
+    #[test]
+    fn a_stopped_connection_acts_on_nothing_until_the_person_approves_it() {
+        let (ceiling, wider) = a_ceiling_and_a_wider_scope();
+        let mut host = a_host_with_a_session_attached_to_connection_one();
+        let _held = a_reading_client(&host.output, 1, &[Answer::Confirm], Some(ceiling));
+        let _free = a_reading_client(&host.output, 2, &[Answer::Run], None);
+        host.answers.insert(1, vec![Answer::Confirm]);
+        host.answers.insert(2, vec![Answer::Run]);
+        host.owners.lock().unwrap().get_mut("s1").unwrap().insert(2);
+        host.viewed.lock().unwrap().insert("s1".into());
+        on_widening(
+            &host.output,
+            &host.owners,
+            &host.viewed,
+            &host.latest,
+            &host.stops,
+            "s1",
+            &Widening::TurnStarting(Some(wider.clone())),
+        );
+
+        let refused = host.not_stopped(1, "s1").unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotAllowed);
+        assert!(host.not_stopped(2, "s1").is_ok());
+        assert!(host.not_stopped(1, "s2").is_ok());
+        assert_eq!(
+            host.answerable_by("s1", &BTreeSet::from([1, 2])),
+            [Kind::Run]
+        );
+
+        // The session is not open in the bridge, so the scope approved is the one last told.
+        host.viewed.lock().unwrap().clear();
+        host.approve(1, "s1").unwrap();
+        assert!(host.not_stopped(1, "s1").is_ok());
+        assert_eq!(host.held_in(1, "s1"), Some(wider.clone()));
+        assert_eq!(host.ceiling_of(1), Some(a_ceiling_and_a_wider_scope().0));
+        assert_eq!(
+            host.approve(1, "s1").unwrap_err().code,
+            ErrorCode::BadRequest
+        );
+        assert_eq!(
+            on_widening(
+                &host.output,
+                &host.owners,
+                &host.viewed,
+                &host.latest,
+                &host.stops,
+                "s1",
+                &Widening::TurnStarting(Some(wider)),
+            ),
+            None
+        );
+        assert!(host.not_stopped(1, "s1").is_ok());
+    }
+
+    /// A connection held to a ceiling is refused a new session whose scope the ceiling does not
+    /// cover, before the session is opened, so nothing of it reaches the connection, and is refused
+    /// joining one another connection opened. One held to the scope a new session there has, and
+    /// one held to none, open it.
+    #[test]
+    fn a_held_connection_opens_no_session_past_its_ceiling() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().canonicalize().unwrap();
+        let mut host = Served::new(Setup {
+            workspaces: vec![directory.clone()],
+            settings: None,
+            inspection: "refused",
+        });
+        let new = |host: &mut Served, connection: u64| {
+            host.new_session(
+                connection,
+                &Request {
+                    id: 1,
+                    method: "session.new".into(),
+                    params: json!({"directory": directory.display().to_string()}),
+                },
+            )
+        };
+        let narrow = bravebot_listener::registry::narrow_ceiling(&format!("{directory:?}"));
+        let _narrow = a_reading_client(&host.output, 1, &Answer::ALL, Some(narrow));
+        let refused = new(&mut host, 1).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotAllowed);
+        assert!(
+            refused
+                .message
+                .contains("reaches more than this connection was approved for"),
+            "{}",
+            refused.message
+        );
+        assert!(host.sessions.is_empty(), "a session was opened");
+
+        let approved = host
+            .bridge
+            .scope_of_a_new_session(&directory, &bravebot_agent::servers::Machine::current())
+            .unwrap();
+        let _approved = a_reading_client(&host.output, 2, &Answer::ALL, Some(approved));
+        assert!(new(&mut host, 2).is_ok());
+        let _free = a_reading_client(&host.output, 3, &Answer::ALL, None);
+        let opened = new(&mut host, 3).unwrap();
+        let handle = opened["session"].as_str().unwrap().to_string();
+
+        // Nor does it join one past its ceiling that another connection opened.
+        let refused = host.attach(1, &handle).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotAllowed);
+        assert!(
+            refused
+                .message
+                .contains("reaches more than this connection was approved for"),
+            "{}",
+            refused.message
+        );
+        assert!(!host.attached_to(&handle).contains(&1));
+    }
+
+    /// Approving a stopped connection for a session whose view has started sends it the session's
+    /// view again, and it can answer in the session as before.
+    #[test]
+    fn an_approved_connection_is_sent_the_view_again_and_answers_as_before() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().canonicalize().unwrap();
+        let mut host = Served::new(Setup {
+            workspaces: vec![directory.clone()],
+            settings: None,
+            inspection: "refused",
+        });
+        let approved = host
+            .bridge
+            .scope_of_a_new_session(&directory, &bravebot_agent::servers::Machine::current())
+            .unwrap();
+        let mut held = a_reading_client(&host.output, 1, &[Answer::Confirm], Some(approved));
+        let _free = a_reading_client(&host.output, 2, &[Answer::Run], None);
+        host.answers.insert(1, vec![Answer::Confirm]);
+        host.answers.insert(2, vec![Answer::Run]);
+        let ask = |host: &mut Served, connection: u64, method: &str, params: Value| {
+            let answers = host.answers[&connection].clone();
+            host.dispatching.store(connection, Ordering::SeqCst);
+            let answered = host.dispatch(
+                connection,
+                &answers,
+                &Request {
+                    id: 1,
+                    method: method.into(),
+                    params,
+                },
+            );
+            host.dispatching.store(0, Ordering::SeqCst);
+            answered
+        };
+        let opened = ask(
+            &mut host,
+            2,
+            "session.new",
+            json!({"directory": directory.display().to_string()}),
+        )
+        .unwrap();
+        let handle = opened["session"].as_str().unwrap().to_string();
+        ask(
+            &mut host,
+            2,
+            "session.view.start",
+            json!({"session": handle, "version": 1}),
+        )
+        .unwrap();
+        ask(&mut host, 1, "session.attach", json!({"session": handle})).unwrap();
+        sent_so_far(&host.output, 1, &mut held);
+
+        on_widening(
+            &host.output,
+            &host.owners,
+            &host.viewed,
+            &host.latest,
+            &host.stops,
+            &handle,
+            &Widening::Granted(Grant::Fetch),
+        );
+        let attached = host.attached_to(&handle);
+        assert_eq!(host.answerable_by(&handle, &attached), [Kind::Run]);
+        host.approve(1, &handle).unwrap();
+
+        let sent = sent_so_far(&host.output, 1, &mut held);
+        assert_eq!(
+            names(&sent),
+            ["session.suspended", "session.view.snapshot"],
+            "{sent:?}"
+        );
+        assert_eq!(
+            host.answerable_by(&handle, &attached),
+            [Kind::Write, Kind::Run]
+        );
+        assert!(host.not_stopped(1, &handle).is_ok());
+    }
+
+    /// A session in which a grant for one turn was approved goes on holding what it brought in, so a
+    /// connection held to a ceiling that covers the session's scope is still refused joining it,
+    /// and told why. A join checked against the scope alone would show it the fetch's rows.
+    #[test]
+    fn a_held_connection_joins_no_session_a_grant_for_one_turn_widened() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().canonicalize().unwrap();
+        let mut host = Served::new(Setup {
+            workspaces: vec![directory.clone()],
+            settings: None,
+            inspection: "refused",
+        });
+        let covering = host
+            .bridge
+            .scope_of_a_new_session(&directory, &bravebot_agent::servers::Machine::current())
+            .unwrap();
+        let _free = a_reading_client(&host.output, 2, &Answer::ALL, None);
+        let _held = a_reading_client(&host.output, 1, &Answer::ALL, Some(covering));
+        let opened = host
+            .new_session(
+                2,
+                &Request {
+                    id: 1,
+                    method: "session.new".into(),
+                    params: json!({"directory": directory.display().to_string()}),
+                },
+            )
+            .unwrap();
+        let handle = opened["session"].as_str().unwrap().to_string();
+        on_widening(
+            &host.output,
+            &host.owners,
+            &host.viewed,
+            &host.latest,
+            &host.stops,
+            &handle,
+            &Widening::Granted(Grant::Fetch),
+        );
+
+        let refused = host.attach(1, &handle).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotAllowed);
+        assert!(
+            refused
+                .message
+                .contains("a fetch of a web host approved for this turn"),
+            "{}",
+            refused.message
+        );
+        assert!(!host.attached_to(&handle).contains(&1));
+    }
+
+    /// Where the only scope the host has of a session is one that could not be read, approving a
+    /// connection for it is refused, and the connection stays stopped. An approval that fell back to
+    /// an earlier turn's scope would let the connection see a turn nobody checked.
+    #[test]
+    fn approving_is_refused_while_the_sessions_scope_cannot_be_read() {
+        let (ceiling, wider) = a_ceiling_and_a_wider_scope();
+        let mut host = a_host_with_a_session_attached_to_connection_one();
+        let _held = a_reading_client(&host.output, 1, &[Answer::Confirm], Some(ceiling));
+        let widen = |host: &Served, widening: Widening| {
+            on_widening(
+                &host.output,
+                &host.owners,
+                &host.viewed,
+                &host.latest,
+                &host.stops,
+                "s1",
+                &widening,
+            )
+        };
+        widen(&host, Widening::TurnStarting(Some(wider)));
+        widen(&host, Widening::TurnStarting(None));
+
+        let refused = host.approve(1, "s1").unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotAllowed);
+        assert!(host.not_stopped(1, "s1").is_err());
+    }
+
+    /// The check made where a join is handed over, under the lock a grant is recorded under:
+    /// a held connection is refused a session a grant for one turn was approved in, and one held to
+    /// no ceiling, or a session with no grant, is let join. Without it a grant approved between the
+    /// join's first check and its hand-over would reach the joining connection.
+    #[test]
+    fn a_join_is_checked_again_for_a_grant_where_it_is_handed_over() {
+        let (ceiling, _) = a_ceiling_and_a_wider_scope();
+        let sink: Sink = Arc::new(Mutex::new(HashMap::new()));
+        let _held = a_reading_client(&sink, 1, &Answer::ALL, Some(ceiling));
+        let _free = a_reading_client(&sink, 2, &Answer::ALL, None);
+        let latest: Latest = Arc::default();
+        assert!(joins_past_a_grant(&sink, &latest, "s1", 1).is_ok());
+
+        latest.lock().unwrap().insert(
+            "s1".into(),
+            Seen {
+                scope: None,
+                granted: vec![Grant::Fetch],
+            },
+        );
+        let refused = joins_past_a_grant(&sink, &latest, "s1", 1).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotAllowed);
+        assert!(joins_past_a_grant(&sink, &latest, "s1", 2).is_ok());
+        assert!(joins_past_a_grant(&sink, &latest, "s2", 1).is_ok());
+    }
+
+    /// Kinds worked out on the host's thread before a turn's thread stopped a connection, and set
+    /// after it, name the stopped connection's kinds again. Settling them afterwards, as every writer
+    /// of kinds on the host's thread does, takes them away again, so the turn's next question of
+    /// that kind is refused and does not wait for a connection that is not shown it.
+    #[test]
+    fn kinds_set_from_before_a_stop_are_settled_to_leave_the_stopped_connection_out() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().canonicalize().unwrap();
+        let mut host = Served::new(Setup {
+            workspaces: vec![directory.clone()],
+            settings: None,
+            inspection: "refused",
+        });
+        let covering = host
+            .bridge
+            .scope_of_a_new_session(&directory, &bravebot_agent::servers::Machine::current())
+            .unwrap();
+        let _held = a_reading_client(&host.output, 1, &[Answer::Run], Some(covering));
+        let _free = a_reading_client(&host.output, 2, &[Answer::Fetch], None);
+        host.answers.insert(1, vec![Answer::Run]);
+        host.answers.insert(2, vec![Answer::Fetch]);
+        let opened = host
+            .new_session(
+                1,
+                &Request {
+                    id: 1,
+                    method: "session.new".into(),
+                    params: json!({"directory": directory.display().to_string()}),
+                },
+            )
+            .unwrap();
+        let handle = opened["session"].as_str().unwrap().to_string();
+        host.owners
+            .lock()
+            .unwrap()
+            .get_mut(&handle)
+            .unwrap()
+            .insert(2);
+        host.viewed.lock().unwrap().insert(handle.clone());
+
+        let seen = host.stops.load(Ordering::SeqCst);
+        let stale = host.answerable_by(&handle, &host.attached_to(&handle));
+        assert_eq!(stale, [Kind::Run, Kind::Fetch]);
+        on_widening(
+            &host.output,
+            &host.owners,
+            &host.viewed,
+            &host.latest,
+            &host.stops,
+            &handle,
+            &Widening::Granted(Grant::Fetch),
+        );
+        host.bridge.set_answerable(&handle, &stale).unwrap();
+        assert!(
+            host.bridge.can_be_asked(&handle, Kind::Run),
+            "the race was not set up"
+        );
+
+        host.settle_kinds(&handle, seen);
+        assert!(!host.bridge.can_be_asked(&handle, Kind::Run));
+        assert!(host.bridge.can_be_asked(&handle, Kind::Fetch));
+    }
+
+    /// Every kind of question a client of the host can answer has been decided for the ceiling:
+    /// what a yes to it does to a session's reach, and so what the scope watch is told. A kind the
+    /// host comes to offer fails this until it is decided here and, where a yes to it reaches past
+    /// the scope's fields, told to the watch as a [`Grant`] (HOST-15).
+    #[test]
+    fn every_kind_a_host_client_can_answer_is_decided_for_the_ceiling() {
+        // What a yes to each kind does to the session's reach.
+        let decided = [
+            // A write's path is inside the session's workspace, which the scope's project and
+            // directories already hold.
+            (Kind::Write, "inside the scope"),
+            // A confined line runs under the sandbox the scope names; one with no sandbox is a
+            // `Grant::UnconfinedRun`.
+            (Kind::Run, "inside the scope, or Grant::UnconfinedRun"),
+            // No ceiling holds a web host.
+            (Kind::Fetch, "Grant::Fetch"),
+            // An answer to the planner's question gives the session nothing to reach.
+            (Kind::Ask, "nothing"),
+        ];
+        let kinds: Vec<Kind> = decided.iter().map(|(kind, _)| *kind).collect();
+        assert_eq!(allowlist::answerable(&Answer::ALL), kinds);
+    }
+
+    /// A host with connection 1 held to `ceiling` and attached to two sessions, `s1` and `s2`, whose
+    /// views have not started, and the end its client reads, which is kept open while it is held.
+    fn a_held_connection_in_two_sessions(ceiling: Scope) -> (Served, BufReader<UnixStream>) {
+        let host = a_host_with_a_session_attached_to_connection_one();
+        let held = a_reading_client(&host.output, 1, &[Answer::Confirm], Some(ceiling));
+        host.owners
+            .lock()
+            .unwrap()
+            .insert("s2".into(), BTreeSet::from([1]));
+        (host, held)
+    }
+
+    fn widen(host: &Served, handle: &str, widening: &Widening) {
+        on_widening(
+            &host.output,
+            &host.owners,
+            &host.viewed,
+            &host.latest,
+            &host.stops,
+            handle,
+            widening,
+        );
+    }
+
+    /// An approval holds the connection to the session's scope in that session alone. Another
+    /// session that goes as far is still measured against the ceiling set at pairing, and stops
+    /// the connection, so approving one session the person saw lets the device into no other.
+    #[test]
+    fn an_approval_for_one_session_does_not_widen_another() {
+        let (ceiling, wider) = a_ceiling_and_a_wider_scope();
+        let (mut host, _held) = a_held_connection_in_two_sessions(ceiling.clone());
+        host.sessions.insert("s2".into(), None);
+        widen(&host, "s1", &Widening::TurnStarting(Some(wider.clone())));
+        host.approve(1, "s1").unwrap();
+
+        widen(&host, "s2", &Widening::TurnStarting(Some(wider.clone())));
+        assert!(
+            host.not_stopped(1, "s2").is_err(),
+            "s2 was let past the ceiling"
+        );
+        assert!(host.not_stopped(1, "s1").is_ok());
+        assert_eq!(host.held_in(1, "s2"), Some(ceiling));
+        assert_eq!(host.held_in(1, "s1"), Some(wider));
+    }
+
+    /// An approval for a session whose scope is narrower than the ceiling stops nothing elsewhere:
+    /// another session inside the ceiling goes on being shown. An approval that replaced the ceiling
+    /// would stop sessions the person never looked at.
+    #[test]
+    fn an_approval_for_one_session_does_not_stop_another() {
+        let (narrow, wider) = a_ceiling_and_a_wider_scope();
+        let mut middle = narrow.clone();
+        middle.programs = vec!["\"git\"".into()];
+        // The ceiling holds `wider`. `s1` goes past it in a way `middle` holds, and is approved
+        // there; `s2` stays at `wider`, inside the ceiling.
+        let (mut host, _held) = a_held_connection_in_two_sessions(wider.clone());
+        let mut past_the_ceiling = middle.clone();
+        past_the_ceiling.directories = vec!["\"/elsewhere\"".into()];
+        widen(
+            &host,
+            "s1",
+            &Widening::TurnStarting(Some(past_the_ceiling.clone())),
+        );
+        assert!(host.not_stopped(1, "s1").is_err());
+        host.approve(1, "s1").unwrap();
+        assert_eq!(host.held_in(1, "s1"), Some(past_the_ceiling));
+
+        widen(&host, "s2", &Widening::TurnStarting(Some(wider)));
+        assert!(
+            host.not_stopped(1, "s2").is_ok(),
+            "s2 was stopped by s1's approval"
+        );
+    }
 }

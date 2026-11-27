@@ -907,3 +907,211 @@ fn a_project_and_its_lossy_lookalike_are_different_projects() {
     );
     assert_eq!(ceiling.covers(&ceiling), Coverage::Covered);
 }
+
+/// What a device is approved for when it is paired is the scope of a session `session.new` opens in
+/// the workspace, before anything is answered in it, under the same settings: the sandbox mode, the
+/// rules, the references and the mode it starts in. A ceiling
+/// built some other way would differ from the session a device is then shown, and suspend it at its
+/// first turn or approve more than the person saw.
+#[test]
+fn the_scope_of_a_new_session_is_the_scope_session_new_opens_with() {
+    for text in [
+        "{}",
+        r#"{"sandbox": {"mode": "strict"}}"#,
+        r#"{"permissions": {"allow": ["Read(/notes/**)"]}}"#,
+        r#"{"references": {"notes": "/work/notes"}, "sandbox": {"mode": "read-only"}}"#,
+    ] {
+        let settings_dir = tempfile::tempdir().unwrap();
+        let file = settings_dir.path().join("settings.json");
+        std::fs::write(&file, text).unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().canonicalize().unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}))
+            .with_settings(Some(file.clone()))
+            .opening_in_ask()
+            .not_putting_project_questions();
+        let machine = bravebot_agent::servers::Machine {
+            home: no_home(),
+            managed: no_managed(),
+        };
+
+        let ceiling = bridge.scope_of_a_new_session(&project, &machine).unwrap();
+        let opened = bridge
+            .dispatch(&Request {
+                id: 1,
+                method: "session.new".into(),
+                params: json!({"directory": project.display().to_string()}),
+            })
+            .unwrap();
+        let handle = opened["session"].as_str().unwrap().to_string();
+        let held = scope_of(
+            &bridge.open[&handle],
+            &crate::settings::layers(Some(&project), Some(&file)),
+            &no_managed(),
+            &no_home(),
+        )
+        .unwrap();
+
+        assert_eq!(ceiling, held, "{text}");
+        if text.contains("allow") {
+            assert_eq!(ceiling.allow.len(), 1, "the rule was not read: {text}");
+        }
+        assert!(ceiling.covers(&held).is_covered(), "{text}");
+    }
+}
+
+/// What a bridge said, in order: each event's name, and each moment it told its scope watch of.
+#[derive(Debug, Clone, PartialEq)]
+enum Said {
+    Event(String),
+    Watched(Box<crate::widening::Widening>),
+}
+
+impl Said {
+    fn watched(&self) -> Option<&crate::widening::Widening> {
+        match self {
+            Self::Watched(widening) => Some(widening),
+            Self::Event(_) => None,
+        }
+    }
+}
+
+/// A bridge that says into `said`, with a scope watch that names no kinds.
+fn watched_bridge(said: &Arc<Mutex<Vec<Said>>>, settings: Option<PathBuf>) -> Bridge {
+    let (events, watching) = (Arc::clone(said), Arc::clone(said));
+    Bridge::new(Box::new(move |event: Event| {
+        events
+            .lock()
+            .unwrap()
+            .push(Said::Event(event.name.to_string()));
+    }))
+    .with_settings(settings)
+    .with_scope_watch(Arc::new(
+        move |_: &str, widening: &crate::widening::Widening| {
+            watching
+                .lock()
+                .unwrap()
+                .push(Said::Watched(Box::new(widening.clone())));
+            None
+        },
+    ))
+}
+
+/// The answer to the trust question is told to the scope watch, with the scope it leaves the
+/// session holding, before anything else the answer makes the bridge say. A watch told after the
+/// view said the question was answered would stop a connection after it was shown that.
+#[test]
+fn the_trust_answer_is_told_to_the_scope_watch_before_anything_it_makes_the_bridge_say() {
+    let project = tempfile::tempdir().unwrap();
+    let project = project.path().canonicalize().unwrap();
+    let said: Arc<Mutex<Vec<Said>>> = Arc::default();
+    let mut bridge = watched_bridge(&said, None);
+    let opened = bridge
+        .dispatch(&Request {
+            id: 1,
+            method: "session.new".into(),
+            params: json!({"directory": project.display().to_string()}),
+        })
+        .unwrap();
+    let handle = opened["session"].as_str().unwrap().to_string();
+    bridge
+        .dispatch(&Request {
+            id: 3,
+            method: "session.view.start".into(),
+            params: json!({"session": handle, "version": 1}),
+        })
+        .unwrap();
+    said.lock().unwrap().clear();
+
+    bridge
+        .dispatch(&Request {
+            id: 2,
+            method: "trust.reply".into(),
+            params: json!({"session": handle, "trusted": true}),
+        })
+        .unwrap();
+
+    let said = said.lock().unwrap().clone();
+    let first = said.first().and_then(Said::watched);
+    assert!(
+        matches!(
+            first,
+            Some(crate::widening::Widening::TrustAnswered(Some(_)))
+        ),
+        "the watch was not told first: {said:?}"
+    );
+    if let Some(crate::widening::Widening::TrustAnswered(Some(scope))) = first {
+        assert_eq!(scope.trusted, [project.display().to_string()]);
+    }
+    assert!(
+        said.len() > 1,
+        "the answer made the bridge say nothing: {said:?}"
+    );
+}
+
+/// A turn that starts is told to the scope watch, with the scope the session holds, before
+/// `turn.started` and before any row of the turn is sent, so a connection the session has gone past
+/// sees nothing of the turn. A settings edit since the last turn is in that scope.
+#[test]
+fn a_turn_is_told_to_the_scope_watch_before_anything_of_it_is_sent() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    // A service that answers every request with a 500, so the turn sends one request and ends.
+    let service = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = service.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        for mut connection in service.incoming().flatten() {
+            connection.write_all(
+                b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .ok();
+        }
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let settings = directory.path().join("settings.json");
+    std::fs::write(
+        &settings,
+        format!(
+            r#"{{"provider":{{"local":{{"options":{{"baseURL":"http://127.0.0.1:{port}/v1","maxRetries":0}},"models":{{"m":{{}}}}}}}},"model":"local/m","sandbox":{{"mode":"strict"}}}}"#
+        ),
+    )
+    .unwrap();
+    let project = directory.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut trust = TrustStore::new(&project);
+    trust.trust(".");
+    let said: Arc<Mutex<Vec<Said>>> = Arc::default();
+    let mut bridge = watched_bridge(&said, Some(settings));
+    let handle = bridge.mint(Open::opened(
+        project.clone(),
+        State::fresh(trust),
+        true,
+        None,
+        false,
+    ));
+
+    let line = json!({"id": 1, "method": "turn.send", "params":
+        crate::message_ids::with_fresh(json!({"session": handle, "prompt": "say hello"}))})
+    .to_string();
+    bridge.dispatch(&Request::parse(&line).unwrap()).unwrap();
+
+    let said = said.lock().unwrap().clone();
+    let first = said.first().and_then(Said::watched);
+    assert!(
+        matches!(
+            first,
+            Some(crate::widening::Widening::TurnStarting(Some(_)))
+        ),
+        "the watch was not told first: {said:?}"
+    );
+    if let Some(crate::widening::Widening::TurnStarting(Some(scope))) = first {
+        assert_eq!(scope.confinement, confinement_of(SandboxMode::Strict));
+    }
+    assert!(
+        said.contains(&Said::Event("turn.started".into())),
+        "the turn did not start: {said:?}"
+    );
+    // The turn's worker runs on; it is not waited for, since the order above is what is under test.
+}

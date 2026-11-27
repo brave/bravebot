@@ -557,6 +557,7 @@ fn a_turn_that(
             interjections: Default::default(),
             actors: Default::default(),
             published: Default::default(),
+            scope_watch: None,
         })
     });
     let result = received.recv_timeout(Duration::from_secs(20));

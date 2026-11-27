@@ -328,6 +328,9 @@ pub struct Bridge {
     /// Reads the background roster for `background.list`, kept so a list read every second reuses
     /// the records it has already read (BG-17).
     background_reader: bravebot_session::listing::Reader,
+    /// Told of each moment a session may have come to reach more, by a host that holds connections
+    /// to a ceiling. None for a bridge with no such connection.
+    scope_watch: Option<crate::widening::ScopeWatch>,
 }
 
 impl Bridge {
@@ -349,7 +352,40 @@ impl Bridge {
             project_questions: 0,
             acting: None,
             background_reader: bravebot_session::listing::Reader::new(),
+            scope_watch: None,
         }
+    }
+
+    /// Tell `watch` of each moment a session may have come to reach more: when a turn starts, when
+    /// the trust question is answered, and when a person approves for a turn a grant no ceiling
+    /// holds. Each is told before the session sends anything that follows it, and the kinds the
+    /// watch answers with are the ones the session can be asked from then on.
+    pub fn with_scope_watch(mut self, watch: crate::widening::ScopeWatch) -> Self {
+        self.scope_watch = Some(watch);
+        self
+    }
+
+    /// Tell the scope watch, if there is one, that the session `handle` holds `scope` now, and
+    /// narrow who can answer in it to what the watch answers.
+    fn widened(&mut self, handle: &str, widening: &crate::widening::Widening) {
+        let Some(watch) = &self.scope_watch else {
+            return;
+        };
+        if let Some(kinds) = watch(handle, widening) {
+            self.narrow_answerable(handle, &kinds);
+        }
+    }
+
+    /// The scope the open session `handle` holds now, read under the settings its next turn reads,
+    /// or `None` where it is not open or a turn holds its state.
+    pub fn scope_of_session(
+        &self,
+        handle: &str,
+        machine: &bravebot_agent::servers::Machine,
+    ) -> Option<bravebot_core::scope::Scope> {
+        let open = self.open.get(handle)?;
+        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        scope::scope_of(open, &settings, &machine.managed, &machine.home)
     }
 
     /// Put none of the questions about a checkout's settings (PERM-15): its proposed `allow` rules
@@ -916,10 +952,53 @@ impl Bridge {
         });
         open.reads_stay_in_workspace = rules.reads_stay_in_workspace;
         let reported = rules.json();
-        if let Ok(mut state) = open.state.lock() {
-            state.answers.rules = rules;
-        }
+        held_to(open, rules);
         reported
+    }
+
+    /// The session `session.new` opens on `project` with `state`, before it is minted: with its
+    /// trust answer, the vetting its settings ask for and the mode it starts in.
+    fn opened_new(
+        &self,
+        project: &Path,
+        state: State,
+        answered_trust: bool,
+        keeping: Option<(trusted::Store, trusted::Identity)>,
+    ) -> Open {
+        Open::opened(
+            project.to_path_buf(),
+            state,
+            answered_trust,
+            keeping,
+            self.auto_vetting(project),
+        )
+        .starting_in(self.opening_mode(project))
+    }
+
+    /// The scope a session `session.new` opened on `directory` now would hold before anything is
+    /// answered in it, which is what a device is approved for when it is paired (decision 18 in
+    /// `docs/design/mobile/decisions-and-tradeoffs.md`). It is built as `session.new` builds the
+    /// session, under the rules it would open under, and nothing is minted or written. `machine` is
+    /// the state directory and the administrator's settings the session would read. `None` where the
+    /// scope cannot be read.
+    pub fn scope_of_a_new_session(
+        &self,
+        directory: &Path,
+        machine: &bravebot_agent::servers::Machine,
+    ) -> Option<bravebot_core::scope::Scope> {
+        let opening = Opening::of(directory, None);
+        let mut open = self.opened_new(
+            directory,
+            State::fresh(opening.trust),
+            opening.answered,
+            opening.keeping,
+        );
+        let settings = crate::settings::layers(Some(directory), self.settings.as_deref());
+        held_to(
+            &mut open,
+            crate::rules::SettingsRules::read(&settings, directory),
+        );
+        scope::scope_of(&open, &settings, &machine.managed, &machine.home)
     }
 
     /// Settle the questions the session opened as `handle` puts once its trust question is answered,
@@ -1369,16 +1448,8 @@ impl Bridge {
         state.spend_limit = self.spend_limit(&directory);
         state.directories = additional;
         state.handed_off_from = handed_off_from;
-        let handle = self.mint(
-            Open::opened(
-                directory.clone(),
-                state,
-                opening.answered,
-                opening.keeping,
-                auto_vetting,
-            )
-            .starting_in(self.opening_mode(&directory)),
-        );
+        let handle =
+            self.mint(self.opened_new(&directory, state, opening.answered, opening.keeping));
 
         // Nothing is written until the first turn. An opened-and-abandoned window should
         // leave no trace, which is also how `bravebot` behaves.
@@ -1944,6 +2015,13 @@ impl Bridge {
             .is_some_and(|workers| !workers.is_idle())
     }
 
+    /// Whether a question of `kind` can be put in the session `handle` now, for a test of who can
+    /// answer. The host's tests are its only callers, and the host is built on Unix alone.
+    #[cfg(all(test, unix))]
+    pub(crate) fn can_be_asked(&mut self, handle: &str, kind: Kind) -> bool {
+        self.answerers_of(handle).can_answer(kind)
+    }
+
     fn answerers_of(&mut self, handle: &str) -> Answerers {
         let refuse = self.refuse_until_set;
         self.answerers
@@ -2334,9 +2412,22 @@ impl Bridge {
             ));
         }
 
+        // Before anything of the turn is sent, so a connection held to a ceiling the session has gone
+        // past is stopped before the turn's first event reaches it (decision 18). A settings edit
+        // since the last turn is found here.
+        if self.scope_watch.is_some() {
+            let machine = bravebot_agent::servers::Machine::current();
+            let scope = self
+                .open
+                .get(&handle)
+                .and_then(|open| scope::scope_of(open, &settings, &machine.managed, &machine.home));
+            self.widened(&handle, &crate::widening::Widening::TurnStarting(scope));
+        }
+
         let emitter = self.emitter.clone();
         let session = handle.clone();
         let answerers = self.answerers_of(&handle);
+        let scope_watch = self.scope_watch.clone();
 
         let worker_model = model.clone();
 
@@ -2424,6 +2515,7 @@ impl Bridge {
                 interjections,
                 actors: actors.clone(),
                 published,
+                scope_watch,
             });
         });
 
@@ -3677,6 +3769,16 @@ impl Bridge {
             }
         }
         open.answered_trust = true;
+        // Before the view says the question was answered, so a connection held to a ceiling the
+        // answer took the session past is stopped before that reaches it.
+        if self.scope_watch.is_some() {
+            let scope =
+                self.scope_of_session(&handle, &bravebot_agent::servers::Machine::current());
+            self.widened(&handle, &crate::widening::Widening::TrustAnswered(scope));
+        }
+        let Some(open) = self.open.get_mut(&handle) else {
+            return Err(Failure::no_such_session());
+        };
         self.emitter
             .view_trusted(&handle, Acting::from(actor.as_deref()));
         // The question is answered, so what it offered is spent. Offered only where the answer may
@@ -4558,6 +4660,14 @@ impl Bridge {
     }
 }
 
+/// Hold `open` to the permission rules `rules`, and to whether they keep reads inside the workspace.
+fn held_to(open: &mut Open, rules: crate::rules::SettingsRules) {
+    open.reads_stay_in_workspace = rules.reads_stay_in_workspace;
+    if let Ok(mut state) = open.state.lock() {
+        state.answers.rules = rules;
+    }
+}
+
 /// What `session.attach` and `session.view.resync` answer: the sequence of the snapshot sent
 /// before the answer, and how many earlier rows it leaves out.
 fn snapshot_answer((sequence, omitted): (u64, u64)) -> Value {
@@ -5214,6 +5324,8 @@ struct Work {
     actors: crate::turn::ActorNotes,
     /// Where the turn publishes its exchange and file authority for a `/btw` asked beside it.
     published: crate::turn::Published,
+    /// Told when the person approves for this turn a grant no ceiling holds.
+    scope_watch: Option<crate::widening::ScopeWatch>,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -5330,6 +5442,7 @@ fn work(work: Work) {
         interjections,
         actors,
         published,
+        scope_watch,
     } = work;
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
@@ -5389,7 +5502,8 @@ fn work(work: Work) {
     )
     .answerable_by(answerers)
     .remembering(Arc::clone(&state.question_answers))
-    .taking_interjections(interjections);
+    .taking_interjections(interjections)
+    .watched_by(scope_watch);
 
     // The session's MCP servers (SERVERS-9), started by its first turn or first plan run and held
     // until it closes. Here rather than when the session opened, so that the questions about them
@@ -8209,13 +8323,6 @@ mod watch_tests {
 #[path = "folders.rs"]
 mod folders;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "nothing reads a session's scope until a device is attached to one"
-    )
-)]
 #[path = "scope.rs"]
 mod scope;
 

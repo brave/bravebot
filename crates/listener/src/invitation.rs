@@ -56,6 +56,9 @@ pub struct Terms {
     pub name: String,
     pub grant: Grant,
     pub workspace: PathBuf,
+    /// The limits the host showed the person when it opened the window, which a code typed on the
+    /// host approves with the device.
+    pub ceiling: bravebot_core::scope::Scope,
 }
 
 /// An open window, for the code that shows it.
@@ -398,6 +401,7 @@ impl Invitations {
                     name: name.clone(),
                     grant: window.terms.grant,
                     workspace: window.terms.workspace.clone(),
+                    ceiling: window.terms.ceiling.clone(),
                 },
             );
             match added {
@@ -589,6 +593,7 @@ mod tests {
                 name: name.into(),
                 grant: Grant::Control,
                 workspace: PathBuf::from("/work"),
+                ceiling: crate::registry::narrow_ceiling("/work"),
             }
         }
 
@@ -621,14 +626,15 @@ mod tests {
     }
 
     /// A phone that proves the secret and whose person types its code is paired with what the person
-    /// chose when they opened the window, and everything the host says is about that.
+    /// chose when they opened the window, the limits the host showed them among it, and everything
+    /// the host says is about that.
     #[test]
     fn a_phone_that_proves_the_secret_and_whose_code_is_typed_is_paired() {
         let fixture = Fixture::new();
-        let opened = fixture
-            .invitations
-            .open(Fixture::terms("kitchen-phone"))
-            .unwrap();
+        let mut terms = Fixture::terms("kitchen-phone");
+        terms.ceiling.programs = vec!["the program the person saw".into()];
+        let shown = terms.ceiling.clone();
+        let opened = fixture.invitations.open(terms).unwrap();
         assert_eq!(opened.lifetime, Duration::from_secs(120));
         assert!(fixture.invitations.is_open());
         let ticket = fixture
@@ -657,6 +663,7 @@ mod tests {
         );
         let devices = fixture.registry.devices();
         assert_eq!(devices[0].1.workspace, PathBuf::from("/work"));
+        assert_eq!(devices[0].1.ceiling, shown);
         assert_eq!(
             fixture.said(),
             [
@@ -946,6 +953,7 @@ mod tests {
                     name: "taken".into(),
                     grant: Grant::Read,
                     workspace: PathBuf::new(),
+                    ceiling: crate::registry::narrow_ceiling("/work"),
                 },
             )
             .unwrap();

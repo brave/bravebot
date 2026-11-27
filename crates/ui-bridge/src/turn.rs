@@ -868,6 +868,8 @@ pub struct BridgeConfirmer {
     reused: Vec<String>,
     /// The words a plan question names its task by. See [`Self::titling_plans`].
     plan_title: Option<String>,
+    /// Told when the person approves a grant no ceiling holds. See [`Self::watched_by`].
+    scope_watch: Option<crate::widening::ScopeWatch>,
 }
 
 impl BridgeConfirmer {
@@ -892,7 +894,31 @@ impl BridgeConfirmer {
             answered: Arc::default(),
             reused: Vec::new(),
             plan_title: None,
+            scope_watch: None,
         }
+    }
+
+    /// Tell `watch` when the person approves a fetch or a line run with no sandbox, before the
+    /// answer is acted on, and narrow who can answer to what it answers. A ceiling has no field for
+    /// either, so no ceiling covers one (decision 18).
+    pub(crate) fn watched_by(mut self, watch: Option<crate::widening::ScopeWatch>) -> Self {
+        self.scope_watch = watch;
+        self
+    }
+
+    /// The person approved `grant` for this turn: tell the scope watch, before anything that
+    /// follows from it is sent.
+    fn granted(&mut self, grant: crate::widening::Grant) {
+        let Some(watch) = &self.scope_watch else {
+            return;
+        };
+        let session = &self.session;
+        // Worked out while who can answer is held, so a client that leaves or is approved on the
+        // host's thread meanwhile is not overwritten. A set that cannot be written is left as it
+        // was; the host refuses an answer from a connection it stopped either way.
+        self.answerers
+            .set_by(|| watch(session, &crate::widening::Widening::Granted(grant)))
+            .ok();
     }
 
     /// Send `title` with each plan question as the task's `title`: the task with each dropped
@@ -1056,9 +1082,13 @@ impl Confirmer for BridgeConfirmer {
     /// consent to that one request: what comes back stays quarantined whatever is answered, and
     /// nothing is remembered, so the next fetch asks again (FETCH-1, FETCH-3).
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
-        self.yes_or_no(Kind::Fetch, "fetch.request", |id| {
+        let decision = self.yes_or_no(Kind::Fetch, "fetch.request", |id| {
             wire::fetch_request(id, request)
-        })
+        });
+        if decision == Decision::Approve {
+            self.granted(crate::widening::Grant::Fetch);
+        }
+        decision
     }
 
     /// Ask whether the planner may read a vouched file the scan found a credential in (CRED-15).
@@ -1225,6 +1255,7 @@ impl Confirmer for BridgeConfirmer {
             // A note is kept where the answer could carry one.
             Some(Reply::Run(decision)) if request.unconfined => {
                 let once = if decision.approved() {
+                    self.granted(crate::widening::Grant::UnconfinedRun);
                     RunDecision::approve()
                 } else {
                     RunDecision::reject()

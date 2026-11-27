@@ -8,6 +8,7 @@ governs:
   - crates/ui-bridge/src/allowlist.rs
   - crates/ui-bridge/src/answerers.rs
   - crates/ui-bridge/src/workers.rs
+  - crates/ui-bridge/src/widening.rs
   - crates/ui-bridge/src/bin/bravebot-host.rs
   - packages/agent-client/scripts/dev-relay.ts
   - packages/agent-client/scripts/host-client.ts
@@ -149,7 +150,7 @@ Each run of the host has an instance ID, drawn from the seed the standard librar
 
 A session has a set of attached connections. The connection that opens it is attached from `session.new`, and another joins with `session.attach` ([HOST-11](#HOST-11)). There is no controller: each attached connection may send, cancel, reply and close, and a connection that is attached already is refused a second `session.attach` with `bad_request`. There is no request to leave a session other than ending the connection. A connection that is not attached sees the session in `instance.info` with `attached` false, and is refused every other request that names it with `not_allowed`. It may close a session only when no connection is attached.
 
-A session's events go to every attached connection, in the order the bridge emits them, because the view and its sequence belong to the session and not to a connection. Two are sent only to the connection whose request made them, and only while it is attached: `session.view.snapshot`, which answers its `session.attach` or `session.view.resync`, and the startup question `trust.request` ([HOST-10](#HOST-10) says which connections are sent that). An event made while a session is being opened goes to the connection opening it. A `session.close` attaches the connection that sent it, so `session.closed` goes to it and to each connection attached when the close was answered, after the closer's answer ([HOST-8](#HOST-8)). The host tells the bridge the name of the client that sent each send, answer, trust answer and cancel it passes on, so the view and the trail can name the client that sent, answered or cancelled ([RPCVIEW-14](session-view.md#RPCVIEW-14), [TRACE-7](trace.md#TRACE-7)).
+A session's events go to every attached connection, except one stopped for the session ([HOST-15](#HOST-15)), in the order the bridge emits them, because the view and its sequence belong to the session and not to a connection. Two are sent only to the connection whose request made them, and only while it is attached: `session.view.snapshot`, which answers its `session.attach` or `session.view.resync`, and the startup question `trust.request` ([HOST-10](#HOST-10) says which connections are sent that). An event made while a session is being opened goes to the connection opening it. A `session.close` attaches the connection that sent it, so `session.closed` goes to it and to each connection attached when the close was answered, after the closer's answer ([HOST-8](#HOST-8)). The host tells the bridge the name of the client that sent each send, answer, trust answer and cancel it passes on, so the view and the trail can name the client that sent, answered or cancelled ([RPCVIEW-14](session-view.md#RPCVIEW-14), [TRACE-7](trace.md#TRACE-7)).
 
 The first answer to a question counts, and a later answer to it is refused with `no_such_request` ([RPCVIEW-6](session-view.md#RPCVIEW-6)). A `turn.send` while a turn runs is refused with `turn_in_flight`, whichever attached connection sent the turn that is running.
 
@@ -215,7 +216,7 @@ The host holds the near end of its client's channel while it runs the person's h
 <a id="HOST-10"></a>
 ### HOST-10: a question is put only to a client that can answer it
 
-The kinds a session can be asked are the union of the answers ([HOST-1](#HOST-1)) of its attached connections, counted once the session's view has started: after `session.view.start` by a connection attached to it, or `session.attach` by one joining it. A host's session starts with nobody able to answer, whichever way it was opened. A question is put to the session only if its kind is one the host offers a reply for (`confirm`, `run`, `fetch` and `ask`, from the same list as the allowlist) and an attached connection was given that answer. A write's question is the `confirm` kind. Any other question is refused when it is asked, in the shape its kind is refused in, and is not shown, not numbered and not left waiting. This holds for every kind, so a turn that asks for command output, a vouch or an MCP call does not hang.
+The kinds a session can be asked are the union of the answers ([HOST-1](#HOST-1)) of its attached connections, leaving out any stopped for the session ([HOST-15](#HOST-15)), counted once the session's view has started: after `session.view.start` by a connection attached to it, or `session.attach` by one joining it. A host's session starts with nobody able to answer, whichever way it was opened. A question is put to the session only if its kind is one the host offers a reply for (`confirm`, `run`, `fetch` and `ask`, from the same list as the allowlist) and an attached connection was given that answer. A write's question is the `confirm` kind. Any other question is refused when it is asked, in the shape its kind is refused in, and is not shown, not numbered and not left waiting. This holds for every kind, so a turn that asks for command output, a vouch or an MCP call does not hang.
 
 A question that is asked is shown to every attached connection in the view, including one not given its kind, and only a connection given its kind may answer it. Another connection's answer is refused with `not_allowed` and the question stays waiting. The startup question `trust.request` is sent only to a connection given `trust`.
 
@@ -293,3 +294,46 @@ The host test client is a client program for the host, named on its command line
 
 `verified-by: by-construction (packages/agent-client/tests/host-clients.test.ts starts a built bravebot-host with two of these clients and a model service of its own, and checks that a client given trust is shown the startup question and answers it while a client without trust is not shown it and has its answer refused, that a question is shown to both clients and the first answer lands while a later answer from the other is refused, that a client leaving keeps the question for the one that stays and a question a client may not answer is marked for another device, and that a second send while a turn runs is refused as busy; tests/dev-relay.test.ts answers the startup question of a relay's session from this client)`
 
+<a id="HOST-15"></a>
+### HOST-15: a connection held to a ceiling is stopped before a session it is attached to goes past it
+
+A connection can be served held to a ceiling, the scope a person approved for it ([decision 18](../design/mobile/decisions-and-tradeoffs.md#18-a-devices-scope-is-a-ceiling-set-at-pairing)). No client the host starts is held to one. It is how a paired device's connection is to be served, and no device's connection reaches the host yet ([LISTEN-6](device-listener.md#LISTEN-6)).
+
+The bridge tells the host of each moment a session can come to reach more, before it sends anything that follows:
+
+- when a turn starts, with the scope the session holds then, which takes in a settings edit made since the last turn;
+- when the trust question is answered, with the scope the answer leaves;
+- when the person approves, for the turn, a fetch of a web host or a line run with no sandbox, which no ceiling holds.
+
+A scope that cannot be read is not taken to be inside a ceiling. A write the person approves is inside the session's workspace, and a line run confined is held to the sandbox the scope names, so neither stops a connection.
+
+At each of these moments, each attached connection whose ceiling does not cover the session, as `Scope::covers` decides, is stopped for that session:
+
+- it is sent `{"event":"session.suspended","session":S,"data":{"widened":[...]}}`, which names what went past, in the words `Field::name` gives;
+- it is sent no other event of the session from then on, except `session.closed`;
+- every request it makes about the session is refused with `not_allowed`;
+- it counts for no kind of question in the session ([HOST-10](#HOST-10)).
+
+A narrowing stops no connection, and a stopped connection is not told twice. Who can answer is worked out again wherever the host set it from what it read before a stop a turn's thread made, so a question is never put to a stopped connection alone. A connection held to a ceiling is also refused `session.new` in a workspace, and `session.attach` of a session, whose scope its ceiling does not cover, before anything of the session reaches it. For a join, the scope is the session's now where a turn does not hold its state, and otherwise the one the host was last told of, and a session in which a fetch or an unconfined line was approved is refused for as long as it is open, since its view goes on holding what the grant brought in. A grant is recorded, and the connections attached are read, in one hold of the lock a join is handed over under, so a grant approved as a connection joins either refuses the join or stops the connection. When a session closes, what the host held about it goes.
+
+The person approves a stopped connection for a session on the host, through `Host::approve`, which no command typed on the host calls yet. The connection is held in that session alone to the scope the session holds then, or, while a turn holds the session's state, the one the host was last told of; where that could not be read, the approval is refused until it can. Its ceiling does not change, so every other session, and every session it opens or joins later, is still measured against the ceiling set at pairing, and an approval neither widens nor stops another session. What was approved for a session goes when the session closes. An approval covers what the session held when the stop is lifted, and a grant approved after that stops the connection again. The stop is lifted where a join is handed over, and the connection is sent the session's view again ([HOST-11](#HOST-11)) before any later event, and can act and answer in the session as before.
+
+`verified-by: bravebot_ui_bridge::host::a_held_connection_is_stopped_before_what_follows_a_widening`
+`verified-by: bravebot_ui_bridge::host::a_covered_scope_stops_nobody_and_one_that_could_not_be_read_stops_a_held_connection`
+`verified-by: bravebot_ui_bridge::host::a_grant_for_one_turn_stops_every_held_connection_and_no_other`
+`verified-by: bravebot_ui_bridge::host::a_stop_before_the_view_names_no_kinds`
+`verified-by: bravebot_ui_bridge::host::a_stopped_connection_acts_on_nothing_until_the_person_approves_it`
+`verified-by: bravebot_ui_bridge::host::a_held_connection_opens_no_session_past_its_ceiling`
+`verified-by: bravebot_ui_bridge::host::an_approved_connection_is_sent_the_view_again_and_answers_as_before`
+`verified-by: bravebot_ui_bridge::host::a_held_connection_joins_no_session_a_grant_for_one_turn_widened`
+`verified-by: bravebot_ui_bridge::host::a_join_is_checked_again_for_a_grant_where_it_is_handed_over`
+`verified-by: bravebot_ui_bridge::host::kinds_set_from_before_a_stop_are_settled_to_leave_the_stopped_connection_out`
+`verified-by: bravebot_ui_bridge::host::every_kind_a_host_client_can_answer_is_decided_for_the_ceiling`
+`verified-by: bravebot_ui_bridge::host::approving_is_refused_while_the_sessions_scope_cannot_be_read`
+`verified-by: bravebot_ui_bridge::host::an_approval_for_one_session_does_not_widen_another`
+`verified-by: bravebot_ui_bridge::host::an_approval_for_one_session_does_not_stop_another`
+`verified-by: bravebot_ui_bridge::answerers::a_change_made_while_kinds_are_worked_out_lands_after_them`
+`verified-by: bravebot_ui_bridge::answering_tests::an_approved_fetch_tells_the_scope_watch_before_the_yes_is_acted_on`
+`verified-by: bravebot_ui_bridge::answering_tests::an_approved_unconfined_run_tells_the_scope_watch_and_a_confined_one_does_not`
+`verified-by: bravebot_ui_bridge::scope_tests::the_trust_answer_is_told_to_the_scope_watch_before_anything_it_makes_the_bridge_say`
+`verified-by: bravebot_ui_bridge::scope_tests::a_turn_is_told_to_the_scope_watch_before_anything_of_it_is_sent`

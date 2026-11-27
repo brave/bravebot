@@ -132,6 +132,15 @@ fn a_phone_pairs_through_the_hosts_input_and_is_shown_synthetic_data() {
         "pair kitchen-phone control {}",
         scratch.path("project").display()
     ));
+    // The limits a new session there would have, which typing the code approves, come before the
+    // invitation.
+    host.says("typing the code also approves these limits for kitchen-phone");
+    let project = host.says("the project directory: ");
+    assert!(
+        project.contains(&scratch.path("project").display().to_string()),
+        "{project}"
+    );
+    host.says("the permission mode: ask, which asks before every effect");
     let said = host.says("or type this link on the phone: ");
     let link_text = said
         .split("or type this link on the phone: ")
@@ -173,6 +182,7 @@ fn a_phone_pairs_through_the_hosts_input_and_is_shown_synthetic_data() {
         listed.contains("connected") && !listed.contains("not connected"),
         "{listed}"
     );
+    host.says("the sandbox mode: ");
 
     let everything = kept.text();
     assert!(

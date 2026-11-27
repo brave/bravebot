@@ -71,6 +71,7 @@ fn terms(name: &str, grant: Grant) -> Terms {
         name: name.into(),
         grant,
         workspace: PathBuf::from("/work"),
+        ceiling: crate::registry::narrow_ceiling("/work"),
     }
 }
 
@@ -471,6 +472,7 @@ fn a_window_that_runs_out_is_announced_while_the_listener_runs() {
                 name: "watch".into(),
                 grant: Grant::Read,
                 workspace: PathBuf::from("/work"),
+                ceiling: crate::registry::narrow_ceiling("/work"),
             },
         )
         .unwrap();

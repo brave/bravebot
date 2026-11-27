@@ -91,6 +91,7 @@ pub mod update_status;
 pub mod usage_ping;
 pub mod variant;
 pub mod view;
+pub mod widening;
 pub mod window_fault;
 pub mod window_title;
 pub mod wire;
