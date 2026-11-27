@@ -183,11 +183,17 @@ fn start(loops: &mut Loops, request: repeat::Request) -> (Value, usize) {
     // Said before the start, so a person who typed `1s` reads what the interval became (LOOP-7).
     let held = match adjusted {
         Some(Held::Raised(every)) => {
-            lines.push(t!(desktop_loop_interval_raised, every = repeat::spell(every)));
+            lines.push(t!(
+                desktop_loop_interval_raised,
+                every = repeat::spell(every)
+            ));
             json!({"held": "raised", "every": repeat::spell(every)})
         }
         Some(Held::Capped(every)) => {
-            lines.push(t!(desktop_loop_interval_capped, every = repeat::spell(every)));
+            lines.push(t!(
+                desktop_loop_interval_capped,
+                every = repeat::spell(every)
+            ));
             json!({"held": "capped", "every": repeat::spell(every)})
         }
         None => Value::Null,

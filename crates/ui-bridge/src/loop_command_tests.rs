@@ -288,7 +288,10 @@ fn the_answers_are_worded_for_the_window() {
         "{report}"
     );
     assert!(report["lines"][0].as_str().unwrap().ends_with(" · one"));
-    assert_eq!(typed(&mut bridge, &handle, "stop 2")["lines"], json!(["Loop 2 stopped."]));
+    assert_eq!(
+        typed(&mut bridge, &handle, "stop 2")["lines"],
+        json!(["Loop 2 stopped."])
+    );
     let later = call(
         &mut bridge,
         "after.command",
@@ -920,7 +923,10 @@ fn an_after_line_is_sent_once_after_its_delay_and_leaves_no_loop() {
     bridge.poll_loops_at(typed + Duration::from_secs(300));
     let ticks = named(&events, "loop.tick");
     assert_eq!(ticks.len(), 1);
-    assert_eq!((ticks[0]["number"].as_u64(), ticks[0]["once"].as_bool()), (Some(1), Some(true)));
+    assert_eq!(
+        (ticks[0]["number"].as_u64(), ticks[0]["once"].as_bool()),
+        (Some(1), Some(true))
+    );
     settle(&mut bridge, &handle);
     assert!(numbers(&mut bridge, &handle).is_empty());
     assert_eq!(
