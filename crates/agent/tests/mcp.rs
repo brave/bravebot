@@ -208,6 +208,14 @@ fn write_chat(stream: &mut std::net::TcpStream, reply: Option<&str>) {
 ///
 /// Unlike `serve_by_marker_in` in turn.rs, a request whose rule has no reply left is refused at once
 /// and not held, so this cannot hold a delegate that fails only once the turn has asked again.
+#[expect(
+    clippy::expect_used,
+    reason = "a mock server fails its test by panicking"
+)]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a body sent after the test stopped reading is one nothing is waiting for"
+)]
 fn serve_chat_by_marker_holding(
     rules: Vec<(&'static str, Vec<String>)>,
     held: &'static str,
@@ -221,14 +229,14 @@ fn serve_chat_by_marker_holding(
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
 
+    /// What each run has left to be told, by the marker that says which run it is.
+    type Rules = Vec<(&'static str, std::collections::VecDeque<String>)>;
+
     let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     let kept = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&kept);
-    /// What each run has left to be told, by the marker that says which run it is.
-    type Rules = Vec<(&'static str, std::collections::VecDeque<String>)>;
-
     let rules: Arc<Mutex<Rules>> = Arc::new(Mutex::new(
         rules
             .into_iter()

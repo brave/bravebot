@@ -2797,6 +2797,7 @@ mod tests {
     /// answer, which is not the last when more than one was asked for. The deadline is long because
     /// a loaded machine can leave the worker thread unscheduled for seconds; a passing run returns
     /// as soon as the answers are in.
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
     fn wait_for_every_answer(screen: &mut SessionsScreen) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {

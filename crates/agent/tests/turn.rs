@@ -70137,6 +70137,7 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
 /// on the way to it.
 #[cfg(unix)]
 #[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling() {
     let scratch = Scratch::new("checkout-linked-redirect");
     let home = Scratch::new("checkout-linked-redirect-home");
@@ -70256,6 +70257,7 @@ fn a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling() 
 /// program deleted is named as deleted and left in the working directory. The apply closes the
 /// checkout's open loop (OPEN-1).
 #[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
     let scratch = Scratch::new("checkout-status-apply");
     let home = Scratch::new("checkout-status-apply-home");
