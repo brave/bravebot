@@ -2391,7 +2391,12 @@ fn failure_message(error: &bravebot_agent::TurnError) -> String {
         {
             // No model and no cut-off: only a refused request names a model, and only a reply
             // that spent its ceiling has a cut-off.
-            bravebot_session::sessions::failure_problem(diagnosis, None, None)
+            bravebot_session::sessions::failure_words(
+                diagnosis,
+                None,
+                None,
+                bravebot_session::sessions::Joined::Sentences,
+            )
         }
         _ => error.to_string(),
     }
