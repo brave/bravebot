@@ -43120,7 +43120,7 @@ fn a_request_for_no_sandbox_before_a_confined_line_failed_is_refused_unasked() {
     );
     let said = message_from(&result.third, "Result of run");
     assert!(
-        said.contains("run the line with the sandbox first"),
+        said.contains("run the same line with the sandbox first, in the foreground"),
         "the refusal does not say what to do: {said}"
     );
 }
@@ -43170,8 +43170,249 @@ fn a_line_stopped_at_its_deadline_earns_no_request_for_no_sandbox() {
     let last = result.third.rfind("Result of run").expect("a result");
     let said = message_from(&result.third[last..], "Result of run");
     assert!(
-        said.contains("run the line with the sandbox first"),
+        said.contains("run the same line with the sandbox first, in the foreground"),
         "the request was not refused for want of a failure: {said}"
+    );
+    assert!(
+        said.contains("A line stopped at its deadline or by the person earns nothing"),
+        "the refusal does not say a line stopped at its deadline earns nothing: {said}"
+    );
+}
+
+/// SANDBOX-29: a line started with `background: true` that the sandbox refuses earns no request for
+/// no sandbox, however it ended. After the job's failure is read with `job_output`, the same line
+/// asked for with `'unconfined': true` is refused before anybody is asked and does not run, and the
+/// refusal says that a line in the background earns nothing and that the same line has to fail in
+/// the foreground. Where the job's account names `'unconfined': true`, it says the same. The
+/// regressions it rejects are counting a failed job as a failure, which puts the line to the person
+/// with no foreground attempt, and a refusal that tells a planner whose background line just failed
+/// only to run the line with the sandbox, which it has done.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_request_for_no_sandbox_after_a_failed_background_line_is_told_a_foreground_line_must_fail() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "unconfined-after-background";
+    let line = writing_the_marker(name, "first");
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": line, "background": true }).to_string(),
+        ),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":30,"until_exit":true}"#,
+        ),
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": line, "unconfined": true }).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    let task = Task::new("run it in the background, then with no sandbox")
+        .with_profile(Some(
+            bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+        ))
+        .with_confined_runs(true)
+        .asking_about_unconfined(true)
+        .with_sandbox_mode(bravebot_sandbox::SandboxMode::WorkspaceWrite);
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        no_programs(&scratch.path),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    for _ in 0..3 {
+        let _ = received.recv().expect("a request before the last");
+    }
+    let last = received.recv().expect("the last request");
+    let wrote = outside_the_session(&format!("{name}-first")).exists();
+    clear_the_markers(name);
+
+    let told = message_from(&last, "Result of job_output");
+    assert!(
+        told.contains("It failed"),
+        "the background line did not fail with the sandbox: {told}"
+    );
+    if told.contains("'unconfined': true") {
+        assert!(
+            told.contains(JOB_RUNS_AGAIN_IN_THE_FOREGROUND),
+            "the job's account names the unconfined line without saying a foreground line must \
+             fail first: {told}"
+        );
+    }
+    assert!(
+        !wrote,
+        "the request after a background line ran with no sandbox"
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|request| !request.unconfined),
+        "the person was asked about a request a background line had earned"
+    );
+    let at = last.rfind("Result of run").expect("a result");
+    let said = message_from(
+        last.get(at..).expect("rfind returns a char boundary"),
+        "Result of run",
+    );
+    for (clause, missing) in [
+        (
+            "run the same line with the sandbox first, in the foreground",
+            "the refusal does not name the same line in the foreground as the next step",
+        ),
+        (
+            "ran in the foreground with the sandbox and exited non-zero",
+            "the refusal does not say a foreground line must fail",
+        ),
+        (
+            "A line run in the background, whether started with 'background' or moved there, \
+             earns nothing",
+            "the refusal does not say a background line earns nothing",
+        ),
+    ] {
+        assert!(said.contains(clause), "{missing}: {said}");
+    }
+}
+
+/// SANDBOX-29: a failure a delegate's line had earns no request for no sandbox in the turn that
+/// started the delegate, since each turn keeps a count of its own. The delegate runs a line the
+/// sandbox refuses, and once it has ended the planner asks for a line with `'unconfined': true`,
+/// which is refused before anybody is asked and does not run. The regression it rejects is a count
+/// shared between a turn and its delegates, which would put the line to the person on the strength
+/// of a failure the planner only read about in a delegate's report.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one case: the scripted planner and delegate, the turn, and what each was told"
+)]
+#[test]
+fn a_failure_a_delegates_line_had_earns_no_request_for_no_sandbox_in_the_turn_that_started_it() {
+    if cannot_confine_here() {
+        return;
+    }
+    let name = "unconfined-after-a-delegate";
+    let failing = writing_the_marker(name, "first");
+    let asked_for = writing_the_marker(name, "second");
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    // The delegate's replies are held until the planner's request answered "waiting" has arrived,
+    // so the turn waits for the delegate and the planner's request for no sandbox comes after the
+    // delegate's line has failed.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "HAVE-A-DELEGATE-FAIL-THEN-ASK",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"RUN-A-LINE-THE-SANDBOX-REFUSES"}"#,
+                    ),
+                    reply_with("waiting"),
+                    tool_request(
+                        "run",
+                        &serde_json::json!({ "command": asked_for, "unconfined": true })
+                            .to_string(),
+                    ),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "RUN-A-LINE-THE-SANDBOX-REFUSES",
+                vec![
+                    tool_request(
+                        "run",
+                        &serde_json::json!({ "command": failing }).to_string(),
+                    ),
+                    reply_with("it failed"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "RUN-A-LINE-THE-SANDBOX-REFUSES",
+            after: "HAVE-A-DELEGATE-FAIL-THEN-ASK",
+            asked: 2,
+        },
+    );
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+    let task = Task::new("HAVE-A-DELEGATE-FAIL-THEN-ASK")
+        .with_profile(Some(
+            bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+        ))
+        .with_confined_runs(true)
+        .asking_about_unconfined(true)
+        .with_sandbox_mode(bravebot_sandbox::SandboxMode::WorkspaceWrite);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        no_programs(&scratch.path),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    let first_wrote = outside_the_session(&format!("{name}-first")).exists();
+    let second_wrote = outside_the_session(&format!("{name}-second")).exists();
+    clear_the_markers(name);
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate had ended before the planner answered \"waiting\""
+    );
+
+    let asked = every_request(&received);
+    let (planner, delegate): (Vec<&String>, Vec<&String>) = asked
+        .iter()
+        .partition(|body| body.contains("HAVE-A-DELEGATE-FAIL-THEN-ASK"));
+    let ran = delegate
+        .iter()
+        .find(|body| body.contains("Result of run"))
+        .expect("the delegate never ran its line, so this is not the case under test");
+    let failed = message_from(ran, "Result of run");
+    assert!(
+        !first_wrote && failed.contains("exited"),
+        "the delegate's line did not fail with the sandbox: {failed}"
+    );
+    assert!(
+        !second_wrote,
+        "the planner's line ran with no sandbox on a failure its delegate had"
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|request| !request.unconfined),
+        "the person was asked about a request only a delegate's failure had earned"
+    );
+    let said = newest_tool_result_text(planner.last().expect("the planner's last request"));
+    assert!(
+        said.contains("run the same line with the sandbox first, in the foreground"),
+        "the planner's request was not refused for want of a failure of its own: {said}"
     );
 }
 
@@ -43497,6 +43738,11 @@ fn a_failed_signing_step_names_the_unconfined_line_only_where_it_is_accepted() {
         };
         assert!(said.contains(agent_hint), "{context}");
         assert_eq!(said.contains("'unconfined': true"), pointed, "{context}");
+        assert!(
+            !said.contains(JOB_RUNS_AGAIN_IN_THE_FOREGROUND),
+            "a line that failed in the foreground is told to run in the foreground first: \
+             {context}"
+        );
     }
 }
 
@@ -43563,8 +43809,20 @@ fn a_failed_signing_job_names_the_unconfined_line_only_where_it_is_accepted() {
         };
         assert!(account.contains(agent_hint), "{context}");
         assert_eq!(account.contains("'unconfined': true"), pointed, "{context}");
+        assert_eq!(
+            account.contains(JOB_RUNS_AGAIN_IN_THE_FOREGROUND),
+            pointed,
+            "the job's account names the unconfined line without saying a foreground line must \
+             fail first: {context}"
+        );
     }
 }
+
+/// What the account of a failed job that names `'unconfined': true` says the line needs first
+/// (SANDBOX-29): a run in the foreground with the sandbox, since a line in the background earns no
+/// request.
+const JOB_RUNS_AGAIN_IN_THE_FOREGROUND: &str =
+    "run this line again in the foreground with the sandbox, without 'background'";
 
 /// SANDBOX-28, SANDBOX-29: a path that cannot be lent says why, so the planner does not try the
 /// directory above, then the file, then another tool; and a request to write points at the line

@@ -385,11 +385,11 @@ write it, and a checkout's file may too, since it only asks for more.
 ## Asking for no sandbox
 
 A line is run with the sandbox first. A request to run a line with `unconfined: true` is accepted only
-after a line in the same turn ran with the sandbox and exited non-zero, or a line was refused because
-the platform could not confine its program, and each such failure earns
+after a line in the same turn ran in the foreground with the sandbox and exited non-zero, or a line was
+refused because the platform could not confine its program, and each such failure earns
 one request. The failed line need not be the one the request names. A request made before any line
 has failed or been refused that way is refused without asking you, and the planner is told to run
-the line with the sandbox first. Where the refusal was a closed `run.network` this platform cannot
+the same line in the foreground with the sandbox first. Where the refusal was a closed `run.network` this platform cannot
 deny, the planner is told that a line with no sandbox, or the mode `off`, runs with the network
 open. A request you decline keeps the one it earned, and accepting one spends it.
 
@@ -407,8 +407,9 @@ it. A line left running in the background is told the same. A program inside a `
 this way is told in the older words, that the command substitution produced no value and the line may have
 run in part, with no routes named, and the refusal earns no request for no sandbox.
 
-A line stopped at its deadline or by you, a line that already ran with no sandbox and a line moved
-to the background earn nothing. A line whose own redirection leaves the workspace is the exception:
+A line stopped at its deadline or by you, a line that already ran with no sandbox, a line started
+with `background: true`, a line moved to the background and a failure a delegate reported earn
+nothing. A line whose own redirection leaves the workspace is the exception:
 the sandbox refuses it before anything runs, so it is accepted without a failure, as
 [described below](#a-redirection-is-a-write).
 

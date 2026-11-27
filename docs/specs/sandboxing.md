@@ -4356,9 +4356,18 @@ none to add to.
   LaunchServices and Apple Events, so launching an application, opening a URL in one or scripting
   one needs the line run again with the argument. On every platform it is also the sentence after a
   failed git step in a linked worktree or a submodule, which says the git line can be run again
-  with the argument, in the same sessions ([SANDBOX-19](#SANDBOX-19)).
-- **Accepted after a failure.** The driver accepts the request only while a line has run with the
-  sandbox in this turn and exited non-zero (a step [RUN-13](tools/run.md#RUN-13) counts as closed is not a failure here), or a line whose program the platform could not confine
+  with the argument, in the same sessions ([SANDBOX-19](#SANDBOX-19)). The account of a line that
+  ran in the background, started with `background: true` or moved there, and failed, is built from
+  the same sentences, and where one of them names the argument it adds that a line in the
+  background earns no request, and that unless a line has already failed in the foreground with
+  the sandbox this turn, the same line is to be run again in the foreground with the sandbox
+  first, with a `deadline_seconds` long enough for it to end on its own, and the argument asked
+  for only if that run fails because the sandbox refused it access. The sentence is fixed when the
+  job starts, and a line may fail in the foreground before the job's end is read, so it covers
+  both cases. Whether it is added is decided by the conditions that chose those
+  sentences, not by reading the account.
+- **Accepted after a failure.** The driver accepts the request only while a line has run in the
+  foreground with the sandbox in this turn and exited non-zero (a step [RUN-13](tools/run.md#RUN-13) counts as closed is not a failure here), or a line whose program the platform could not confine
   ([SANDBOX-17](#SANDBOX-17)) was refused, in the foreground or the background, and each such
   failure earns one request: accepting one spends it, so a request the person declines, or a plan
   the policy then refuses, leaves it. Where that refusal is a closed `run.network` the platform
@@ -4366,13 +4375,23 @@ none to add to.
   line runs with the network open, since only the sandbox holds it closed. Under a managed
   `run.network` of `closed` the session accepts neither route, so neither is named. The failed line
   need not be the line the request names. A request with none earned is refused before anybody is
-  asked, with a sentence that says to run the line with the sandbox first and that a line which
-  failed with one, or was refused because its program could not be confined, earns the request,
-  and the trail records the refusal under `sandbox` naming that cause, which the person watching is
-  also told in a note beside the sentence. The count comes from exit codes, whether the deadline
+  asked, with a sentence that says to run the same line with the sandbox first, in the foreground,
+  and that a line which ran in the foreground with one and exited non-zero, or was refused because
+  its program could not be confined, earns the request. It also says that a line run in the
+  background, whether started with `background: true` or moved there, a line stopped at its
+  deadline or by the person, and a failure a delegate reported earn nothing, and that the line is
+  to be run without `background` and with a `deadline_seconds` long enough for it to end on its
+  own, so the planner's next confined attempt is one that can earn the request. The trail records
+  the refusal under `sandbox` naming that cause, which the person watching is also told in a note
+  beside the sentence. The count comes from exit codes, whether the deadline
   stopped the line and whether a program was refused for want of confinement, and nothing a program
-  printed is read. A line stopped at its deadline or by the person, a line that ran with no sandbox
-  and a line moved to the background after it started earn nothing. A program refused for want of
+  printed is read. A line stopped at its deadline or by the person, a line that ran with no sandbox,
+  a line started with `background: true` and a line moved to the background after it started earn
+  nothing by their exit code, so the count stays on the exit codes of lines that ended in the
+  foreground. Counting a background line that exits non-zero would let a job's end, learned between
+  rounds, change what the gate accepts, and the sentence tells the planner to run the same line in
+  the foreground instead. A failure a delegate's line had earns nothing in the turn that started
+  the delegate, since each turn keeps a count of its own. A program refused for want of
   confinement inside a `$(...)` earns nothing either ([SANDBOX-17](#SANDBOX-17),
   [#4018](https://github.com/brave/bravebot/issues/4018)). A line whose own redirection leaves the
   workspace is accepted without one, since the sandbox refuses it before anything runs and so no
@@ -4406,6 +4425,11 @@ refuse the path.
 `verified-by: bravebot_agent::tools::tests::confinement::a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one`
 `verified-by: bravebot_agent::tools::tests::confinement::a_redirection_out_of_the_workspace_is_accepted_with_no_failure_counted`
 `verified-by: bravebot_agent::turn::a_line_stopped_at_its_deadline_earns_no_request_for_no_sandbox`
+`verified-by: bravebot_agent::turn::a_request_for_no_sandbox_after_a_failed_background_line_is_told_a_foreground_line_must_fail`
+`verified-by: bravebot_agent::turn::a_failed_signing_job_names_the_unconfined_line_only_where_it_is_accepted`
+`verified-by: bravebot_agent::confine::tests::a_failed_background_line_naming_unconfined_is_told_to_fail_in_the_foreground_first`
+`verified-by: bravebot_agent::confine::tests::a_failed_background_line_whose_checkout_push_or_signing_names_unconfined_is_told_the_foreground_first`
+`verified-by: bravebot_agent::turn::a_failure_a_delegates_line_had_earns_no_request_for_no_sandbox_in_the_turn_that_started_it`
 `verified-by: bravebot_agent::turn::a_request_for_no_sandbox_before_a_confined_line_failed_is_refused_unasked`
 `verified-by: bravebot_agent::tools::tests::run_arguments::only_a_managed_closed_network_refuses_an_unconfined_request`
 `verified-by: bravebot_agent::tools::tests::run_arguments::run_takes_one_command_line_and_nothing_else`
@@ -4423,8 +4447,6 @@ refuse the path.
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
 `verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
 `verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
-`verified-by: bravebot_agent::confine::tests::each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt`
-`verified-by: bravebot_agent::tools::tests::run_arguments::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::the_mode_that_asks_nothing_does_not_approve_an_unconfined_line`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_refused_where_the_session_does_not_accept_it`
 `verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`
