@@ -6413,6 +6413,9 @@ fn map_as_told(map: &crate::workspace::RepoMap) -> String {
             tally(map.skipped, "source file was", "source files were")
         ));
     }
+    if map.links > 0 {
+        notes.push(search_links_clause(map.links));
+    }
     if !notes.is_empty() {
         told.push_str("\n\n(");
         told.push_str(&notes.join("; "));
@@ -22601,6 +22604,7 @@ mod tests {
             skipped: 0,
             truncated: false,
             unreadable: false,
+            links: 0,
         };
         assert_eq!(
             map_as_told(&whole),

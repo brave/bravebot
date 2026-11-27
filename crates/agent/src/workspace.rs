@@ -3529,6 +3529,7 @@ impl Workspace {
             )?;
             let unreadable = collected.unreadable;
             let unvouched = collected.unvouched;
+            let links = collected.links;
             paths.sort();
             // A name that is not UTF-8 is spelled with replacement characters, so it can spell
             // the same as a file that really holds them. Each is opened by that spelling, which
@@ -3606,6 +3607,7 @@ impl Workspace {
                     skipped,
                     truncated,
                     unreadable,
+                    links,
                 },
                 label,
             ))

@@ -115,20 +115,26 @@ exist when the map was cut off.
 `verified-by: bravebot_agent::tools::a_map_says_each_way_it_fell_short_and_a_whole_one_says_nothing`
 `verified-by: bravebot_agent::workspace::a_repo_map_says_when_a_directory_could_not_be_opened`
 
+<a id="MAP-6"></a>
+### MAP-6: a map counts the symbolic links its walk did not enter
+
+`repo_map` shares its walk with `list_files` and `search`, and reports the symbolic links the walk
+meets and does not enter the same way those two do: a number, with no name
+([LIST-6](list-files.md#LIST-6)). A directory made only of links maps as one with no source files,
+and the count says a link was there instead of the map reading as an empty directory.
+
+**Why.** Silence reads as an empty directory, the same reason [MAP-5](#MAP-5) reports a cut map
+rather than staying quiet about it.
+
+`verified-by: bravebot_agent::workspace::a_repo_map_counts_every_symbolic_link_it_did_not_enter`
+
 ## Known costs
 
 - **The walk of a distrusted tree is not bounded by the cap on files.** Each file nobody vouched
   for costs a trust-map question and a lookup of its other names, and it spends none of the cap
   ([MAP-5](#MAP-5)), so a distrusted directory of a million files is walked to its end. What stops
   the walk is the end of the tree and the cap on the files it may open. The directories it does not
-  walk ([MAP-4](#MAP-4)) and the links it does not enter ([LIST-6](list-files.md#LIST-6)) are left
-  out of the walk. There is no second cap on the files set aside, since a second cap would let a
+  walk ([MAP-4](#MAP-4)) are left out of the walk; the links it does not enter are counted
+  ([MAP-6](#MAP-6)). There is no second cap on the files set aside, since a second cap would let a
   distrusted directory decide which vouched files a map reaches.
 
-## Not covered
-
-The walk behind a map does not enter a symbolic link, as a listing does not
-([LIST-6](list-files.md#LIST-6)), and a map reports no count of them. A directory made of links maps
-as one with no source files. A listing of the directory says how many links were not entered. A
-count in the map is tracked in
-[brave/bravebot#3404](https://github.com/brave/bravebot/issues/3404).
