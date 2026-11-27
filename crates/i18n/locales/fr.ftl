@@ -1081,9 +1081,9 @@ auth-google-failed =
 auth-google-recorded =
     { $file } nomme désormais { $project } sous provider.google-vertex : les sessions lancées à partir de maintenant atteignent { $host } avec le jeton d'accès de la CLI Google Cloud et sans clé
 auth-google-already-recorded =
-    google-vertex nomme déjà ce projet à l'emplacement global et prend le jeton d'accès de la CLI Google Cloud, donc rien n'a été enregistré
+    google-vertex est déjà configuré par un bloc provider ou une variable et prend le jeton d'accès de la CLI Google Cloud, donc rien n'a été enregistré et une session utilise le projet que cette configuration nomme
 auth-google-left =
-    google-vertex est déjà configuré par un bloc provider ou une variable, et pas pour ce projet à l'emplacement global avec le jeton d'accès de la CLI Google Cloud, donc il a été laissé tel quel et une session utilise ce que cette configuration nomme
+    google-vertex est déjà configuré par un bloc provider ou une variable, et pas pour prendre le jeton de la CLI Google Cloud, donc il a été laissé tel quel et une session utilise ce que cette configuration nomme
 auth-google-not-recorded =
     la connexion a fonctionné, et aucune session ne l'utilise tant qu'un bloc provider ne nomme pas le projet : ajoutez { $entry } à { $file } ({ $problem })
 auth-which-way = Laquelle ? Tapez son numéro ou son nom, ou rien pour arrêter :

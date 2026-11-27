@@ -1117,8 +1117,8 @@ each by a number and by the word that names it:
   Vertex AI, or for a gateway a provider block names.
 - `chatgpt` signs in to a ChatGPT Plus or Pro account in a browser ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
 - `xai` signs in to an xAI SuperGrok subscription with a code entered on any device ([XAI-7](xai-sign-in.md#XAI-7)).
-- `google` signs in to Gemini on Vertex AI with the Google Cloud CLI in a browser, asks for a project and
-  records it, and keeps no key ([BACKEND-74](backends.md#BACKEND-74)).
+- `google` signs in to Gemini on Vertex AI with the Google Cloud CLI in a browser, asks for a project where
+  no block or variable configures the service and records it, and keeps no key ([BACKEND-74](backends.md#BACKEND-74)).
 
 A way that already holds a sign-in says so on its line. For Brave it is that a key is stored. For
 Bedrock it is shown where every account named has a usable session. For a gateway it is the ids keys are stored for, whether or not a block
@@ -1137,7 +1137,7 @@ status (CLI-6).
 `bravebot auth login <way>` runs that way without the list. A word that names no way, `leo` among
 them, is refused, and so is any word after `brave`, `bedrock`, `import`, `chatgpt`, `xai` or `google`. The list needs a terminal on stdin and on stderr. Without one, the
 command is refused with the argument status and the forms a script can type instead. The Google way
-needs a terminal as well, since the project is typed, and without one it is refused with the argument
+needs a terminal as well, since the project may be typed and the sign-in waits on a browser, and without one it is refused with the argument
 status.
 
 Each way is run by the function its own command runs, so `auth login import` prompts, refuses and

@@ -79,13 +79,14 @@ No key is stored. Sign in and record the project with:
 bravebot auth login google
 ```
 
-It asks for the project at the terminal, runs `gcloud auth application-default login` and shows the address
+It asks for the project at the terminal, unless a block or `GOOGLE_CLOUD_PROJECT` already configures the
+service, runs `gcloud auth application-default login` and shows the address
 and code the CLI prints, then adds the block below to `~/.bravebot/settings.json` with `location` set to
 `global`. A project that holds a character a project id cannot hold is refused before `gcloud` starts, and a
 sign-in that fails or is cancelled records nothing. Where `gcloud` already gives a token, no browser opens.
-Where a block or `GOOGLE_CLOUD_PROJECT` already configures the service, the file is left as it is and the
+Where a block or `GOOGLE_CLOUD_PROJECT` already configures the service, no project is asked for, the file is left as it is and the
 command says so. It is refused in an incognito session, since it writes the settings, and without a
-terminal, since the project is typed. [Signing in](../signing-in.md#google) has the full description.
+terminal, since the sign-in waits on a browser. [Signing in](../signing-in.md#google) has the full description.
 
 `bravebot auth status google` says whether `gcloud` gives a token without starting a sign-in, and exits 0
 only if it does. `bravebot auth logout google` removes the block the sign-in wrote, only where it still holds

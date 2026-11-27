@@ -1371,11 +1371,13 @@ auth-google-failed =
 # is the one typed.
 auth-google-recorded =
     { $file } names { $project } under provider.google-vertex now, so sessions started from now on reach { $host } with the Google Cloud CLI's access token and no key
+# Said where a block or a variable configures google-vertex so that a session sends it the Google Cloud CLI's
+# token. No project is asked for then, since that configuration names its own.
 auth-google-already-recorded =
-    google-vertex already names this project at the location global and takes the Google Cloud CLI's access token, so nothing was recorded
-# Said where a block or a variable configures google-vertex for another project, another location or a key.
+    google-vertex is already configured by a provider block or a variable and takes the Google Cloud CLI's access token, so nothing was recorded and a session uses the project that configuration names
+# Said where a block or a variable configures google-vertex another way, such as with a key.
 auth-google-left =
-    google-vertex is already configured by a provider block or a variable, and not for this project at the location global with the Google Cloud CLI's token, so it was left as it is and a session uses what that configuration names
+    google-vertex is already configured by a provider block or a variable, and not to take the Google Cloud CLI's token, so it was left as it is and a session uses what that configuration names
 # The entry is the text to add under provider by hand, and the problem is one sentence about the file.
 auth-google-not-recorded =
     the sign-in worked, and no session uses it until a provider block names the project: add { $entry } to { $file } ({ $problem })

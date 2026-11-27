@@ -129,7 +129,8 @@ signed in to Google with the Google Cloud CLI
 
 The command checks everything that needs no answer first: that you are not in an incognito session, that
 `gcloud` is installed (it says where to get it if not), that a terminal is there, and that the settings file can
-take the block. It then asks for the project. A project holds letters, digits, `_`, `.`, `:` and `-` and starts
+take the block. It then asks for the project, except where a `google-vertex` block or `GOOGLE_CLOUD_PROJECT` already
+configures the service, which names its own project and is signed in as it is. A project holds letters, digits, `_`, `.`, `:` and `-` and starts
 with a letter or a digit. Anything else is refused with exit status 2, without being repeated, before `gcloud`
 starts. Typing nothing stops without running anything.
 
@@ -142,9 +143,9 @@ shown is not repeated.
 Once the sign-in is made, `~/.bravebot/settings.json` gains
 `"provider": {"google-vertex": {"options": {"project": "<project>", "location": "global"}}}` and no key, variable
 or file. No location is asked for. Edit `location` in the block to reach another one. The settings you had are
-kept. Where a `google-vertex` block already names the same project and no key, nothing is written and the
-command says so. Where a block or `GOOGLE_CLOUD_PROJECT` configures the service another way, the file is left as
-it is and the command says so.
+kept. Where a `google-vertex` block or `GOOGLE_CLOUD_PROJECT` already configures the service, no project is asked
+for and nothing is written. The command runs the sign-in and says the configuration takes the CLI's token and
+names its own project, or, where it names a key or another credential, that it was left as it is.
 
 The next session answers a `google-vertex/google/...` model with the CLI's token and no key, as
 [Google Vertex AI](providers/google-vertex.md#signing-in-with-google-cloud-credentials-instead-of-a-key) says.

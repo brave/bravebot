@@ -1027,12 +1027,21 @@ struct GoogleTask<'a> {
     lookup: &'a dyn Fn(&str) -> Option<String>,
 }
 
+/// The block a Google sign-in adds, with the project typed for it.
+struct Added {
+    /// The settings as they were read before the login, which the write is refused to change.
+    destination: Destination,
+    project: String,
+    offer: Offer<'static>,
+}
+
 /// What recording the sign-in does to the person's settings.
 enum Recording {
     /// No block names `google-vertex`, so the block of this sign-in is added to the settings as they
     /// were read before the login, and the write is refused where they changed since.
-    Add(Destination),
-    /// A block or the environment already configures the same project and location.
+    Add(Box<Added>),
+    /// A block or the environment already configures `google-vertex` so that a session sends it the
+    /// Google Cloud CLI's token.
     Already,
     /// A block or the environment configures `google-vertex` another way, which is the person's.
     Left,
@@ -1068,11 +1077,50 @@ fn google() -> ExitCode {
     .code()
 }
 
+/// The block a Google sign-in adds where no block or variable configures the service, or the
+/// ending of the command where the project is not given, is refused, or the file cannot take the block.
+///
+/// Asked once the checks that need no answer are made, and the lock on stdin is let go before the
+/// login starts. The rule the endpoint is built under holds the project, so one this accepts is one
+/// a session can reach.
+fn block_to_add<R: BufRead, W: Write>(
+    open_questions: impl FnOnce() -> Prompting<R, W>,
+    settings: &Path,
+    err: &mut impl Write,
+) -> Result<Recording, Ending> {
+    let answered = open_questions().answer(t!(auth_google_project_question));
+    let project = match answered {
+        Some(project) if !project.is_empty() => project,
+        _ => return Err(Ending::Done),
+    };
+    let Ok(offer) = key_entry::google_cloud_offer(&project, "") else {
+        return Err(refused(
+            err,
+            Ending::Argument,
+            t!(auth_google_project_refused),
+        ));
+    };
+    match with_block(&offer, settings) {
+        Ok(destination) => Ok(Recording::Add(Box::new(Added {
+            destination,
+            project,
+            offer,
+        }))),
+        Err(problem) => Err(refused(
+            err,
+            Ending::Failed,
+            t!(auth_google_cannot_record, problem = problem),
+        )),
+    }
+}
+
 /// The sign-in of `bravebot auth login google`, over the places it reads and writes, so a test runs
 /// the whole of it: the project, the login and the block that names the project.
 ///
 /// Every check that needs no answer is made before the project is asked for, and the project is
-/// checked before the login starts, so a refusal starts no program and writes nothing. The lines
+/// checked before the login starts, so a refusal starts no program and writes nothing. Where a block
+/// or the environment already configures the service the project is not asked for, since nothing
+/// would use it: the login runs and the result is worded from that configuration. The lines
 /// the Google Cloud CLI writes are untrusted, so they are drawn before they are shown, and nothing
 /// else it printed is repeated.
 fn sign_in_google<R: BufRead, W: Write>(
@@ -1107,35 +1155,15 @@ fn sign_in_google<R: BufRead, W: Write>(
         return refused(err, Ending::Failed, t!(auth_google_not_installed));
     }
 
-    // Asked once the checks that need no answer are made, and the lock on stdin is let go before the
-    // login starts.
-    let answered = open_questions().answer(t!(auth_google_project_question));
-    let project = match answered {
-        Some(project) if !project.is_empty() => project,
-        _ => return Ending::Done,
-    };
-    // The rule the endpoint is built under, so a project this accepts is one a session can reach.
-    let Ok(offer) = key_entry::google_cloud_offer(&project, "") else {
-        return refused(err, Ending::Argument, t!(auth_google_project_refused));
-    };
     let settings = bravebot_config::user_settings_file(directory);
     let recording = match existing {
-        Some(block)
-            if block.needs_google_cloud_token(task.lookup)
-                && block.base_url == offer.provider.base_url =>
-        {
-            Recording::Already
-        }
+        // The block or the variable is the person's and names its own project, so a project typed
+        // here would be written nowhere and passed to nothing.
+        Some(block) if block.needs_google_cloud_token(task.lookup) => Recording::Already,
         Some(_) => Recording::Left,
-        None => match with_block(&offer, &settings) {
-            Ok(destination) => Recording::Add(destination),
-            Err(problem) => {
-                return refused(
-                    err,
-                    Ending::Failed,
-                    t!(auth_google_cannot_record, problem = problem),
-                );
-            }
+        None => match block_to_add(open_questions, &settings, err) {
+            Ok(recording) => recording,
+            Err(ending) => return ending,
         },
     };
 
@@ -1158,33 +1186,40 @@ fn sign_in_google<R: BufRead, W: Write>(
     match recording {
         Recording::Already => tell(out, t!(auth_google_already_recorded)),
         Recording::Left => tell(out, t!(auth_google_left)),
-        Recording::Add(destination) => match crate::import::write(&destination, unrecordable) {
-            Ok(()) => tell(
-                out,
-                t!(
-                    auth_google_recorded,
-                    file = shown(&settings),
-                    project = printable(&project),
-                    host = printable(offer.provider.host())
-                ),
-            ),
-            Err(problem) => {
-                return refused(
-                    err,
-                    Ending::Failed,
+        Recording::Add(added) => {
+            let Added {
+                destination,
+                project,
+                offer,
+            } = *added;
+            match crate::import::write(&destination, unrecordable) {
+                Ok(()) => tell(
+                    out,
                     t!(
-                        auth_google_not_recorded,
-                        entry = format!(
-                            r#""provider": {{"{}": {}}}"#,
-                            printable(offer.id()),
-                            offer.entry_text()
-                        ),
+                        auth_google_recorded,
                         file = shown(&settings),
-                        problem = problem
+                        project = printable(&project),
+                        host = printable(offer.provider.host())
                     ),
-                );
+                ),
+                Err(problem) => {
+                    return refused(
+                        err,
+                        Ending::Failed,
+                        t!(
+                            auth_google_not_recorded,
+                            entry = format!(
+                                r#""provider": {{"{}": {}}}"#,
+                                printable(offer.id()),
+                                offer.entry_text()
+                            ),
+                            file = shown(&settings),
+                            problem = problem
+                        ),
+                    );
+                }
             }
-        },
+        }
     }
     Ending::Done
 }
@@ -4848,12 +4883,14 @@ mod tests {
         assert!(run.settings_text().expect("recorded").contains(A_PROJECT));
     }
 
-    /// CLI-18 and BACKEND-74: a block naming google-vertex is the person's. The same project at the
-    /// location `global`, with no key resolving, is recorded again by nothing and says so, whether a
-    /// block or `GOOGLE_CLOUD_PROJECT` names it; another project, the same project at another
-    /// location, a block naming a key, and the environment naming another project are left as they
-    /// are and said to be left. The Google Cloud CLI is still signed in. The regression it rejects is
-    /// reading the same project at another location as recorded already.
+    /// CLI-18 and BACKEND-74: a block naming google-vertex is the person's. Where nothing resolves a
+    /// key and the block states no `authorization` or `x-goog-api-key` header, so that a session sends
+    /// the Google Cloud CLI's token, the command says so, whatever project or location the block
+    /// names and whether a block or `GOOGLE_CLOUD_PROJECT` names it. A block naming a key that
+    /// resolves, a key exported for the environment's route, and a block whose `baseURL` is another
+    /// host are left as they are and said to be left. The Google Cloud CLI is still signed in and
+    /// nothing is written. The regression it rejects is wording the result from the project typed,
+    /// which reads the same project at another location as recorded and another project as left.
     #[test]
     fn a_google_vertex_block_already_there_is_left_as_it_is() {
         let same = format!(
@@ -4867,14 +4904,17 @@ mod tests {
         let keyed = format!(
             r#"{{"provider": {{"google-vertex": {{"env": ["A_VERTEX_KEY"], "options": {{"project": "{A_PROJECT}"}}}}}}}}"#
         );
-        for (how, settings, exported, recorded_already) in [
-            ("same project", same.as_str(), &[][..], true),
-            ("another project", other, &[][..], false),
+        let proxied = format!(
+            r#"{{"provider": {{"google-vertex": {{"options": {{"project": "{A_PROJECT}", "baseURL": "https://gateway.work.example/v1"}}}}}}}}"#
+        );
+        for (how, settings, exported, takes_the_token) in [
+            ("a project", same.as_str(), &[][..], true),
+            ("another project", other, &[][..], true),
             (
-                "same project at another location",
+                "a project at another location",
                 elsewhere.as_str(),
                 &[][..],
-                false,
+                true,
             ),
             (
                 "a key variable that is not set",
@@ -4889,29 +4929,37 @@ mod tests {
                 false,
             ),
             (
-                "the environment naming another project",
-                "{}",
-                &[("GOOGLE_CLOUD_PROJECT", "another-project")][..],
+                "a host that is not Google's",
+                proxied.as_str(),
+                &[][..],
                 false,
             ),
             (
-                "the environment naming the same project",
+                "the environment naming a project",
                 "{}",
                 &[("GOOGLE_CLOUD_PROJECT", A_PROJECT)][..],
                 true,
+            ),
+            (
+                "the environment naming a project and a key",
+                "{}",
+                &[
+                    ("GOOGLE_CLOUD_PROJECT", A_PROJECT),
+                    ("GOOGLE_API_KEY", AN_EXPORTED_KEY),
+                ][..],
+                false,
             ),
         ] {
             let run = google_in(
                 "cli-auth-google-existing",
                 GoogleGiven {
-                    answers: &format!("{A_PROJECT}\n"),
                     settings: Some(settings),
                     exported,
                     ..GoogleGiven::default()
                 },
                 &Login::Signs(&[]),
             );
-            let (said, not_said) = if recorded_already {
+            let (said, not_said) = if takes_the_token {
                 (t!(auth_google_already_recorded), t!(auth_google_left))
             } else {
                 (t!(auth_google_left), t!(auth_google_already_recorded))
@@ -4925,6 +4973,57 @@ mod tests {
                 Some(settings),
                 "{how}: the settings were written"
             );
+        }
+    }
+
+    /// CLI-18 and BACKEND-74: where a block or the environment already configures google-vertex, no
+    /// project is asked for, so what is typed there is never read: the command goes to the login with
+    /// the input empty, and a line that is not a project id is not refused. The regression it rejects
+    /// is asking for the project anyway, which ends the command without signing in on nothing
+    /// typed and refuses an answer that would not have been used.
+    #[test]
+    fn a_google_vertex_configuration_already_there_is_signed_in_with_no_project_asked() {
+        let block = format!(
+            r#"{{"provider": {{"google-vertex": {{"options": {{"project": "{A_PROJECT}"}}}}}}}}"#
+        );
+        for (how, settings, exported, answers) in [
+            ("a block and nothing typed", block.as_str(), &[][..], ""),
+            (
+                "a block and an answer that is no project",
+                block.as_str(),
+                &[][..],
+                "a/b\n",
+            ),
+            (
+                "the environment and nothing typed",
+                "{}",
+                &[("GOOGLE_CLOUD_PROJECT", A_PROJECT)][..],
+                "",
+            ),
+        ] {
+            let run = google_in(
+                "cli-auth-google-no-question",
+                GoogleGiven {
+                    answers,
+                    settings: Some(settings),
+                    exported,
+                    ..GoogleGiven::default()
+                },
+                &Login::Signs(&[]),
+            );
+            assert_eq!(run.ending, Ending::Done, "{how}: {}", run.err);
+            assert!(
+                run.asked.is_empty(),
+                "{how}: a question was put: {}",
+                run.asked
+            );
+            assert_eq!(run.started, 1, "{how}: the login did not run");
+            assert!(
+                run.out.contains(t!(auth_google_signed_in)),
+                "{how}: {}",
+                run.out
+            );
+            assert!(run.err.is_empty(), "{how}: {}", run.err);
         }
     }
 
@@ -5197,7 +5296,8 @@ mod tests {
         assert_eq!(distinct.len(), all.len(), "two standings share a sentence");
     }
 
-    /// CLI-18 and CLI-23: stored keys are written private and read back.
+    /// CLI-18 and STATE-1: the keys are written where the configuration reads them, readable by this
+    /// account alone, with no temporary left beside them, and forgetting the last one removes the file.
     #[test]
     fn stored_keys_are_written_private_and_read_back() {
         let scratch = Scratch::new("cli-auth-gateway-keys");

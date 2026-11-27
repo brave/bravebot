@@ -3988,9 +3988,9 @@ settings, so it is sent only while `GOOGLE_API_KEY` is not exported. Where an ex
 is the only thing that names the service, the service ends with the export and the stored key is never
 sent. The sign-in records no block, since a block replaces this route. The sign-in says so and names
 both variables ([CLI-18](cli.md#CLI-18)). `bravebot auth login google` records no block in that case
-either. The command says it is recorded already where `GOOGLE_CLOUD_PROJECT` names the same project, the
-location is `global` and no key resolves, and says the service is left as it is where the project or location
-differs from the one typed or a key resolves ([BACKEND-74](#BACKEND-74)).
+either. The command says the configuration takes the CLI's token and names its own project where
+`GOOGLE_CLOUD_PROJECT` names the project and no key resolves, and says the service is left as it is where
+a key resolves ([BACKEND-74](#BACKEND-74)), and it asks for no project.
 
 **Why.** `GOOGLE_API_KEY` is a name other Google clients read, and a key exported for one of them
 may be scoped to a service other than this one. What limits that is where the key goes and when: only
@@ -4020,6 +4020,7 @@ project, is dropped as any such entry is, and leaves the route open. A managed l
 `verified-by: bravebot_cli::auth::google_vertex_the_environment_configures_is_stored_a_key_and_given_no_block`
 `verified-by: bravebot_config::lib::a_google_vertex_service_holds_a_credential_the_record_names_by_host`
 `verified-by: bravebot_cli::auth::a_google_vertex_block_already_there_is_left_as_it_is`
+`verified-by: bravebot_cli::auth::a_google_vertex_configuration_already_there_is_signed_in_with_no_project_asked`
 
 <a id="BACKEND-51"></a>
 ### BACKEND-51: a Vertex key is sent in `x-goog-api-key` and nowhere else
@@ -5226,12 +5227,15 @@ is refused with the argument status, as is a word after the way; no state direct
 with the failure status; and no `gcloud` on the usable part of `PATH` is refused with the failure status,
 saying where to get the Google Cloud CLI and that a key is the other route.
 
-The project is asked for at the terminal. Nothing typed, or the end of the input, ends the command
-successfully having run nothing. The project is held to the rule [BACKEND-49](#BACKEND-49) states, and one
+The project is asked for at the terminal where no block or variable configures `google-vertex`. Nothing
+typed, or the end of the input, ends the command successfully having run nothing. The project is held to
+the rule [BACKEND-49](#BACKEND-49) states, and one
 that configures no service ends the command with the argument status before the program starts. The
 refusal does not repeat it. No location is asked for, and the block states `global`, which is where a
 block with none is reached. The settings file is checked to be able to take the block before the program
-starts, so a person does not finish a browser sign-in to learn that it cannot.
+starts, so a person does not finish a browser sign-in to learn that it cannot. Where a block or
+`GOOGLE_CLOUD_PROJECT` already configures the service no project is asked for, since that configuration
+names its own and nothing would write or use the one typed, and the command goes to the sign-in.
 
 The sign-in is the one of [BACKEND-65](#BACKEND-65), started by the same function with the same fixed
 arguments and environment. Where the CLI already gives a token no login is run and no browser opens, and
@@ -5246,9 +5250,10 @@ Once the sign-in is made, the person's own settings gain `provider.google-vertex
 and `options.location` and no `env`, `apiKey`, `keyFile` or `baseURL`, kept as the settings file is kept
 when any other entry is recorded: what the file says stays, it is flushed, and it is refused where it changed
 while the command ran. Where a block or `GOOGLE_CLOUD_PROJECT` already configures the service, the file is
-not written: the same project at the location `global`, where nothing resolves a key and the block states no
-`authorization` or `x-goog-api-key` header, is said to be recorded already, and any other state, such as the same
-project at another location, is left as it is and said to be. The next session answers a `google-vertex/google/...` model with
+not written and the project is not asked for: a configuration where nothing resolves a key and the block
+states no `authorization` or `x-goog-api-key` header, so that a session sends the CLI's token, is said to
+name its own project and to be recorded already, and any other configuration, such as one that names a key, is
+left as it is and said to be. The next session answers a `google-vertex/google/...` model with
 the CLI's token as a bearer, as [BACKEND-65](#BACKEND-65) says, and no key is stored.
 
 **Why.** A person whose organisation disallows API keys, or who has `gcloud` and no key, would otherwise
@@ -5256,9 +5261,11 @@ install the CLI, sign in, find the settings and write the block by hand. Sign-in
 command so the person does not stop between them. The checks and the project come first because the
 sign-in opens a browser and waits, and a sign-in that cannot be recorded is the work a person has to repeat.
 The project is the one value a request needs that the CLI does not know, and a location is left at
-`global` because the issue asks for the project alone and a block with no location is already reached
-there. A block already there is the person's own, so this command reads it as configuration and does not
-rewrite it. The decision whether a login is needed is the one place the output of the CLI is looked at: the
+`global` because a block with no location is already reached there, so asking for one would add a
+question and change nothing about where requests go. A block already there is the person's own, so this
+command reads it as configuration and does not rewrite it, and does not ask for a project it would not
+use, as the gateway way asks no question where a block configures the service ([CLI-18](cli.md#CLI-18)).
+The decision whether a login is needed is the one place the output of the CLI is looked at: the
 standard output of `print-access-token` is read for whether it is one line holding no whitespace, which is
 what `decode` in `crates/agent/src/gcloud.rs` checks, and that one bit chooses between "already signed in", a
 login, and a fixed failure sentence. The bytes are cleared, never shown, never sent to a model and never
@@ -5275,6 +5282,7 @@ makes on the same output before a request.
 `verified-by: bravebot_cli::auth::the_google_sign_in_refuses_before_asking_or_starting_anything`
 `verified-by: bravebot_cli::auth::a_google_cli_that_already_gives_a_token_opens_no_browser_and_still_records`
 `verified-by: bravebot_cli::auth::a_google_vertex_block_already_there_is_left_as_it_is`
+`verified-by: bravebot_cli::auth::a_google_vertex_configuration_already_there_is_signed_in_with_no_project_asked`
 `verified-by: bravebot_cli::auth::a_settings_file_that_cannot_take_the_block_is_found_before_the_cli_starts`
 `verified-by: bravebot_cli::running::auth_login_google_signs_in_with_the_cli_and_records_the_project_and_no_key`
 `verified-by: bravebot_cli::running::auth_login_google_records_nothing_when_the_login_fails_or_the_project_is_refused`

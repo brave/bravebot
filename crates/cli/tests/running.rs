@@ -11262,7 +11262,8 @@ fn gcloud_starts(scratch: &Scratch) -> Vec<String> {
 /// CLI-18 and BACKEND-65: picking the Google way from the list asks for the project, runs the
 /// Google Cloud CLI's login with each line it writes shown, and records a `provider.google-vertex`
 /// block that states the project and no key. The settings the person had are kept, no key is stored,
-/// and a second sign-in finds a token already given, opens no browser and records nothing again.
+/// and a second sign-in finds the block there, asks for no project, finds a token already given,
+/// opens no browser and records nothing again.
 #[cfg(unix)]
 #[test]
 #[expect(clippy::expect_used, reason = "a test fails by panicking")]
@@ -11321,15 +11322,19 @@ fn auth_login_google_signs_in_with_the_cli_and_records_the_project_and_no_key() 
         assert!(!text.contains("placeholder-gcloud-token"), "{text}");
     }
 
-    let again = answering(&["auth", "login", "google"], "example-project-1\n");
+    let again = answering(&["auth", "login", "google"], "");
     let (transcript, _) = said(&again);
     if cfg!(target_os = "linux") {
         assert_eq!(again.status.code(), Some(0), "{transcript}");
     }
     assert!(transcript.contains("no browser was opened"), "{transcript}");
     assert!(
-        transcript.contains("already names this project"),
+        transcript.contains("already configured by a provider block"),
         "{transcript}"
+    );
+    assert!(
+        !transcript.contains("Google Cloud project that has"),
+        "the project was asked for: {transcript}"
     );
     assert_eq!(
         gcloud_starts(&scratch).len(),
