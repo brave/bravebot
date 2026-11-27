@@ -47,7 +47,10 @@ fn planner() -> (String, Bodies, Gate) {
                     }
                 }
                 let mut body = vec![0; length];
-                let _ = reader.read_exact(&mut body);
+                if reader.read_exact(&mut body).is_err() {
+                    // The bridge hung up before sending the body, so there is nobody to answer.
+                    return;
+                }
                 let body = String::from_utf8_lossy(&body).to_string();
                 if !body.contains("You are a prompt-injection classifier.") {
                     kept.lock().unwrap().push(body);
@@ -61,7 +64,8 @@ fn planner() -> (String, Bodies, Gate) {
                     reply.len()
                 );
                 let mut stream = reader.into_inner();
-                let _ = stream.write_all(response.as_bytes());
+                // A turn the test cancelled has hung up, and its reply has nowhere to go.
+                stream.write_all(response.as_bytes()).unwrap_or_default();
             });
         }
     });
@@ -103,12 +107,17 @@ fn opened() -> (Bridge, String, Events, Bodies, Held) {
     (bridge, handle, events, bodies, held)
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "every caller builds the params in place with `json!`"
+)]
 fn call(bridge: &mut Bridge, method: &str, params: Value) -> Result<Value, Failure> {
     let line = json!({"id": 1, "method": method, "params": params});
     bridge.dispatch(&Request::parse(&line.to_string()).unwrap())
 }
 
 /// `/loop <argument>`, and then the end of the turn its first tick started, where it started one.
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn typed(bridge: &mut Bridge, handle: &str, argument: &str) -> Value {
     let answer = call(
         bridge,
@@ -809,6 +818,7 @@ fn closing_a_session_ends_every_loop_and_says_so() {
 /// LOOP-12. Rejects a loop that is written to the session record, or comes back when the session
 /// is opened again.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_reopened_session_has_no_loops() {
     let (mut bridge, handle, _events, _bodies, held) = opened();
     typed(&mut bridge, &handle, "5m check the deploy");
@@ -949,6 +959,7 @@ fn a_typed_turn_between_ticks_leaves_the_loops_alone() {
 }
 
 /// `/after <argument>`, answered at once.
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn after(bridge: &mut Bridge, handle: &str, argument: &str) -> Value {
     call(
         bridge,

@@ -281,6 +281,10 @@ pub fn leading_interval(argument: &str) -> Option<(Duration, &str)> {
 }
 
 /// An interval written as an `every ...` clause at the end, and the line without it.
+#[expect(
+    clippy::string_slice,
+    reason = "every index is where `find` matched or just past the ASCII word it matched, so each is a char boundary of both strings"
+)]
 pub fn trailing_interval(argument: &str) -> Option<(Duration, &str)> {
     // Byte offsets are shared between the two because lowercasing only ASCII leaves every other
     // byte where it was, so an index found in one is an index into the other.
@@ -892,6 +896,7 @@ pub fn spell(duration: Duration) -> String {
 mod tests {
     use super::*;
 
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
     fn request(argument: &str) -> Request {
         parse(argument)
             .started()
@@ -1002,6 +1007,7 @@ mod tests {
     /// and a sent-once tick each end their loop with their own reason. A wrong implementation
     /// resets a loop's clock for a turn the person typed, or names the wrong reason.
     #[test]
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
     fn the_end_of_a_tick_arms_the_next_or_ends_the_loop_with_its_reason() {
         let now = Instant::now();
         let mut loops: Loops = Loops::default();

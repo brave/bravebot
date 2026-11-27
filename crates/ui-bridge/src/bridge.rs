@@ -5561,6 +5561,10 @@ impl RunSettings {
 ///
 /// A struct rather than a dozen arguments, because the list was the kind that grows one
 /// parameter at a time until nobody can read the call.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about the turn, and no two of them are states of one thing"
+)]
 struct Work {
     emitter: Emitter,
     session: String,
