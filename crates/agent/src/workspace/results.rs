@@ -69,6 +69,86 @@ pub const MAX_SEARCH_CONTEXT: usize = 10;
 /// Reached, the search keeps the matches and stops adding the lines around them, and says so.
 pub(super) const MAX_CONTEXT_LINES: usize = 1_000;
 
+/// How many characters the lines of one search result may come to in all, matches and context
+/// lines together, counting a newline after each and a `--` line between groups of context.
+///
+/// The caps on matches, on context lines and on a line's length bound the *count* of what a result
+/// holds, and together they allow several hundred thousand characters: 200 matches of 500
+/// characters with 10 lines of context either side is over 2,000,000 before the 1,000-line context
+/// cap applies, and 1,000 context lines of 500 characters alone is 500,000. A turn re-sends every
+/// result with each later request, so the size of a result is paid for on every round until the
+/// conversation is compacted. This bounds the size the way [`MAX_PAGE_CHARS`] bounds a page of a
+/// file, about 5,000 tokens at four characters a token.
+pub(crate) const MAX_SEARCH_CHARS: usize = 20_000;
+
+/// What the `--` line a result writes between two groups of context that are not adjacent costs,
+/// counting its newline.
+const GROUP_SEPARATOR_CHARS: usize = 3;
+
+/// What one line of a result costs against [`MAX_SEARCH_CHARS`]: `path`, a separator, the line
+/// number, a separator, the text and the newline after it. A match and a context line cost the same,
+/// since they differ only in which separator they write.
+fn line_chars(path: &str, line: usize, text: &str) -> usize {
+    path.chars().count() + line.to_string().len() + 2 + text.chars().count() + 1
+}
+
+/// Drops the lines of a result past [`MAX_SEARCH_CHARS`], and reports whether it dropped anything
+/// and whether what it dropped included a match.
+///
+/// The two lists are walked in file and line order, the order the result is written in, so what is
+/// kept is a prefix of the result and a match is never kept while an earlier one is not. The first
+/// line is always kept, so a result that found something never comes back empty because of the
+/// budget. Only the lengths of lines the search already holds are read, and the answer is a pair of
+/// booleans that the workspace carries and never branches the turn on.
+///
+/// A dropped match is one the caller has to treat as left behind, as it does a match cut by
+/// [`MAX_MATCHES`], so that the offset it reports continues from the first one dropped. A dropped
+/// context line is not: context counts toward neither the cap nor the offset.
+pub(super) fn keep_within_budget(
+    matches: &mut Vec<Match>,
+    around: &mut Vec<ContextLine>,
+) -> (bool, bool) {
+    // Written only between context lines, as the renderer writes it: a result with none is the
+    // matches one to a line.
+    let separated = !around.is_empty();
+    let mut spent = 0usize;
+    let mut previous: Option<(&str, usize)> = None;
+    let (mut kept_matches, mut kept_context) = (0usize, 0usize);
+    while kept_matches < matches.len() || kept_context < around.len() {
+        let take_match = match (matches.get(kept_matches), around.get(kept_context)) {
+            (Some(m), Some(c)) => (m.path.as_str(), m.line) < (c.path.as_str(), c.line),
+            (Some(_), None) => true,
+            _ => false,
+        };
+        let (path, line, text) = if take_match {
+            let m = &matches[kept_matches];
+            (m.path.as_str(), m.line, m.text.as_str())
+        } else {
+            let c = &around[kept_context];
+            (c.path.as_str(), c.line, c.text.as_str())
+        };
+        let mut cost = line_chars(path, line, text);
+        if separated && previous.is_some_and(|(before, at)| before != path || at + 1 != line) {
+            cost += GROUP_SEPARATOR_CHARS;
+        }
+        if spent + cost > MAX_SEARCH_CHARS && kept_matches + kept_context > 0 {
+            break;
+        }
+        spent += cost;
+        previous = Some((path, line));
+        if take_match {
+            kept_matches += 1;
+        } else {
+            kept_context += 1;
+        }
+    }
+    let matches_cut = kept_matches < matches.len();
+    let cut = matches_cut || kept_context < around.len();
+    matches.truncate(kept_matches);
+    around.truncate(kept_context);
+    (cut, matches_cut)
+}
+
 /// How many files a `files` or `count` result lists.
 ///
 /// The match cap does not bound them, since neither shape returns a match, and a common word can
@@ -325,8 +405,12 @@ pub struct Matches {
     /// Whether the cap on listed files cut `tallies` short. `matched` still counts every match the
     /// walk read, so a `count` total stays whole.
     pub tallies_truncated: bool,
-    /// Whether matches were left out because the match cap was reached.
+    /// Whether matches were left out because the match cap was reached or the result reached
+    /// [`MAX_SEARCH_CHARS`]. Either way `first_match` plus the matches returned is where a further
+    /// search continues.
     pub truncated: bool,
+    /// Whether [`MAX_SEARCH_CHARS`] dropped any line of the result, a match or only context.
+    pub size_truncated: bool,
     /// Whether files were left unopened because the walk hit its entry cap.
     ///
     /// A separate fact from `truncated` and the more dangerous of the two: a search that stopped

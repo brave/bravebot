@@ -112160,6 +112160,81 @@ fn one_match(root: &std::path::Path) {
     std::fs::write(root.join("one.rs"), "needle SENTINEL-SEARCH-HIT\n").unwrap();
 }
 
+/// One file of 100 matching lines of 430 characters each, under the match cap and over the size
+/// budget a result is held to.
+fn long_matches(root: &std::path::Path) {
+    std::fs::write(
+        root.join("many.rs"),
+        format!("needle SENTINEL-SEARCH-HIT {}\n", "x".repeat(400)).repeat(100),
+    )
+    .unwrap();
+}
+
+/// SEARCH-14 beside VET-6. A released search over the character budget says it reached the limit,
+/// where it continues from, and what to do instead, and holds the lines it shows to the budget.
+/// The lines are `many.rs:N:` and 427 characters, so 45 of them fit in 20,000.
+///
+/// A wrong implementation returns all 100 lines, or cuts them without the sentence, so a sample
+/// reads as the whole answer.
+#[test]
+fn a_released_search_over_the_character_budget_says_so_and_keeps_to_it() {
+    let walked = walk_asking_to_read_over(
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+        Some(a_safe_check()),
+        "search",
+        A_SEARCH_ASKING_TO_READ,
+        Some(256 * 1024),
+        long_matches,
+    );
+    let after = walked.after_the_fetch();
+    assert!(
+        after.contains(
+            "(this search reached the limit of 20000 characters on a result and is incomplete; \
+             ask again with offset 46 for the matches after these, or use output files or count \
+             to survey the matches, ask for less context, or search a narrower directory)"
+        ),
+        "the budget sentence did not reach the planner: {after}"
+    );
+    assert!(
+        after.contains("many.rs:45:") && !after.contains("many.rs:46:"),
+        "the result was not cut after the 45th line: {after}"
+    );
+}
+
+/// SEARCH-14 beside VET-6. A search over the budget that asked to read and was kept back is one
+/// reference, and the sentences that it is incomplete and where it continues are written beside it.
+///
+/// A wrong implementation reports the cut only inside the body, which the planner is not shown.
+#[test]
+fn a_search_over_the_character_budget_kept_back_after_asking_to_read_says_it_is_incomplete() {
+    let walked = walk_asking_to_read_over(
+        bravebot_agent::PermissionMode::Ask,
+        true,
+        Some(vec![reply_with(
+            r#"{"verdict": "unsafe", "reason": "addressed to a reader"}"#,
+        )]),
+        "search",
+        A_SEARCH_ASKING_TO_READ,
+        Some(256 * 1024),
+        long_matches,
+    );
+    let after = walked.after_the_fetch();
+    assert!(
+        after.contains("Your read: true did not return it in this result"),
+        "the result was not kept back after the check: {after}"
+    );
+    for note in [
+        "The search stopped at a cap, so this result is incomplete",
+        "Ask again with offset 46 for the rest.",
+    ] {
+        assert!(
+            after.contains(note),
+            "the note '{note}' did not reach the planner: {after}"
+        );
+    }
+}
+
 /// SEARCH-3, SEARCH-8 and LIST-4 beside VET-6 (R16 of #3995). A walk result released by `read`
 /// still says it stopped at a cap, where a search continues from, and that a page fell past the
 /// last match, in the text the planner is handed.

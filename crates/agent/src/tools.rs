@@ -16281,6 +16281,7 @@ fn search<S: Sink>(
                             || found.unvisited
                             || found.timed_out
                             || found.context_truncated
+                            || found.size_truncated
                             || found.tallies_truncated,
                         found.paging(),
                         found.links,
@@ -16394,7 +16395,23 @@ fn search<S: Sink>(
                          incomplete; ask for less context or search a narrower tree)",
                     );
                 }
-                if found.truncated {
+                if found.size_truncated {
+                    // The budget bit, so what follows the last line shown is missing, whichever cap
+                    // would have come next. Where a match was dropped the offset reaches it; where
+                    // only context was, the matches are all there and the offset is not offered.
+                    let continuing = match found.paging() {
+                        Some(Paging::Continue(next)) => {
+                            format!("ask again with offset {next} for the matches after these, or ")
+                        }
+                        _ => String::new(),
+                    };
+                    body.push_str(&format!(
+                        "\n\n(this search reached the limit of {} characters on a result and is \
+                         incomplete; {continuing}use output files or count to survey the matches, \
+                         ask for less context, or search a narrower directory)",
+                        crate::workspace::MAX_SEARCH_CHARS
+                    ));
+                } else if found.truncated {
                     // Without this a model that gets exactly the cap concludes it has
                     // every occurrence, which is how a rename misses call sites.
                     let rest = match found.paging() {
