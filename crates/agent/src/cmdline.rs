@@ -300,8 +300,10 @@ pub enum Reason {
     NotFoundAfter(&'static str),
     /// A program named by a path where nothing runnable is.
     NotAtPath,
-    /// A redirection target that is not exactly one file.
-    NotOnePath,
+    /// A redirection target that is not exactly one file, with the operator that was read as the
+    /// redirection. A `<` or `>` written inside an argument is read as one, so the refusal names
+    /// it and says to quote the argument.
+    NotOnePath(&'static str),
     /// An invocation that would want a terminal, with what to do instead.
     Interactive(&'static str),
     /// An editor in command position. Worded apart from the other interactive refusals because it
@@ -449,8 +451,9 @@ impl fmt::Display for Reason {
             Self::NotAtPath => f.write_str(
                 "is not a program that could be found: nothing runnable is at that path. Every program in a line is found before any step runs, so if an earlier step in this line creates it, run that step on its own first",
             ),
-            Self::NotOnePath => f.write_str(
-                "a redirection has to name exactly one file. A destination worked out from what is on disk is a destination that moves when the tree does",
+            Self::NotOnePath(operator) => write!(
+                f,
+                "an unquoted `{operator}` is a redirection, and a redirection has to name exactly one file. A destination worked out from what is on disk is a destination that moves when the tree does. Where you mean the character as text, as in a `--format` argument, quote the whole argument"
             ),
             Self::Interactive(alternative) => f.write_str(alternative),
             Self::Editor => f.write_str(EDITOR_WITH_EDIT_FILE),
@@ -2720,18 +2723,18 @@ impl Compiler<'_, '_> {
     fn route(&mut self, redirection: &Redirection) -> Result<Route, Refused> {
         Ok(match redirection {
             Redirection::Stdout { target, append } => Route::Stdout {
-                path: self.writing(target)?,
+                path: self.writing(target, if *append { ">>" } else { ">" })?,
                 append: *append,
             },
             Redirection::Stderr { target, append } => Route::Stderr {
-                path: self.writing(target)?,
+                path: self.writing(target, if *append { "2>>" } else { "2>" })?,
                 append: *append,
             },
             Redirection::Both { target } => Route::Both {
-                path: self.writing(target)?,
+                path: self.writing(target, "&>")?,
             },
             Redirection::Stdin { target } => {
-                let path = self.target(target)?;
+                let path = self.target(target, "<")?;
                 self.reads.push(path.clone());
                 Route::Stdin { path }
             }
@@ -2741,8 +2744,8 @@ impl Compiler<'_, '_> {
         })
     }
 
-    fn writing(&mut self, target: &Word) -> Result<PathBuf, Refused> {
-        let path = self.target(target)?;
+    fn writing(&mut self, target: &Word, operator: &'static str) -> Result<PathBuf, Refused> {
+        let path = self.target(target, operator)?;
         // Discarding a stream writes no file, so there is no destination to confine or endorse.
         if !is_the_null_device(&path) {
             self.writes.push(path.clone());
@@ -2755,11 +2758,11 @@ impl Compiler<'_, '_> {
     /// A pattern is refused even where it happens to match a single file today. The plan has to
     /// say where the bytes go, and a destination worked out from what is on disk is a destination
     /// that changes when the tree does.
-    fn target(&self, word: &Word) -> Result<PathBuf, Refused> {
+    fn target(&self, word: &Word, operator: &'static str) -> Result<PathBuf, Refused> {
         let refused = || Refused {
             span: word.span,
             text: render(&word.pieces),
-            reason: Reason::NotOnePath,
+            reason: Reason::NotOnePath(operator),
         };
         if word.pieces.iter().any(is_pattern) {
             return Err(refused());
@@ -4643,7 +4646,7 @@ mod tests {
             (
                 "FOO=\"x-$(./bin/inner a > *.zzz)-y\" ./bin/cmd",
                 "*.zzz",
-                Reason::NotOnePath,
+                Reason::NotOnePath(">"),
             ),
             (
                 "FOO=\"$(./bin/inner | ./bin/missing)\" ./bin/cmd",
@@ -4921,11 +4924,44 @@ mod tests {
         tree.file("only.txt");
         assert_eq!(
             compile_refused("cat > *.txt", &tree.root).reason,
-            Reason::NotOnePath
+            Reason::NotOnePath(">")
         );
         assert_eq!(
             compile_refused("cat > {a,b}.txt", &tree.root).reason,
-            Reason::NotOnePath
+            Reason::NotOnePath(">")
+        );
+    }
+
+    /// An unquoted `<` or `>` inside a format argument, as in `--format=%an%x20<%ae>%n%G?`, is a
+    /// redirection to this grammar, and its target there is a glob. The planner can only repair
+    /// the line if the refusal names the operator it read and says to quote the argument.
+    #[test]
+    fn a_redirection_target_that_is_not_one_path_names_its_operator_and_says_to_quote() {
+        let tree = Tree::new("target-says-quote");
+        for (line, operator, text) in [
+            ("cat --format=%H%n%an%x20<%ae>%n%G?", ">", "%n%G?"),
+            ("cat < *.txt", "<", "*.txt"),
+            ("cat > *.txt", ">", "*.txt"),
+            ("cat >> *.txt", ">>", "*.txt"),
+            ("cat 2> *.txt", "2>", "*.txt"),
+            ("cat 2>> *.txt", "2>>", "*.txt"),
+            ("cat &> *.txt", "&>", "*.txt"),
+        ] {
+            let refusal = compile_refused(line, &tree.root);
+            assert_eq!(refusal.text, text, "{line}");
+            let said = refusal.to_string();
+            assert!(
+                said.contains(&format!("an unquoted `{operator}` is a redirection")),
+                "`{line}` was refused without naming `{operator}`: {said}"
+            );
+            assert!(
+                said.contains("quote the whole argument"),
+                "`{line}` was refused without saying to quote the argument: {said}"
+            );
+        }
+        assert_eq!(
+            argv("git log -1 '--format=%H%n%an%x20<%ae>%n%G?'"),
+            ["git", "log", "-1", "--format=%H%n%an%x20<%ae>%n%G?"]
         );
     }
 

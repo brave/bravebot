@@ -165,6 +165,7 @@ Refused, as a compile error with the offending span named:
 | `!` | history expansion is text the user typed reaching a line the planner wrote |
 | `(` or `)` written onto the end of an argument | grouping is syntax, so an argument holding a parenthesis has to be quoted, and the refusal says so |
 | a program that cannot be found after a `\|`, `\|\|`, `;` or `&&` written onto the end of an argument, such as `--format=%h\|%an` | the character ends the command and the text after it is looked up as a program; the refusal names the separator and says to quote the whole argument where the character is meant as text. After a space the separator is a pipeline or a sequence the writer meant, and the refusal is the plain one |
+| a redirection whose target is a pattern or brace expression, including a `<` or `>` written inside an argument such as `--format=%an <%ae>%G?` | a destination worked out from what is on disk is a destination that moves when the tree does; the refusal names the operator it read and says to quote the whole argument where the character is meant as text |
 | a glob in program position | a program worked out from what is on disk is a program that changes when the tree does |
 
 **A refusal returns an error and runs nothing.** There is no degraded mode, no "fall back to
@@ -222,6 +223,7 @@ tables above is refused exactly as written.
 `verified-by: bravebot_agent::cmdline::an_unquoted_parenthesis_written_onto_an_argument_says_to_quote_the_argument`
 `verified-by: bravebot_agent::cmdline::a_parenthesis_not_written_onto_an_argument_keeps_the_general_refusal`
 `verified-by: bravebot_agent::cmdline::a_program_not_found_after_a_separator_written_onto_an_argument_says_to_quote_it`
+`verified-by: bravebot_agent::cmdline::a_redirection_target_that_is_not_one_path_names_its_operator_and_says_to_quote`
 `verified-by: bravebot_agent::cmdline::a_pattern_in_program_position_is_refused`
 `verified-by: bravebot_agent::cmdline::quoting_makes_a_refused_construct_ordinary_text`
 `verified-by: bravebot_agent::cmdline::a_line_that_half_compiles_yields_nothing`
