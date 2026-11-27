@@ -329,16 +329,22 @@ fn a_desktop_turn_and_plan_run_ask_for_the_level_they_were_given() {
 
 /// Send `method` to `bridge` and answer what it did, trying again while the session's earlier turn
 /// is still ending, since a worker notices that its predecessor finished only when asked.
-fn dispatch_when_idle(bridge: &mut Bridge, method: &str, params: Value) -> Value {
-    let line = json!({"id": 1, "method": method, "params": params}).to_string();
-    let request = Request::parse(&line).expect("a request");
+///
+/// The bridge records a `turn_in_flight` refusal under the send's `messageId` and gives a repeat
+/// of that id the same refusal (RPCVIEW-11), so each new attempt of a send carries a new id.
+fn dispatch_when_idle(bridge: &mut Bridge, method: &str, mut params: Value) -> Value {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
+        let line = json!({"id": 1, "method": method, "params": params}).to_string();
+        let request = Request::parse(&line).expect("a request");
         match bridge.dispatch(&request) {
             Err(failure)
                 if failure.code == crate::protocol::ErrorCode::TurnInFlight
                     && std::time::Instant::now() < deadline =>
             {
+                if params.get("messageId").is_some() {
+                    params = crate::message_ids::with_fresh(params);
+                }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             other => {
