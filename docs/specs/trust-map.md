@@ -557,6 +557,10 @@ approval and no vouch, but any `run` line that started since the preview was dra
 a write approval and an edit approval a person gave, of every path. The price is one more question,
 or one refused write, after a `run` line that started while a person's question was open, even a
 line that wrote nothing. A write nobody was asked about pays nothing for a `run` line.
+What a write nobody was asked about gives up: a `run` line that a sibling delegate started after the
+stamp can rewrite the file without moving its revision, and the write then replaces those bytes
+without anyone having seen them. This is the accepted cost of comparing by revision alone, so that
+one delegate's `run` line does not refuse the writes of the others under a mode that asks nobody.
 The count moves no revision, so the output of other running commands keeps its label. The
 write-back exception in [WRITE-4](tools/write-file.md#WRITE-4) compares the same count against the
 count taken when its slot was read. A backup records the trust of its bytes at capture, taken under

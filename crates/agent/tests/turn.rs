@@ -27203,11 +27203,14 @@ fn a_run_line_that_wrote_in_the_session_directory_is_not_tallied_as_a_session_di
     workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
 
     // A script rather than a line naming the variable: a `$` in a line is refused, so what reads
-    // the environment is the program the line named.
+    // the environment is the program the line named. The delegate's own directory is removed when
+    // the delegate ends, so the script copies what it wrote to the session's directory above it,
+    // where the test reads it.
     let script = scratch.path.join("mark");
     std::fs::write(
         &script,
-        "#!/bin/sh\nprintf workings > \"$BRAVEBOT_SCRATCH_DIR/note.txt\"\n",
+        "#!/bin/sh\nprintf workings > \"$BRAVEBOT_SCRATCH_DIR/note.txt\"\n\
+cat \"$BRAVEBOT_SCRATCH_DIR/note.txt\" > \"$BRAVEBOT_SCRATCH_DIR/../copy.txt\"\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -27254,7 +27257,7 @@ fn a_run_line_that_wrote_in_the_session_directory_is_not_tallied_as_a_session_di
         "the worker was answered before its parent waited for it"
     );
     assert_eq!(
-        std::fs::read_to_string(given.join("note.txt")).unwrap(),
+        std::fs::read_to_string(given.join("copy.txt")).unwrap(),
         "workings",
         "the line did not write in the session directory, so this proves nothing"
     );
