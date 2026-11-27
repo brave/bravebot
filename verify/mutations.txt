@@ -889,3 +889,7 @@ replace: action: hold.action, => action: Action::Allow,
 mutation: seatbelt::rules lets a stage connect to the sockets under its read rows, which the write rows alone reach
 file: crates/sandbox-rules/src/seatbelt.rs
 replace: push_rows(out, &parts.sockets, Operation::NetworkOutbound, parts); => push_rows(out, &parts.reads, Operation::NetworkOutbound, parts);
+
+mutation: Stamp::still_holds ignores the count of run lines where a person was asked, so a line started while they were asked voids nothing
+file: crates/core/src/file_authority.rs
+replace: self.revision == now.revision && (!person_asked || self.programs == now.programs) => self.revision == now.revision

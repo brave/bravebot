@@ -19,6 +19,9 @@ use crate::trust::TrustStore;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
 #[derive(Debug)]
 struct State {
     trust: TrustStore,
@@ -88,11 +91,26 @@ impl State {
 /// What the authority knew of one path at one moment: its revision, and how many `run` lines had
 /// started. Numbers only; two stamps are compared for equality and nothing else is read from them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 pub struct Stamp {
     revision: u64,
     programs: u64,
 }
 
+// What a contract may say about a stamp: its two numbers. Spec functions exist only for Verus, so a
+// build has neither, and neither is a function of `Stamp`'s own.
+#[cfg(verus_keep_ghost)]
+verus! {
+pub closed spec fn spec_revision_of(s: &Stamp) -> u64 {
+    s.revision
+}
+
+pub closed spec fn spec_programs_of(s: &Stamp) -> u64 {
+    s.programs
+}
+}
+
+#[cfg_attr(verus_keep_ghost, verus_verify)]
 impl Stamp {
     /// Whether a write prepared at `self` may go ahead where the path is stamped `now`.
     ///
@@ -101,6 +119,14 @@ impl Stamp {
     /// since only then did somebody see a preview that a program starting meanwhile may have made
     /// untrue (TRUST-4). Where nobody was asked, a `run` line another delegate started between the
     /// stamp and the write voids nothing. Numbers are compared and nothing else is read.
+    #[cfg_attr(verus_keep_ghost, verus_spec(r =>
+        ensures
+            r ==> spec_revision_of(&self) == spec_revision_of(&now),
+            (r && person_asked) ==> spec_programs_of(&self) == spec_programs_of(&now),
+            (spec_revision_of(&self) == spec_revision_of(&now) && !person_asked) ==> r,
+            (spec_revision_of(&self) == spec_revision_of(&now)
+                && spec_programs_of(&self) == spec_programs_of(&now)) ==> r,
+    ))]
     pub fn still_holds(self, now: Stamp, person_asked: bool) -> bool {
         self.revision == now.revision && (!person_asked || self.programs == now.programs)
     }

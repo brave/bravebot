@@ -526,9 +526,9 @@ every returned error or cancellation, as [manifest.md](manifest.md) requires.
 Approvals based on a preview are checked before effect entry against the path's stamp, which is
 its revision and the number of `run` lines started, both taken in the same capture that drew the
 preview and compared as numbers, so a changed path cannot spend the old approval. One comparison
-makes that check for every approval of a write, so none can compare the revision alone: a vouch,
-the approval of a `write_file` (text or a picture), of a `download_url` destination, of an
-`edit_file` and of a write step of a manifest run. An `edit_file` takes its stamp when it reads the
+makes that check for every approval of a write: a vouch, the approval of a `write_file` (text or a
+picture), of a `download_url` destination, of an `edit_file` and of a write step of a manifest
+run. An `edit_file` takes its stamp when it reads the
 file for the edit, in the same capture as the bytes it will compare, and not when it writes. The
 revision is compared for every write. The count of `run` lines is compared only where a person was
 asked: a `run` line that starts while a person is asked voids the answer, because a program opens

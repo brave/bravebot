@@ -48,6 +48,7 @@ crates/core/src/credentials.rs::base64_bytes: r => ensures r is Some ==> r->Some
 crates/core/src/credentials.rs::base64_bytes/loop: invariant at <= run.len(), held < 8, bits < (1u32 << held), bytes@.len() <= at, decreases run.len() - at,
 crates/core/src/device.rs::allows: r => ensures r == crate::spec::grant_allows(self, operation),
 crates/core/src/device.rs::authorizes: r => ensures r == crate::spec::device_verdict(self, operation),
+crates/core/src/file_authority.rs::still_holds: r => ensures r ==> spec_revision_of(&self) == spec_revision_of(&now), (r && person_asked) ==> spec_programs_of(&self) == spec_programs_of(&now), (spec_revision_of(&self) == spec_revision_of(&now) && !person_asked) ==> r, (spec_revision_of(&self) == spec_revision_of(&now) && spec_programs_of(&self) == spec_programs_of(&now)) ==> r,
 crates/core/src/label.rs::meet: r => ensures r == crate::spec::meet(self, other),
 crates/core/src/label.rs::join: r => ensures r == crate::spec::join(self, other),
 crates/core/src/label.rs::new: r => ensures r.integrity == integrity, r.confidentiality == confidentiality,

@@ -1608,7 +1608,7 @@ mod tests {
     /// owner-only, and gone once the guard is dropped, with what the delegate wrote in it. The
     /// session's own directory and what is in it stay.
     ///
-    /// Rejects a delegate given the session's directory itself (the fault the issue reports), a name
+    /// Rejects a delegate given the session's directory itself, a name
     /// that is not the kernel's number, a directory made readable by others, and one left behind
     /// when the delegate ends.
     #[test]

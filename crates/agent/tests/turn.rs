@@ -12563,7 +12563,7 @@ impl bravebot_core::event::Sink for StartsAProgramWhenTheModeAnswers {
     }
 }
 
-/// TRUST-4, DELEGATE-15, DELEGATE-16, the reported case: a delegate writes a new file under bypass,
+/// TRUST-4, DELEGATE-15, DELEGATE-16: a delegate writes a new file under bypass,
 /// which answers the write without asking anybody, while a `run` line from a sibling starts on the
 /// shared file authority between the delegate's stamp and its write. The write lands. The lead's
 /// confirmer is the mode's own (`Confining`), so nothing reaches a person. Rejects comparing the
@@ -13032,7 +13032,7 @@ fn a_mode_moved_to_bypass_before_the_confirmer_looks_leaves_the_write_compared_b
     );
 }
 
-/// TRUST-4, TRUST-14, the case in the report: a delegate creates a new file in the session's own
+/// TRUST-4, TRUST-14: a delegate creates a new file in the session's own
 /// directory under bypass while a sibling's `run` line starts between the stamp and the write. The
 /// write lands, since nobody was asked about it, and the trail credits the mode. There is no
 /// special case for the directory: it is the unasked rule. Rejects comparing the whole stamp for
@@ -77704,8 +77704,8 @@ impl DelegatesInScratch {
 /// `body.md` is what it read back, the directories are gone when the delegates have ended, and the
 /// session's own directory and the files in it stay.
 ///
-/// Rejects delegates that share the session's directory (the fault reported: each would write
-/// one `body.md`), a directory made but not named in the note, one named in the note but not given
+/// Rejects delegates that share the session's directory (each would write one `body.md`), a
+/// directory made but not named in the note, one named in the note but not given
 /// to the programs, and one left behind when the delegate ends.
 #[test]
 #[expect(clippy::panic, reason = "a test fails by panicking")]
@@ -77889,7 +77889,7 @@ fn directories_in(session: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-/// The issue's reproduction: eight delegates of one `spawn_agent` call are each told to write their
+/// Eight delegates of one `spawn_agent` call are each told to write their
 /// own text to `body.md` in their scratch directory, wait until all eight have written, and read it
 /// back. Each reads its own text, each was told a different directory, and its programs were given
 /// that same one as `BRAVEBOT_SCRATCH_DIR`.
@@ -77899,7 +77899,7 @@ fn directories_in(session: &std::path::Path) -> Vec<String> {
 /// the same file. Each script records how many of the eight had written when it read, so a run
 /// where the delegates did not overlap is not taken for a pass.
 ///
-/// Rejects delegates left with the session's directory (the fault reported), a note that names the
+/// Rejects delegates left with the session's directory, a note that names the
 /// session's directory, programs given the session's directory, and a directory per delegate that
 /// two delegates are given the same name for.
 #[test]
