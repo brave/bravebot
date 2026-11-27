@@ -3215,6 +3215,7 @@ mod tests {
         /// [`write_step`] where `a.txt` and `other.txt` both exist and `when_asked`, given the
         /// directory, changes the files while the person is asked. Returns what `a.txt` holds, what
         /// `other.txt` holds and the step's error, if it had one.
+        #[cfg(unix)]
         fn planned_write(
             name: &str,
             starts_a_program: bool,
