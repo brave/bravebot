@@ -8,25 +8,38 @@ use std::path::PathBuf;
 
 use super::undo_tests::endpoint;
 
-/// A checkout holding `serve`, a program that prints a line, records its pid and then sleeps.
+/// A checkout holding `serve`, a program that prints a line, records its pid and then sleeps, and
+/// `finish`, which records its pid and exits once a file named `go` is there.
 fn a_checkout(name: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
     let root = crate::testutil::scratch_dir(name);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("scratch");
-    let script = root.join("serve");
-    std::fs::write(
-        &script,
-        "#!/bin/sh\necho listening\necho $$ > pid.part\nmv pid.part pid\nsleep 30\n",
-    )
-    .expect("script");
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    for (program, text) in [
+        (
+            "serve",
+            "#!/bin/sh\necho listening\necho $$ > pid.part\nmv pid.part pid\nsleep 30\n",
+        ),
+        (
+            "finish",
+            "#!/bin/sh\necho $$ > pid.part\nmv pid.part pid\ni=0\nwhile [ ! -e go ] && [ \"$i\" -lt 600 ]; do\n  i=$((i + 1))\n  sleep 0.05\ndone\n",
+        ),
+    ] {
+        let script = root.join(program);
+        std::fs::write(&script, text).expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    }
     root
 }
 
 /// A session that keeps its jobs, with a turn in flight that has started `job:1` in the
 /// background and not yet ended. Returns the file the job writes its pid to.
 fn a_turn_that_started_a_job(session: &mut Session, root: &std::path::Path) -> PathBuf {
+    a_turn_that_started(session, root, "./serve")
+}
+
+/// [`a_turn_that_started_a_job`], with `command` as the job.
+fn a_turn_that_started(session: &mut Session, root: &std::path::Path, command: &str) -> PathBuf {
     session.keep_jobs_between_turns();
     session.type_char('a');
     session.submit().expect("a turn begins");
@@ -37,7 +50,7 @@ fn a_turn_that_started_a_job(session: &mut Session, root: &std::path::Path) -> P
     trust.trust(".");
     let (config, _requests, server) = endpoint::endpoint(
         vec![
-            endpoint::tool("run", json!({"command": "./serve", "background": true})),
+            endpoint::tool("run", json!({"command": command, "background": true})),
             endpoint::answer(),
         ],
         None,
@@ -73,6 +86,29 @@ fn a_turn_that_started_a_job(session: &mut Session, root: &std::path::Path) -> P
     pid
 }
 
+/// Whether the job whose pid is in `pid`, a child of this process, has exited. The exit is looked
+/// at without reaping the child, so the job set still reaps it and learns of the end the way it
+/// does for a job nobody looked at.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn has_exited(pid: &std::path::Path) -> bool {
+    use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+    let raw: i32 = std::fs::read_to_string(pid)
+        .expect("the job wrote its pid")
+        .trim()
+        .parse()
+        .expect("a pid");
+    let child = Pid::from_raw(raw).expect("a pid above zero");
+    let seen = waitid(
+        WaitId::Pid(child),
+        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+    );
+    assert!(
+        seen.is_ok(),
+        "the job is not a child of this process: {seen:?}"
+    );
+    matches!(seen, Ok(Some(_)))
+}
+
 /// The shell's own `kill`, since a slim Linux image has no `kill` program on its path.
 fn is_alive(pid: &std::path::Path) -> bool {
     let pid = std::fs::read_to_string(pid).expect("the job wrote its pid");
@@ -82,6 +118,75 @@ fn is_alive(pid: &std::path::Path) -> bool {
         .status()
         .expect("kill runs")
         .success()
+}
+
+/// OPEN-4, RUN-15, through the terminal client. A kept job that exits between turns is told as
+/// finished at the next turn's first round, and that round's open-loops message does not name it
+/// as running, though the set the session hands the turn is the one the last turn ended with, which
+/// names it. Where it was the only open loop, no open-loops message is sent. The regression it
+/// rejects is the message built from that set as handed, which names the finished job as running.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_job_that_exited_between_turns_is_not_named_as_running_to_the_planner() {
+    let root = a_checkout("kept-job-exited-between-turns");
+    let workspace = Workspace::new(&root).expect("workspace");
+    let mut session = Session::new("none");
+    let pid = a_turn_that_started(&mut session, &root, "./finish");
+    session.complete("started", Vec::new(), 0);
+    session.say_open_loops(&workspace);
+    assert!(!has_exited(&pid), "the job did not outlive its turn");
+
+    std::fs::write(root.join("go"), "").expect("go");
+    let until = Instant::now() + Duration::from_secs(20);
+    while !has_exited(&pid) {
+        assert!(Instant::now() < until, "the job never exited");
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let loops = session.open_loops_for_the_planner();
+    assert_eq!(
+        loops.as_ref().map(|loops| loops.running_jobs.clone()),
+        Some(vec!["job:1".to_string()]),
+        "the set handed to the next turn does not name the job, so nothing here is tested"
+    );
+    session.type_char('b');
+    session.submit().expect("the next turn begins");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    turn::resume(
+        &config,
+        &Egress::new(),
+        &workspace,
+        &Task::new("anything")
+            .keeping_jobs(session.kept_jobs().expect("kept").clone())
+            .with_open_loops(loops),
+        &mut Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveRuns,
+        &mut RecordingReporter::default(),
+        &mut Trail::new(),
+        trust,
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    server.join().expect("the model finished");
+
+    let first = requests.try_iter().next().expect("the turn sent a request");
+    assert!(
+        first.contains("The background job you started as job:1 has finished."),
+        "the finish was not told: {first}"
+    );
+    assert!(
+        !first.contains("1 job is still running: job:1"),
+        "the finished job was named as running: {first}"
+    );
+    assert!(
+        !first.contains("Open from earlier"),
+        "an open-loops message was sent with nothing left open: {first}"
+    );
 }
 
 /// With no turn in flight nothing would read the token, so `/jobs stop` ends the program, and the

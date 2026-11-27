@@ -387,13 +387,23 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     }
 
     // Once, beside the jobs and for the same reason: what earlier turns left open is gone from
-    // what the planner reads once it is compacted away (OPEN-4).
-    if let Some(said) = state.open_loops.take() {
-        conversation.push_composed_from(
-            Message::user(format!("{TOOL_BUDGET_SPENT} {said}")),
-            Composed::Notice,
-            Provenance::Driver,
-        );
+    // what the planner reads once it is compacted away (OPEN-4). The running jobs are the ones
+    // still running now, after the finishes above, so a job whose finish was just told is not
+    // also named as running, and a set left with nothing open tells nothing.
+    if let Some(mut loops) = state.open_loops.take() {
+        loops.running_jobs = state
+            .jobs
+            .running_now()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        if let Some(said) = loops.to_the_planner() {
+            conversation.push_composed_from(
+                Message::user(format!("{TOOL_BUDGET_SPENT} {said}")),
+                Composed::Notice,
+                Provenance::Driver,
+            );
+        }
     }
 
     // And whatever another session sent, in the same place and for the same reason: it

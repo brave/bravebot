@@ -23933,9 +23933,13 @@ fn a_turn_that_writes_under(name: &str, task: Task) -> (Vec<String>, Vec<String>
 #[test]
 fn the_next_turn_begins_with_the_open_loops_that_changed() {
     let said = "Open from earlier in this session: the last command failed. Yours to act on if they still matter.";
+    let failed = || bravebot_agent::open_loops::Loops {
+        failed_command: true,
+        ..Default::default()
+    };
     let (sent, _) = a_turn_that_writes_under(
         "open-loops-told",
-        Task::new("carry on").with_open_loops(Some(said.to_string())),
+        Task::new("carry on").with_open_loops(Some(failed())),
     );
     assert!(sent[0].contains(said), "{}", sent[0]);
     let (sent, _) = a_turn_that_writes_under(
@@ -23969,7 +23973,10 @@ fn telling_open_loops_reaches_the_planner_and_keeps_the_unbuilt_line() {
     let said = "Open from earlier in this session: the last command failed. Yours to act on if they still matter.";
     let (sent, told) = a_turn_that_writes_under(
         "open-loops-telling",
-        Task::new("edit").telling_open_loops(Some(said.to_string())),
+        Task::new("edit").telling_open_loops(Some(bravebot_agent::open_loops::Loops {
+            failed_command: true,
+            ..Default::default()
+        })),
     );
     assert!(sent[0].contains(said), "{}", sent[0]);
     assert!(

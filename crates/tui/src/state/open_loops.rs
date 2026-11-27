@@ -54,10 +54,11 @@ impl Session {
         }
     }
 
-    /// What the planner is told at the start of the next turn, where the open loops changed since
-    /// it was last told (OPEN-4). Read from the set the last turn ended with, so the turn does not
-    /// ask git again.
-    pub fn open_loops_for_the_planner(&mut self) -> Option<String> {
+    /// The set the planner is told of at the start of the next turn, where the open loops changed
+    /// since it was last told (OPEN-4). Read from the set the last turn ended with, so the turn does
+    /// not ask git again. The turn reads the running jobs again when it sends the message, so a job
+    /// that ended since is not named as running.
+    pub fn open_loops_for_the_planner(&mut self) -> Option<Loops> {
         self.open_loops.for_the_planner()
     }
 
@@ -244,7 +245,10 @@ mod tests {
         assert_eq!(session.open_loops_for_the_planner(), None);
         session.worked(wrote_then_failed());
         session.say_open_loops(&workspace);
-        let told = session.open_loops_for_the_planner().expect("told");
+        let told = session
+            .open_loops_for_the_planner()
+            .and_then(|loops| loops.to_the_planner())
+            .expect("told");
         assert!(told.contains("the last command failed"), "{told}");
         assert_eq!(session.open_loops_for_the_planner(), None);
     }

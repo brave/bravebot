@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use super::MAX_TOOL_ROUNDS;
 use crate::conversation::Composed;
+use crate::open_loops::Loops;
 use crate::tools;
 
 /// The interface a person is using to talk to the planner, as the front end that builds the task
@@ -114,9 +115,10 @@ pub struct Task {
     /// a caller that knows, from how it was started, that it has no one to ask; the system prompt
     /// then tells the planner to say in its reply what the person can do on another run (TURN-16).
     pub nobody_answers: bool,
-    /// What the planner is told at the start of the turn about the open loops of earlier ones,
-    /// where they changed since it was last told (OPEN-4).
-    pub open_loops: Option<String>,
+    /// The open loops of earlier turns the planner is told of at the start of the turn, where they
+    /// changed since it was last told (OPEN-4). The running jobs it names are read again when the
+    /// message is sent.
+    pub open_loops: Option<Loops>,
     /// Whether the caller shows the person the open loops at the end of a turn, which then says
     /// nothing of its own about changes left unbuilt (OPEN-3).
     pub shows_open_loops: bool,
@@ -742,19 +744,19 @@ impl Task {
         self
     }
 
-    /// Say that the caller shows the open loops, and give the planner `said` about them at the
-    /// start of the turn where there is something to say (OPEN-3, OPEN-4).
-    pub fn with_open_loops(mut self, said: Option<String>) -> Self {
-        self.open_loops = said;
+    /// Say that the caller shows the open loops, and tell the planner of `loops` at the start of
+    /// the turn where there is something to say (OPEN-3, OPEN-4).
+    pub fn with_open_loops(mut self, loops: Option<Loops>) -> Self {
+        self.open_loops = loops;
         self.shows_open_loops = true;
         self
     }
 
-    /// Give the planner `said` about the open loops at the start of the turn (OPEN-4), for a caller
-    /// that does not show them to the person itself. The turn still ends with its own line about
-    /// changes left unbuilt (TURN-4).
-    pub fn telling_open_loops(mut self, said: Option<String>) -> Self {
-        self.open_loops = said;
+    /// Tell the planner of `loops` at the start of the turn (OPEN-4), for a caller that does not
+    /// show them to the person itself. The turn still ends with its own line about changes left
+    /// unbuilt (TURN-4).
+    pub fn telling_open_loops(mut self, loops: Option<Loops>) -> Self {
+        self.open_loops = loops;
         self
     }
 

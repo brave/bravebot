@@ -286,15 +286,15 @@ impl Told {
         true
     }
 
-    /// What the planner is told at the start of the next turn, where the set the last turn ended
-    /// with differs from the set it was last told of (OPEN-4). `None` when nothing changed, and
-    /// when nothing is open.
-    pub fn for_the_planner(&mut self) -> Option<String> {
+    /// The set the planner is told of at the start of the next turn, where the set the last turn
+    /// ended with differs from the set it was last told of (OPEN-4). `None` when nothing changed,
+    /// and when nothing is open. The turn reads the running jobs again when it sends the message.
+    pub fn for_the_planner(&mut self) -> Option<Loops> {
         if self.ended == self.told {
             return None;
         }
         self.told = self.ended.clone();
-        self.told.to_the_planner()
+        (!self.told.is_empty()).then(|| self.told.clone())
     }
 }
 
@@ -403,7 +403,10 @@ mod tests {
         let failed = Loops::from_work(work(0, 1, true, true));
         told.ended_with(failed.clone());
         // Nothing told reads as empty, which the first assertion rejects.
-        let said = told.for_the_planner().unwrap_or_default();
+        let said = told
+            .for_the_planner()
+            .and_then(|loops| loops.to_the_planner())
+            .unwrap_or_default();
         assert!(
             said.starts_with("Open from earlier in this session"),
             "{said}"
@@ -419,7 +422,10 @@ mod tests {
             ..failed
         };
         told.ended_with(more);
-        let said = told.for_the_planner().unwrap_or_default();
+        let said = told
+            .for_the_planner()
+            .and_then(|loops| loops.to_the_planner())
+            .unwrap_or_default();
         assert!(said.contains("2 todos"), "{said}");
         assert_eq!(told.for_the_planner(), None);
     }
