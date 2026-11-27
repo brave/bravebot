@@ -16232,6 +16232,78 @@ fn editing_a_file_a_program_wrote_is_refused() {
     );
 }
 
+/// EDIT-2, trust-map Known costs. Only a redirection is recorded as a write by a program. A file a
+/// program opens on its own, here the destination of `cp`, is not, so it keeps the trust of the
+/// vouched directory and the edit lands. `redirected.txt` is written in the same line by a
+/// redirection and is refused, so the edit of `copied.txt` is not accepted merely because nothing
+/// was recorded for the line at all. The fault it rejects is an implementation that records the
+/// operands of a line as written, which closes `copied.txt` and contradicts the Known cost.
+#[test]
+fn a_file_a_program_opened_by_itself_is_not_closed_to_edit_file() {
+    let scratch = Scratch::new("edit-program-opened");
+    std::fs::write(scratch.path.join("seed.txt"), "keep\nold\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"cp seed.txt copied.txt && cat seed.txt > redirected.txt"}"#,
+        ),
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"copied.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("edit copied.txt"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .unwrap();
+
+    assert!(
+        !outcome.trust.is_trusted("redirected.txt"),
+        "a redirection was not recorded, so the control says nothing"
+    );
+    assert!(
+        outcome.trust.is_trusted("copied.txt"),
+        "the destination of cp was recorded as written by a program"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("copied.txt")).unwrap(),
+        "keep\nnew\n",
+        "the edit of the copied file did not land"
+    );
+
+    let requests: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        requests.len(),
+        3,
+        "three requests, for three rounds: {requests:?}"
+    );
+    let third = requests.last().unwrap();
+    assert!(
+        !third.contains("closed to edit_file"),
+        "the copied file was refused: {third}"
+    );
+}
+
 /// TOOL-6. The refusal of an untrusted file names `write_file`, `run` and `read_file` only where
 /// the turn is offered them, and says that only the person can open the file where it is offered
 /// none of the three.

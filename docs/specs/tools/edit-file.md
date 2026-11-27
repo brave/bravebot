@@ -47,8 +47,12 @@ actually happens.
 
 Locating a passage means comparing text, and a comparison is a decision. On a file nobody vouched
 for that decision would be taken from bytes an attacker may have written, so it is refused rather
-than performed. A file a program wrote is in the same state: a `run` line that copied over it or
-redirected into it leaves it labelled as written by a program ([trust-map.md](../trust-map.md)).
+than performed. A file a program wrote is in the same state where the `run` line redirected into it
+with `>` or `>>`: the harness opened that file, so it is labelled as written by a program. A file a
+program opens on its own, such as the destination of `cp` or `tee`, or a file written by a command
+run through `sh -c`, is not labelled, and `edit_file` accepts it where the directory is vouched for
+([trust-map.md](../trust-map.md), Known costs: "A file another process drops into a trusted
+directory is trusted").
 
 The refusal says the file is closed to `edit_file`, prints the label the driver assigned, and says
 that the file is not vouched for or untrusted content was written to it. It then names the routes
@@ -77,6 +81,7 @@ is offered `write_file`, that `write_file` creates or replaces a whole file.
 
 `verified-by: bravebot_agent::turn::editing_an_untrusted_file_is_refused`
 `verified-by: bravebot_agent::turn::editing_a_file_a_program_wrote_is_refused`
+`verified-by: bravebot_agent::turn::a_file_a_program_opened_by_itself_is_not_closed_to_edit_file`
 `verified-by: bravebot_agent::turn::the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered`
 `verified-by: bravebot_agent::turn::under_bypass_the_refusal_to_edit_an_unread_file_names_the_read_that_vouches_for_it`
 `verified-by: bravebot_agent::turn::under_bypass_one_read_makes_an_unread_file_editable_without_asking`
