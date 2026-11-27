@@ -4616,7 +4616,8 @@ impl Bridge {
                 .to_string(),
         );
         let failed = match request {
-            Ok(request) => self.start_turn(&request, None).err(),
+            // The person's own line, so an `@path` in it names a file as it did when they typed it.
+            Ok(request) => self.start_turn(&request, None, Wrote::Person).err(),
             Err(_) => Some(Failure::bad_request("The loop's line could not be sent.")),
         };
         if let Some(error) = failed {
