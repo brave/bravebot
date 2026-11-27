@@ -70,6 +70,9 @@ try {
   await stop.waitFor({ state: 'hidden' })
   assert.ok(prompts().some((body) => body.includes('say hi')), 'the line reached the model')
   assert.ok(!prompts().some((body) => body.includes('/after')), 'the command word never reached the model')
+  // A send that does not happen has no event to wait on. Only the main process's clock sends a
+  // held line, calling `loops.poll` every 1000 ms (ui/src/main/index.ts), so 2.5 s covers at least
+  // two polls that could have sent it again; the row gone above already says no loop 2 is held.
   await page.waitForTimeout(2500)
   const sent = await transcript()
   assert.equal(sent.match(/Loop 2 · sent once/g)?.length, 1, 'no second send')
