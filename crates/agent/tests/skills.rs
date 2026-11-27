@@ -2834,6 +2834,92 @@ fn a_line_names_a_kept_skill_only_by_its_whole_name_after_a_slash() {
     }
 }
 
+/// A word of the line names a kept skill bare when it is the whole name with no slash, split and
+/// trimmed as for `/name`, so the person who wrote the name in words can be told to type `/name`. A
+/// skill the line also names as `/name` is loaded, and telling the person to type it again would be
+/// wrong. A prefix, another case and a longer name are not the skill's name, and a name with a control
+/// character cannot be typed as `/name`, so none of them selects a skill.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_line_names_a_kept_skill_bare_only_by_its_whole_typeable_name() {
+    let scratch = Scratch::new("person-only-named-bare");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "when to use it",
+        "disable-model-invocation: true\n",
+    );
+    write_described(
+        &home,
+        "deploy",
+        "when to use it",
+        "disable-model-invocation: true\n",
+    );
+    write_described(&home, "commit-style", "when to use it", "");
+    // A name holding a control character that is not whitespace, so a word of the line can equal it.
+    let ringing = home.join("skills").join("ring-bell");
+    std::fs::create_dir_all(&ringing).expect("create skill directory");
+    std::fs::write(
+        ringing.join("SKILL.md"),
+        "---\nname: ring\u{7}bell\ndescription: when to use it\ndisable-model-invocation: true\n---\n\nthe body\n",
+    )
+    .expect("write skill");
+
+    let (catalogue, _) = found_in(&home, &scratch.workspace());
+    assert!(
+        catalogue
+            .get("ring\u{7}bell")
+            .is_some_and(|skill| skill.person_only),
+        "the skill with a control character in its name was not found, so this proves nothing"
+    );
+    let named = |line: &str| -> Vec<String> {
+        catalogue
+            .named_bare_in(line)
+            .into_iter()
+            .map(|skill| skill.name)
+            .collect()
+    };
+
+    assert_eq!(named("use the ship-it skill"), ["ship-it"]);
+    assert_eq!(
+        named("ship-it then deploy"),
+        ["deploy", "ship-it"],
+        "found order"
+    );
+    assert_eq!(named("ship-it ship-it"), ["ship-it"], "named once");
+    for punctuated in [
+        "tag it with ship-it.",
+        "(ship-it)",
+        "run `ship-it` now",
+        "say \u{201c}ship-it\u{201d}",
+    ] {
+        assert_eq!(
+            named(punctuated),
+            ["ship-it"],
+            "{punctuated:?} did not name it"
+        );
+    }
+    for near in [
+        "/ship-it",
+        "/ship-it and the ship-it skill",
+        "ship",
+        "ship-its",
+        "Ship-It",
+        "ship-it-now",
+        "a/ship-it",
+        "commit-style",
+        "ring\u{7}bell",
+        "",
+    ] {
+        assert_eq!(
+            named(near),
+            Vec::<String>::new(),
+            "{near:?} drew a note it should not"
+        );
+    }
+}
+
 /// A catalogue holding only skills kept from the planner advertises none, so the prompt has no section
 /// of skills to name: its heading over an empty list would promise names that do not follow. One
 /// ordinary skill beside them is the control.

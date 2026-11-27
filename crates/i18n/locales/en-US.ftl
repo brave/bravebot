@@ -5744,6 +5744,10 @@ skill-person-only-not-a-boolean = { $skill } sets disable-model-invocation to { 
 # put its instructions in front of the planner. Said because nothing else on the screen shows a skill
 # was loaded: no tool call is drawn for it. The skill is its file's name, from a vouched-for source.
 skill-named-by-the-person = { $skill } is loaded because you named it
+# A line the person typed holds the name of a skill only the person may have loaded, without the
+# slash, so the skill was not loaded and the turn goes on without it. Said so the person can send the
+# line again with /name. The skill is its file's name, from a vouched-for source; "/" is typed as is.
+skill-named-without-its-slash = { $skill } was not loaded: that skill loads only when you type /{ $skill }
 # A skill the person named could not be shown to the planner, which a skill passing the trusted-content
 # gate cannot be. The turn stops rather than goes on without a skill the person asked for. The skill
 # is its file's name, from a vouched-for source.
