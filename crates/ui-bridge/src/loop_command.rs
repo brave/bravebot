@@ -10,7 +10,9 @@
 //! [`bravebot_agent::confirm::printable`] before it is answered.
 
 use crate::protocol::{ErrorCode, Failure};
-use bravebot_agent::repeat::{self, Asked, Delayed, Held, Loops, Pacing, Running};
+use bravebot_agent::repeat::{
+    self, Asked, Delayed, Ending, Held, Loops, Pacing, Running, Stopped, TickEnd,
+};
 use bravebot_agent::turn::Wakeup;
 use bravebot_i18n::t;
 use serde_json::{Value, json};
@@ -138,29 +140,30 @@ pub fn turn_ended(loops: &mut Loops, end: TurnEnd, now: Instant) -> Vec<(&'stati
         let count = loops.stop_all();
         return stopped(count);
     }
-    if let Some(running) = loops.in_flight_mut() {
-        let (number, once) = (running.number(), running.once());
-        if running.ended(end.wakeup, now) {
-            return Vec::new();
+    match loops.tick_ended(end.wakeup, now) {
+        TickEnd::GoesOn(_) => return Vec::new(),
+        TickEnd::Ended { number, why } => {
+            let reason = match why {
+                Ending::Sent => "sent",
+                Ending::Finished => "finished",
+                Ending::Silent => "silent",
+            };
+            return vec![("loop.ended", json!({"number": number, "reason": reason}))];
         }
-        loops.stop(number);
-        let reason = match end.wakeup {
-            _ if once => "sent",
-            Some(wakeup) if wakeup.stop => "finished",
-            _ => "silent",
-        };
-        return vec![("loop.ended", json!({"number": number, "reason": reason}))];
+        TickEnd::NotATick => {}
     }
     // A turn that asked to look again while nothing loops starts a loop over the person's line,
     // with its first tick the wait away (LOOP-14).
     match (end.looking_again, end.wakeup) {
-        (Some(line), Some(wakeup)) if !end.watching && !loops.is_full() => {
-            let number = loops.start(Running::armed(line, wakeup, now));
-            vec![(
-                "loop.armed",
-                json!({"number": number, "after": repeat::spell(wakeup.after)}),
-            )]
-        }
+        (Some(line), Some(wakeup)) if !end.watching => loops
+            .try_start(Running::armed(line, wakeup, now))
+            .map(|number| {
+                vec![(
+                    "loop.armed",
+                    json!({"number": number, "after": repeat::spell(wakeup.after)}),
+                )]
+            })
+            .unwrap_or_default(),
         _ => Vec::new(),
     }
 }
@@ -265,28 +268,23 @@ fn stops(loops: &Loops) -> String {
 /// `/loop stop` and `/loop stop <number>` (LOOP-15). A bare `stop` with several live ends none of
 /// them and says it needs a number.
 fn stop(loops: &mut Loops, which: Option<usize>) -> Value {
-    if loops.is_empty() {
-        return said(&[t!(desktop_loop_none).to_string()], true);
-    }
-    match which {
-        None if loops.len() > 1 => said(
+    // Worded before the stop, since the answer that needs it is the one that ends nothing.
+    let which_ones = stops(loops);
+    match loops.stop_asked(which) {
+        Stopped::NoneLive => said(&[t!(desktop_loop_none).to_string()], true),
+        Stopped::NeedsNumber(count) => said(
             &[t!(
                 desktop_loop_stop_which,
-                count = loops.len(),
-                which = &stops(loops)
+                count = count,
+                which = &which_ones
             )],
             true,
         ),
         // The only loop, named by its number as every other stop is.
-        None => {
-            let number = loops.iter().map(Running::number).next().unwrap_or_default();
-            loops.stop_all();
+        Stopped::Only(number) | Stopped::Numbered(number) => {
             said(&[t!(desktop_loop_stopped_numbered, number = number)], false)
         }
-        Some(number) if loops.stop(number) => {
-            said(&[t!(desktop_loop_stopped_numbered, number = number)], false)
-        }
-        Some(number) => said(&[t!(desktop_loop_no_such, number = number)], true),
+        Stopped::NoSuch(number) => said(&[t!(desktop_loop_no_such, number = number)], true),
     }
 }
 

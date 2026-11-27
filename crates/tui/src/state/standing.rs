@@ -38,17 +38,15 @@ impl Session {
         let after = crate::loops::spell(wakeup.after);
         // Only reached where no loop is live, but the cap is the session's to hold rather than
         // the caller's.
-        if self.looping.is_full() {
-            self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
-            return;
-        }
         // The line the turn that asked was begun from, so every tick reads the names the person
         // typed there and none from words a paste stood for (NAME-12).
-        let number = self.looping.start(
+        match self.looping.try_start(
             crate::loops::Running::armed(prompt.to_string(), wakeup, Instant::now())
                 .names_as(self.turn_names.clone()),
-        );
-        self.note(t!(loop_armed_by_the_turn, number = number, after = after));
+        ) {
+            Some(number) => self.note(t!(loop_armed_by_the_turn, number = number, after = after)),
+            None => self.note(t!(loop_full, count = crate::loops::MAX_LIVE)),
+        }
     }
 
     /// Arm a line to be sent once, when the delay is up, and send nothing now.
@@ -156,21 +154,25 @@ impl Session {
     /// thing a guess here gets wrong, and the loop it ends is a turn on a schedule somebody was
     /// counting on. Returns whether a loop ended.
     pub fn stop_loop(&mut self, which: Option<usize>) -> bool {
-        if self.looping.is_empty() {
-            self.note(t!(loop_none));
-            return false;
-        }
-        match which {
-            None if self.looping.len() > 1 => {
-                self.note(t!(loop_stop_which, count = self.looping.len()));
+        use crate::loops::Stopped;
+        match self.looping.stop_asked(which) {
+            Stopped::NoneLive => {
+                self.note(t!(loop_none));
                 false
             }
-            None => self.stop_loops(),
-            Some(number) if self.looping.stop(number) => {
+            Stopped::NeedsNumber(count) => {
+                self.note(t!(loop_stop_which, count = count));
+                false
+            }
+            Stopped::Only(_) => {
+                self.note(t!(loop_stopped));
+                true
+            }
+            Stopped::Numbered(number) => {
                 self.note(t!(loop_stopped_numbered, number = number));
                 true
             }
-            Some(number) => {
+            Stopped::NoSuch(number) => {
                 self.note(t!(loop_no_such, number = number));
                 false
             }
@@ -624,20 +626,21 @@ impl Session {
     /// and must not reset the clock. Only the loop whose tick that was is touched, and that is the
     /// one with a tick in flight.
     pub fn loop_turn_ended(&mut self, wakeup: Option<crate::loops::Wakeup>) {
-        let Some(running) = self.looping.in_flight_mut() else {
-            return;
-        };
-        let number = running.number();
-        let once = running.once();
-        if !running.ended(wakeup, Instant::now()) {
-            self.looping.stop(number);
-            if once {
-                // Sent, and said so when it went: nothing is left to announce.
-            } else if wakeup.is_some_and(|wakeup| wakeup.stop) {
-                self.note(t!(loop_finished, number = number));
-            } else {
-                self.note(t!(loop_unpaced, number = number));
-            }
+        use crate::loops::{Ending, TickEnd};
+        match self.looping.tick_ended(wakeup, Instant::now()) {
+            TickEnd::NotATick | TickEnd::GoesOn(_) => {}
+            // Sent, and said so when it went: nothing is left to announce.
+            TickEnd::Ended {
+                why: Ending::Sent, ..
+            } => {}
+            TickEnd::Ended {
+                number,
+                why: Ending::Finished,
+            } => self.note(t!(loop_finished, number = number)),
+            TickEnd::Ended {
+                number,
+                why: Ending::Silent,
+            } => self.note(t!(loop_unpaced, number = number)),
         }
     }
 

@@ -635,6 +635,43 @@ impl<C, N> Running<C, N> {
     }
 }
 
+/// What `/loop stop` did, as [`Loops::stop_asked`] decided it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    /// Nothing was live, so nothing ended.
+    NoneLive,
+    /// A bare `stop` with this many live, which ended none of them.
+    NeedsNumber(usize),
+    /// A bare `stop` ended the only loop, which had this number.
+    Only(usize),
+    /// The loop with this number ended.
+    Numbered(usize),
+    /// No live loop has this number.
+    NoSuch(usize),
+}
+
+/// Why a loop ended when its tick's turn did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    /// It was a line `/after` sent once, and it went.
+    Sent,
+    /// The turn said with `schedule_next` that the work is done.
+    Finished,
+    /// A self-paced turn asked for nothing, and the keepalive is spent.
+    Silent,
+}
+
+/// What the end of a turn did to the session's loops, as [`Loops::tick_ended`] decided it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickEnd {
+    /// No tick was in flight, so the turn was not one and no loop changed.
+    NotATick,
+    /// The loop with this number goes on, its next tick armed.
+    GoesOn(usize),
+    /// The loop ended, and why.
+    Ended { number: usize, why: Ending },
+}
+
 /// The loops a session holds, oldest first.
 ///
 /// A loop is numbered when it joins and keeps the number until it ends, and a number is not handed
@@ -708,6 +745,59 @@ impl<C, N> Loops<C, N> {
         let before = self.live.len();
         self.live.retain(|running| running.number != number);
         self.live.len() != before
+    }
+
+    /// Add a loop where the cap leaves room for it, and say which number it is. `None` where the
+    /// session already holds [`MAX_LIVE`]: refused rather than replacing one, because the person
+    /// typed every loop that is live (LOOP-16).
+    pub fn try_start(&mut self, running: Running<C, N>) -> Option<usize> {
+        match self.is_full() {
+            true => None,
+            false => Some(self.start(running)),
+        }
+    }
+
+    /// Carry out `/loop stop` or `/loop stop <number>` and say what it did (LOOP-15).
+    ///
+    /// A bare `stop` with several live ends none of them: which was meant is the one thing a guess
+    /// gets wrong. Each client words the outcome its own way.
+    pub fn stop_asked(&mut self, which: Option<usize>) -> Stopped {
+        if self.is_empty() {
+            return Stopped::NoneLive;
+        }
+        match which {
+            None if self.len() > 1 => Stopped::NeedsNumber(self.len()),
+            None => {
+                let number = self.live.first().map_or(0, |running| running.number);
+                self.stop_all();
+                Stopped::Only(number)
+            }
+            Some(number) if self.stop(number) => Stopped::Numbered(number),
+            Some(number) => Stopped::NoSuch(number),
+        }
+    }
+
+    /// Arm the next tick of the loop whose tick the turn that has just ended was, or end it, and
+    /// say which.
+    ///
+    /// Only that loop is touched. A turn the person typed in the middle of a loop is not a tick of
+    /// it, and its ending does not reset the clock (LOOP-6). The next tick is measured from `now`,
+    /// the end of the turn (LOOP-5).
+    pub fn tick_ended(&mut self, wakeup: Option<Wakeup>, now: Instant) -> TickEnd {
+        let Some(running) = self.in_flight_mut() else {
+            return TickEnd::NotATick;
+        };
+        let (number, once) = (running.number, running.once());
+        if running.ended(wakeup, now) {
+            return TickEnd::GoesOn(number);
+        }
+        self.stop(number);
+        let why = match wakeup {
+            _ if once => Ending::Sent,
+            Some(wakeup) if wakeup.stop => Ending::Finished,
+            _ => Ending::Silent,
+        };
+        TickEnd::Ended { number, why }
     }
 
     /// The count is what the stop notice reports to the person.
@@ -873,6 +963,90 @@ mod tests {
         assert!(loops.stop(1));
         assert_eq!(loops.start(Running::begin(request("5m c"))), 3);
         assert_eq!(loops.stop_all(), 2);
+        assert!(loops.is_empty());
+    }
+
+    /// A start past the cap is refused and changes nothing. A wrong implementation adds a sixth
+    /// loop, or drops an old one to make room.
+    #[test]
+    fn a_start_past_the_cap_is_refused() {
+        let mut loops: Loops = Loops::default();
+        for number in 1..=MAX_LIVE {
+            assert_eq!(
+                loops.try_start(Running::begin(request("5m a"))),
+                Some(number)
+            );
+        }
+        assert_eq!(loops.try_start(Running::begin(request("5m b"))), None);
+        assert_eq!(loops.len(), MAX_LIVE);
+        assert_eq!(loops.oldest().map(Running::number), Some(1));
+    }
+
+    /// Each way `/loop stop` can go. A wrong implementation ends every loop on a bare `stop` with
+    /// several live, or calls a number that never ran stopped.
+    #[test]
+    fn a_stop_ends_the_loop_it_names_and_a_bare_one_only_the_only_one() {
+        let mut loops: Loops = Loops::default();
+        assert_eq!(loops.stop_asked(None), Stopped::NoneLive);
+        loops.start(Running::begin(request("5m a")));
+        loops.start(Running::begin(request("5m b")));
+        assert_eq!(loops.stop_asked(None), Stopped::NeedsNumber(2));
+        assert_eq!(loops.len(), 2);
+        assert_eq!(loops.stop_asked(Some(7)), Stopped::NoSuch(7));
+        assert_eq!(loops.stop_asked(Some(1)), Stopped::Numbered(1));
+        assert_eq!(loops.stop_asked(None), Stopped::Only(2));
+        assert!(loops.is_empty());
+    }
+
+    /// A turn that was no tick touches nothing, an interval loop goes on, and a finished, a silent
+    /// and a sent-once tick each end their loop with their own reason. A wrong implementation
+    /// resets a loop's clock for a turn the person typed, or names the wrong reason.
+    #[test]
+    fn the_end_of_a_tick_arms_the_next_or_ends_the_loop_with_its_reason() {
+        let now = Instant::now();
+        let mut loops: Loops = Loops::default();
+        assert_eq!(loops.tick_ended(None, now), TickEnd::NotATick);
+
+        let every = loops.start(Running::begin(request("5m a")));
+        loops.get_mut(every).map(Running::dispatching);
+        assert_eq!(loops.tick_ended(None, now), TickEnd::GoesOn(every));
+        assert_eq!(loops.tick_ended(None, now), TickEnd::NotATick);
+        loops.stop(every);
+
+        let finished = loops.start(Running::begin(request("watch it")));
+        loops.get_mut(finished).map(Running::dispatching);
+        assert_eq!(
+            loops.tick_ended(Some(Wakeup::finished(false)), now),
+            TickEnd::Ended {
+                number: finished,
+                why: Ending::Finished
+            }
+        );
+
+        let silent = loops.start(Running::begin(request("watch it")));
+        for _ in 0..=KEEPALIVE_BUDGET {
+            loops.get_mut(silent).map(Running::dispatching);
+            if let TickEnd::Ended { number, why } = loops.tick_ended(None, now) {
+                assert_eq!((number, why), (silent, Ending::Silent));
+            }
+        }
+        assert!(loops.is_empty());
+
+        let once = loops.start(Running::after(
+            match parse_after("5m send it") {
+                Delayed::Start(request) => request,
+                Delayed::Unreadable => panic!("`5m send it` read as no delay"),
+            },
+            now,
+        ));
+        loops.get_mut(once).map(Running::dispatching);
+        assert_eq!(
+            loops.tick_ended(Some(Wakeup::asked(60, false)), now),
+            TickEnd::Ended {
+                number: once,
+                why: Ending::Sent
+            }
+        );
         assert!(loops.is_empty());
     }
 }
