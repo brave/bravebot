@@ -478,6 +478,27 @@ times a second, so the stream is never quiet, and the step ends as soon as it go
 each step longer than the slowest reply you expect and the script will still run at the speed of
 the model.
 
+A step that types keys ends only once the interface has written something after its last key and
+then gone still. An interface that is busy writes nothing, and the next step's keys typed then
+would wait on the terminal beside this step's and be read with them, which the interface does not
+take as a press. A step whose keys draw nothing ends after `--answer` seconds (default 5) or its
+timeout, whichever is sooner. An interface busy for longer than that without drawing can still be
+sent the next step's keys while it is busy; raise `--answer` for such a script. The first step is
+typed once the program has drawn something and gone still, or after `--settle` seconds (default 5)
+if it draws nothing.
+
+Any output after a step's last key counts as the interface's answer to it. An interface that
+redraws as soon as a key arrives, for example to clear its input box after Enter, and then works
+without drawing for longer than `--quiet` is sent the next step's keys while it is busy. The
+driver cannot tell that redraw from the screen drawn once the work is done. For such an interface,
+raise `--quiet` above the time the work takes, or have the interface draw while it works, as a
+spinner does.
+
+Before a step's last key, the driver reads what the earlier keys drew until the interface has been
+quiet for 0.3 seconds, for at most 2 seconds, and that output does not count. An interface that is
+still drawing after 2 seconds, or that draws an earlier key more than 0.3 seconds late, can still
+end the step while it is busy.
+
 ### Asserting against the output
 
 Pass `--squash`, and search for text with the spaces taken out:

@@ -2783,13 +2783,31 @@ mod tests {
     }
 
     fn wait_for(screen: &mut SessionsScreen) {
-        for _ in 0..200 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
             if screen.poll() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("the worker answered nothing");
+    }
+
+    /// Poll until the worker has answered every request sent to it. `wait_for` returns on the first
+    /// answer, which is not the last when more than one was asked for. The deadline is long because
+    /// a loaded machine can leave the worker thread unscheduled for seconds; a passing run returns
+    /// as soon as the answers are in.
+    #[expect(clippy::panic, reason = "a test fails by panicking")]
+    fn wait_for_every_answer(screen: &mut SessionsScreen) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            screen.poll();
+            if screen.worker.as_ref().map(Worker::outstanding) == Some((0, 0)) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the worker left a request unanswered");
     }
 
     /// SCREEN-17. What the sessions say is asked for the first time a phrase is typed and not when
@@ -2823,7 +2841,7 @@ mod tests {
 
         open.send(()).unwrap();
         open.send(()).unwrap();
-        wait_for(&mut screen);
+        wait_for_every_answer(&mut screen);
         assert!(!screen.rows().is_empty());
         let phrase_now = screen.search().to_string();
         assert_eq!(screen.said.0, phrase_now);
@@ -2866,9 +2884,7 @@ mod tests {
         typed(&mut screen, "ab");
         open.send(()).unwrap();
         open.send(()).unwrap();
-        wait_for(&mut screen);
-        std::thread::sleep(Duration::from_millis(30));
-        screen.poll();
+        wait_for_every_answer(&mut screen);
         let kept = screen.said.1.clone();
         assert!(!kept.is_empty());
         assert_eq!(

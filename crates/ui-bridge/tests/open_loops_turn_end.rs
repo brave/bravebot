@@ -95,11 +95,12 @@ impl Window {
         prompt: &str,
         mut cancel_at: Option<(&mpsc::Receiver<String>, usize)>,
     ) -> Event {
-        let params = message_ids::with_fresh(
-            json!({"session": session, "prompt": prompt, "model": "undo-test/test"}),
-        );
-        self.once_finished(|window| window.dispatch("turn.send", params.clone()))
-            .unwrap();
+        let params = json!({"session": session, "prompt": prompt, "model": "undo-test/test"});
+        // A retry is a new send, since the bridge answers an id it has seen with what it recorded.
+        self.once_finished(|window| {
+            window.dispatch("turn.send", message_ids::with_fresh(params.clone()))
+        })
+        .unwrap();
         self.seen.clear();
         let until = std::time::Instant::now() + endpoint::LIMIT;
         loop {

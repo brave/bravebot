@@ -158,32 +158,141 @@ fn serve_chat_by_marker(
         while let Ok((mut stream, _)) = listener.accept() {
             let body = body_of(&stream);
             let _ = sender.send(body.clone());
-            let reply = if body.contains(A_CHECK_ASKING) {
-                Some(reply_with(
-                    r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
-                ))
-            } else {
-                rules
-                    .iter_mut()
-                    .find(|(marker, replies)| body.contains(marker) && !replies.is_empty())
-                    .and_then(|(_, replies)| replies.pop_front())
-            };
-            let Some(reply) = reply else {
-                let refusal =
-                    "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                let _ = stream.write_all(refusal.as_bytes());
-                continue;
-            };
-            let frames = as_sse(&reply);
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
-                frames.len()
-            );
-            let _ = stream.write_all(response.as_bytes());
-            let _ = stream.flush();
+            let reply = chat_reply(&mut rules, &body).map(|(_, reply)| reply);
+            write_chat(&mut stream, reply.as_deref());
         }
     });
     (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// The reply [`serve_chat_by_marker`]'s rules give `body`, and the marker of the rule that gave it.
+/// A check is answered that it found nothing, and belongs to no rule.
+fn chat_reply(
+    rules: &mut [(&'static str, std::collections::VecDeque<String>)],
+    body: &str,
+) -> Option<(Option<&'static str>, String)> {
+    if body.contains(A_CHECK_ASKING) {
+        return Some((
+            None,
+            reply_with(r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#),
+        ));
+    }
+    rules
+        .iter_mut()
+        .find(|(marker, replies)| body.contains(marker) && !replies.is_empty())
+        .and_then(|(marker, replies)| replies.pop_front().map(|reply| (Some(*marker), reply)))
+}
+
+/// Write `reply` as the chat server's answer, or refuse a request no rule had a reply left for.
+fn write_chat(stream: &mut std::net::TcpStream, reply: Option<&str>) {
+    let Some(reply) = reply else {
+        let refusal = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(refusal.as_bytes());
+        return;
+    };
+    let frames = as_sse(reply);
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+        frames.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
+}
+
+/// As [`serve_chat_by_marker`], answering the run `held` names only once the run `after` names has
+/// been asked `asked` times. This is how a test says "still working when the turn answered
+/// waiting": a delegate's reply held until the turn's request answered "waiting" has arrived cannot
+/// be back before the turn last looked for finished delegates, however the machine schedules the
+/// two. Each request is served on a thread of its own so a held one does not hold the others. The
+/// wait is bounded, and the flag says whether the held run's first request waited out the order.
+///
+/// Unlike `serve_by_marker_in` in turn.rs, a request whose rule has no reply left is refused at once
+/// and not held, so this cannot hold a delegate that fails only once the turn has asked again.
+#[expect(
+    clippy::expect_used,
+    reason = "a mock server fails its test by panicking"
+)]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a body sent after the test stopped reading is one nothing is waiting for"
+)]
+fn serve_chat_by_marker_holding(
+    rules: Vec<(&'static str, Vec<String>)>,
+    held: &'static str,
+    after: &'static str,
+    asked: usize,
+) -> (
+    String,
+    mpsc::Receiver<String>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
+
+    /// What each run has left to be told, by the marker that says which run it is.
+    type Rules = Vec<(&'static str, std::collections::VecDeque<String>)>;
+
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    let kept = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&kept);
+    let rules: Arc<Mutex<Rules>> = Arc::new(Mutex::new(
+        rules
+            .into_iter()
+            .map(|(marker, replies)| (marker, replies.into()))
+            .collect(),
+    ));
+    let counts: Arc<(Mutex<BTreeMap<&'static str, usize>>, Condvar)> =
+        Arc::new((Mutex::new(BTreeMap::new()), Condvar::new()));
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let (sender, rules, counts, kept) = (
+                sender.clone(),
+                Arc::clone(&rules),
+                Arc::clone(&counts),
+                Arc::clone(&kept),
+            );
+            thread::spawn(move || {
+                let body = body_of(&stream);
+                let _ = sender.send(body.clone());
+                let answer = chat_reply(&mut rules.lock().expect("not poisoned"), &body);
+                let marker = answer.as_ref().and_then(|(marker, _)| *marker);
+                let (count, told) = &*counts;
+                // Which of its run's requests this is, counted as it arrives.
+                let nth = marker.map_or(0, |marker| {
+                    let mut count = count.lock().expect("not poisoned");
+                    let nth = count.entry(marker).or_insert(0);
+                    *nth += 1;
+                    told.notify_all();
+                    *nth
+                });
+                if marker == Some(held) {
+                    let bound = std::time::Duration::from_secs(10);
+                    let began = std::time::Instant::now();
+                    let mut count = count.lock().expect("not poisoned");
+                    while count.get(after).copied().unwrap_or(0) < asked && began.elapsed() < bound
+                    {
+                        count = told
+                            .wait_timeout(count, bound.saturating_sub(began.elapsed()))
+                            .expect("not poisoned")
+                            .0;
+                    }
+                    // Only the held run's first request says whether the order was kept. A later
+                    // one arrives after the race it guards against was already won or lost, and
+                    // would report a missed hold as kept.
+                    if nth == 1 && count.get(after).copied().unwrap_or(0) >= asked {
+                        kept.store(true, Ordering::SeqCst);
+                    }
+                }
+                write_chat(
+                    &mut stream,
+                    answer.as_ref().map(|(_, reply)| reply.as_str()),
+                );
+            });
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver, flag)
 }
 
 /// A whole chat response as the SSE stream that would have delivered it.
@@ -6377,29 +6486,41 @@ fn an_approval_given_to_a_turn_or_a_worker_decides_no_other_call() {
     let session = session(&url, &scratch, true);
     let _ = methods(&server);
     let spawn = format!(r#"{{"kind":"worker","task":"{DELEGATED}"}}"#);
-    let (endpoint, _chat) = serve_chat_by_marker(vec![
-        (
-            PARENT,
-            vec![
-                tool_request(FORECAST, r#"{"city":"Paris"}"#),
-                tool_request("spawn_agent", &spawn),
-                reply_with("waiting"),
-                tool_request(FORECAST, r#"{"city":"Lyon"}"#),
-                reply_with("done"),
-            ],
-        ),
-        (
-            DELEGATED,
-            vec![
-                tool_request(FORECAST, r#"{"city":"Paris"}"#),
-                reply_with("looked it up"),
-            ],
-        ),
-    ]);
+    // The delegate's replies are held until the turn's request answered "waiting", its third, has
+    // arrived. A delegate back sooner would be joined into that request, and "waiting" would end
+    // the turn before its call for Lyon.
+    let (endpoint, _chat, held) = serve_chat_by_marker_holding(
+        vec![
+            (
+                PARENT,
+                vec![
+                    tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                    tool_request("spawn_agent", &spawn),
+                    reply_with("waiting"),
+                    tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                DELEGATED,
+                vec![
+                    tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                    reply_with("looked it up"),
+                ],
+            ),
+        ],
+        DELEGATED,
+        PARENT,
+        3,
+    );
     let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
     let mut trail = RecordingSink::new();
     let task = Task::new(PARENT).with_mcp(Some(session));
     run_turn_recording(&endpoint, &scratch.project(), task, &mut asked, &mut trail);
+    assert!(
+        held.load(std::sync::atomic::Ordering::SeqCst),
+        "the delegate had ended before the turn answered \"waiting\""
+    );
     let cities: Vec<_> = asked
         .calls
         .iter()

@@ -238,7 +238,7 @@ failures reach the caller, and that scanner failures cannot pass as empty scans.
 half also holds `check-npm` to reaching the npm tests and the lockfile lint's own cases before
 any lockfile is read, and to failing rather than passing when those tests are no longer there. It runs
 `check-all-selftest`, `check-reviewdog-selftest`, `check-rebase-selftest`, `check-affected-selftest`,
-`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest`, `check-pr-worktree-selftest`, `check-maintenance-selftest`, `check-profile-selftest`, `check-session-review-selftest`, `check-log-review-selftest` and `check-review-ready-selftest`, which can also run separately. `check-affected-selftest` holds
+`check-peer-advisories-selftest`, `check-peer-features-selftest`, `check-pr-fix-selftest`, `check-pr-worktree-selftest`, `check-maintenance-selftest`, `check-profile-selftest`, `check-session-review-selftest`, `check-log-review-selftest`, `check-review-ready-selftest` and `check-drive-tui-selftest`, which can also run separately. `check-affected-selftest` holds
 each rule of the classifier, and holds every workflow condition reading it to running its job on
 anything but an explicit `false`.
 To also exercise the installed reviewdog binary, set `REVIEWDOG_TEST_BINARY` to its

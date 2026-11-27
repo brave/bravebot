@@ -57473,27 +57473,38 @@ fn a_reference_a_delegate_minted_names_nothing_to_the_planner_afterwards() {
     let scratch = Scratch::new("delegate-reference-dies");
     std::fs::write(scratch.path.join("notes.txt"), "plain words").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "SEND-TO-LIST-THE-FILES",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"LIST-APART-FILES"}"#,
-                ),
-                reply_with("waiting"),
-                tool_request("read_file", r#"{"path_ref":"ref:1"}"#),
-                reply_with("done"),
-            ],
-        ),
-        (
-            "LIST-APART-FILES",
-            vec![
-                tool_request("list_files", r#"{"directory":"."}"#),
-                reply_with("listed"),
-            ],
-        ),
-    ]);
+    // The delegate's replies are held until the planner's request answered "waiting" has arrived,
+    // so the delegate is still outstanding when the planner answers and the turn waits for it. A
+    // delegate back sooner would be joined into that request, and "waiting" would end the turn
+    // before the planner's own call naming the reference.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "SEND-TO-LIST-THE-FILES",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"LIST-APART-FILES"}"#,
+                    ),
+                    reply_with("waiting"),
+                    tool_request("read_file", r#"{"path_ref":"ref:1"}"#),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "LIST-APART-FILES",
+                vec![
+                    tool_request("list_files", r#"{"directory":"."}"#),
+                    reply_with("listed"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "LIST-APART-FILES",
+            after: "SEND-TO-LIST-THE-FILES",
+            asked: 2,
+        },
+    );
 
     turn::resume(
         &config_for(&endpoint),
@@ -57511,6 +57522,10 @@ fn a_reference_a_delegate_minted_names_nothing_to_the_planner_afterwards() {
     )
     .outcome
     .expect("turn runs");
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate had ended before the planner answered \"waiting\""
+    );
 
     let asked = every_request(&received);
     let (planner, delegate): (Vec<&String>, Vec<&String>) = asked
@@ -61061,28 +61076,40 @@ fn the_token_total_moves_while_a_delegate_works_and_counts_it_once() {
     std::fs::write(scratch.path.join("a.txt"), "one line").expect("written");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, _received) = serve_by_marker(vec![
-        (
-            "DELEGATE-SOMETHING",
-            vec![
-                tool_request_with_usage(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
-                    1000,
-                    10,
-                ),
-                reply_with_usage("waiting", 1100, 10),
-                reply_with_usage("relayed", 1200, 10),
-            ],
-        ),
-        (
-            "SAY-SOMETHING-SHORT",
-            vec![
-                tool_request_with_usage("read_file", r#"{"path":"a.txt"}"#, 200, 20),
-                reply_with_usage("REPORTED BACK", 300, 30),
-            ],
-        ),
-    ]);
+    // The delegate's replies are held until the planner's second request has arrived. That request
+    // is made after the turn last looked for finished delegates, so the planner's "waiting" is
+    // answered with the delegate still outstanding and the turn asks a third time once it is
+    // joined. A delegate back before the second request would be joined into it, and "waiting"
+    // would end the turn after two requests.
+    let (endpoint, _received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-SOMETHING",
+                vec![
+                    tool_request_with_usage(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                        1000,
+                        10,
+                    ),
+                    reply_with_usage("waiting", 1100, 10),
+                    reply_with_usage("relayed", 1200, 10),
+                ],
+            ),
+            (
+                "SAY-SOMETHING-SHORT",
+                vec![
+                    tool_request_with_usage("read_file", r#"{"path":"a.txt"}"#, 200, 20),
+                    reply_with_usage("REPORTED BACK", 300, 30),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "SAY-SOMETHING-SHORT",
+            after: "DELEGATE-SOMETHING",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -61101,6 +61128,10 @@ fn the_token_total_moves_while_a_delegate_works_and_counts_it_once() {
     )
     .expect("turn runs");
 
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate had ended before the planner answered \"waiting\""
+    );
     assert_eq!(outcome.tokens, 3880, "the turn's own count changed");
     assert_eq!(reporter.finished, 1, "the delegate was never joined");
 
@@ -62223,7 +62254,12 @@ fn a_stop_ends_a_wait_for_all_of_a_calls_delegates() {
 fn a_stop_during_the_wait_ends_the_turn_after_its_delegates_and_leaves_a_later_line() {
     let scratch = Scratch::new("delegates-stop-then-type");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, _received, _kept) = serve_by_marker_in(
+    // Both delegates' replies are held until the planner's third request, the one answered
+    // "waiting on both", has arrived. That request is made after the turn last looked for finished
+    // delegates, so neither is taken back before the wait. A delegate back sooner would be joined
+    // on the way to the next request, and the report of that join would stop the turn before the
+    // second delegate was started.
+    let (endpoint, _received, held) = serve_by_marker_in(
         vec![
             (
                 "ASK-STOP",
@@ -62237,7 +62273,7 @@ fn a_stop_during_the_wait_ends_the_turn_after_its_delegates_and_leaves_a_later_l
             ("STOP-A", vec![reply_with("THE-A-REPORT")]),
             ("STOP-B", vec![reply_with("THE-B-REPORT")]),
         ],
-        Order::Any,
+        Order::StagedAll(&[("STOP-A", "ASK-STOP", 3), ("STOP-B", "ASK-STOP", 3)]),
     );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
@@ -62269,6 +62305,10 @@ fn a_stop_during_the_wait_ends_the_turn_after_its_delegates_and_leaves_a_later_l
         matches!(ended, Err(bravebot_agent::TurnError::Cancelled { .. })),
         "the turn ended some other way, so this says nothing about a stop: {:?}",
         ended.err()
+    );
+    assert!(
+        held.load(Ordering::SeqCst),
+        "a delegate had ended before the planner answered \"waiting on both\""
     );
     assert!(
         reporter.position("delegate d1 finished").is_some()
@@ -65214,36 +65254,46 @@ fn a_child_carries_what_its_parent_has_left_and_its_spend_counts_against_the_par
     let scratch = Scratch::new("delegate-budget-nested");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "DELEGATE-THE-WORK",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"DO-THE-WORK","budget":5000}"#,
-                ),
-                reply_with("waiting"),
-                reply_with("done"),
-            ],
-        ),
-        (
-            "DO-THE-WORK",
-            vec![
-                tool_request_with_usage(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"READ-DEEPER"}"#,
-                    3000,
-                    1000,
-                ),
-                reply_with("waiting"),
-                reply_with("relayed"),
-            ],
-        ),
-        (
-            "READ-DEEPER",
-            vec![reply_with_usage("DEEPER-REPORT", 1000, 500)],
-        ),
-    ]);
+    // Each delegate's replies are held until the run that started it has made its request answered
+    // "waiting". That request is made after the run last looked for finished delegates, so the
+    // delegate is still outstanding when "waiting" is answered and the run waits for it. A delegate
+    // back sooner would be joined into that request, and "waiting" would end the run early.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-THE-WORK",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"DO-THE-WORK","budget":5000}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "DO-THE-WORK",
+                vec![
+                    tool_request_with_usage(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"READ-DEEPER"}"#,
+                        3000,
+                        1000,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("relayed"),
+                ],
+            ),
+            (
+                "READ-DEEPER",
+                vec![reply_with_usage("DEEPER-REPORT", 1000, 500)],
+            ),
+        ],
+        Order::StagedAll(&[
+            ("DO-THE-WORK", "DELEGATE-THE-WORK", 2),
+            ("READ-DEEPER", "DO-THE-WORK", 2),
+        ]),
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -65257,6 +65307,10 @@ fn a_child_carries_what_its_parent_has_left_and_its_spend_counts_against_the_par
         &mut sink,
     )
     .expect("turn runs");
+    assert!(
+        held.load(Ordering::SeqCst),
+        "a delegate had ended before the run that started it answered \"waiting\""
+    );
 
     let approved: Vec<String> = sink
         .events()
@@ -66087,28 +66141,46 @@ fn what_the_person_was_asked_when_a_parent_and_its_worker_make_the_same_call(
         r#"{"kind":"worker","task":"MAKE-THE-SAME-CALL-AS-YOUR-PARENT"}"#,
     );
     let own = tool_request(tool, arguments);
-    let parent = if parent_first {
-        vec![
-            own,
-            spawn,
-            reply_with("waiting"),
-            reply_with("the worker finished"),
-        ]
-    } else {
-        vec![
-            spawn,
-            reply_with("waiting"),
-            own,
-            reply_with("the worker finished"),
-        ]
-    };
-    let (endpoint, _received) = serve_by_marker(vec![
-        ("PARENT-OF-THE-SAME-CALL", parent),
+    // Which of the parent's requests is answered "waiting".
+    let (parent, waiting_request) = if parent_first {
         (
-            "MAKE-THE-SAME-CALL-AS-YOUR-PARENT",
-            vec![tool_request(tool, arguments), reply_with("made it")],
-        ),
-    ]);
+            vec![
+                own,
+                spawn,
+                reply_with("waiting"),
+                reply_with("the worker finished"),
+            ],
+            3,
+        )
+    } else {
+        (
+            vec![
+                spawn,
+                reply_with("waiting"),
+                own,
+                reply_with("the worker finished"),
+            ],
+            2,
+        )
+    };
+    // The worker's replies are held until the parent's request answered "waiting" has arrived, so
+    // the worker is still outstanding when the parent answers and the turn waits for it. A worker
+    // back sooner would be joined into that request, and "waiting" would end the turn before the
+    // parent made the call it was scripted to make after it.
+    let (endpoint, _received, held) = serve_by_marker_in(
+        vec![
+            ("PARENT-OF-THE-SAME-CALL", parent),
+            (
+                "MAKE-THE-SAME-CALL-AS-YOUR-PARENT",
+                vec![tool_request(tool, arguments), reply_with("made it")],
+            ),
+        ],
+        Order::After {
+            held: "MAKE-THE-SAME-CALL-AS-YOUR-PARENT",
+            after: "PARENT-OF-THE-SAME-CALL",
+            asked: waiting_request,
+        },
+    );
     let mut confirmer =
         AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
     let asked_to_run = confirmer.seen.clone();
@@ -66130,6 +66202,10 @@ fn what_the_person_was_asked_when_a_parent_and_its_worker_make_the_same_call(
         trust,
     )
     .expect("turn runs");
+    assert!(
+        held.load(Ordering::SeqCst),
+        "{tag}: the worker had ended before the parent answered \"waiting\""
+    );
 
     match tool {
         "run" => asked_to_run
@@ -67606,30 +67682,42 @@ fn an_apply_checkout_status_refusal_names_the_reader_this_turn_holds() {
             .join(bravebot_agent::home::key_for(workspace.root()))
             .join("c1");
 
-        let (endpoint, received) = serve_by_marker(vec![
-            (
-                "MAKE-A-CHECKOUT-THEN-APPLY",
-                vec![
-                    tool_request(
-                        "spawn_agent",
-                        r#"{"kind":"worker","task":"WRITE-FOR-APPLY","isolation":"checkout"}"#,
-                    ),
-                    reply_with("waiting"),
-                    tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
-                    reply_with("done"),
-                ],
-            ),
-            (
-                "WRITE-FOR-APPLY",
-                vec![
-                    tool_request(
-                        "write_file",
-                        r#"{"path":"out.txt","contents":"from the worker"}"#,
-                    ),
-                    reply_with("wrote it"),
-                ],
-            ),
-        ]);
+        // The worker's replies are held until the planner's request answered "waiting" has arrived.
+        // That request is made after the turn last looked for finished delegates, so the worker is
+        // still outstanding when the planner answers and the turn waits for it. A worker back
+        // sooner would be joined into that request, and "waiting" would end the turn before the
+        // apply.
+        let (endpoint, received, held) = serve_by_marker_in(
+            vec![
+                (
+                    "MAKE-A-CHECKOUT-THEN-APPLY",
+                    vec![
+                        tool_request(
+                            "spawn_agent",
+                            r#"{"kind":"worker","task":"WRITE-FOR-APPLY","isolation":"checkout"}"#,
+                        ),
+                        reply_with("waiting"),
+                        tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
+                        reply_with("done"),
+                    ],
+                ),
+                (
+                    "WRITE-FOR-APPLY",
+                    vec![
+                        tool_request(
+                            "write_file",
+                            r#"{"path":"out.txt","contents":"from the worker"}"#,
+                        ),
+                        reply_with("wrote it"),
+                    ],
+                ),
+            ],
+            Order::After {
+                held: "WRITE-FOR-APPLY",
+                after: "MAKE-A-CHECKOUT-THEN-APPLY",
+                asked: 2,
+            },
+        );
         let config = config_for(&endpoint);
         let egress = bravebot_net::Egress::new();
         let mut sink = RecordingSink::new();
@@ -67647,6 +67735,10 @@ fn an_apply_checkout_status_refusal_names_the_reader_this_turn_holds() {
             trust,
         )
         .expect("turn runs");
+        assert!(
+            held.load(Ordering::SeqCst),
+            "{tag}: the worker had ended before the planner answered \"waiting\""
+        );
 
         // The addressed turn's own requests, which hold its own task throughout: the nested
         // worker's begin fresh with its own and never widen to this one, so this excludes the
@@ -68244,6 +68336,7 @@ fn apply_after_a_worker_wrote_files(
     let home = Scratch::new(&format!("{tag}-home"));
     repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let writes_before_count = writes_before.len();
     let mut planner: Vec<String> = writes_before
         .into_iter()
         .map(|call| tool_request("write_file", call))
@@ -68264,22 +68357,34 @@ fn apply_after_a_worker_wrote_files(
             .map(|call| tool_request("apply_checkout", call)),
     );
     planner.push(reply_with("applied"));
-    let (endpoint, received) = serve_by_marker(vec![
-        ("HAVE-A-DELEGATE-WRITE-TO-APPLY", planner),
-        (
-            "WRITE-OUT-TO-APPLY",
-            worker_writes
-                .iter()
-                .map(|(path, contents)| {
-                    tool_request(
-                        "write_file",
-                        &format!(r#"{{"path":"{path}","contents":"{contents}"}}"#),
-                    )
-                })
-                .chain([reply_with("wrote it")])
-                .collect(),
-        ),
-    ]);
+    // The worker's replies are held until the planner's request answered "waiting" has arrived.
+    // That request is made after the turn last looked for finished delegates, so the worker is
+    // still outstanding when the planner answers and the turn waits for it. A worker back sooner
+    // would be joined into that request, and "waiting" would end the turn before any apply.
+    let waiting_request = writes_before_count + 2;
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            ("HAVE-A-DELEGATE-WRITE-TO-APPLY", planner),
+            (
+                "WRITE-OUT-TO-APPLY",
+                worker_writes
+                    .iter()
+                    .map(|(path, contents)| {
+                        tool_request(
+                            "write_file",
+                            &format!(r#"{{"path":"{path}","contents":"{contents}"}}"#),
+                        )
+                    })
+                    .chain([reply_with("wrote it")])
+                    .collect(),
+            ),
+        ],
+        Order::After {
+            held: "WRITE-OUT-TO-APPLY",
+            after: "HAVE-A-DELEGATE-WRITE-TO-APPLY",
+            asked: waiting_request,
+        },
+    );
     let (asked, confirmer, sink) = run_in_a_repository_answering(
         &workspace,
         &home.path,
@@ -68287,6 +68392,10 @@ fn apply_after_a_worker_wrote_files(
         &received,
         "HAVE-A-DELEGATE-WRITE-TO-APPLY",
         confirmer,
+    );
+    assert!(
+        held.load(Ordering::SeqCst),
+        "{tag}: the worker had ended before the planner answered \"waiting\""
     );
     (asked, confirmer, scratch, sink)
 }
@@ -70394,6 +70503,7 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
 /// on the way to it.
 #[cfg(unix)]
 #[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling() {
     let scratch = Scratch::new("checkout-linked-redirect");
     let home = Scratch::new("checkout-linked-redirect-home");
@@ -70412,34 +70522,45 @@ fn a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling() 
     std::os::unix::fs::symlink(LINKED_TARGET, scratch.path.join("vendor/docs")).unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "PARENT-OF-A-LINKED-REDIRECTION",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"worker","task":"REDIRECT-IN-THE-CHECKOUT","isolation":"checkout"}"#,
-                ),
-                reply_with("waiting"),
-                tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
-                tool_request(
-                    "apply_checkout",
-                    r#"{"checkout":"c1","paths":["vendor/docs/out.txt"]}"#,
-                ),
-                reply_with("applied"),
-            ],
-        ),
-        (
-            "REDIRECT-IN-THE-CHECKOUT",
-            vec![
-                tool_request(
-                    "run",
-                    r#"{"command":"sed -n p note.txt > out.txt","directory":"vendor/docs"}"#,
-                ),
-                reply_with("redirected"),
-            ],
-        ),
-    ]);
+    // The worker's replies are held until the planner's request answered "waiting" has arrived, so
+    // the worker is still outstanding when the planner answers and the turn waits for it. A worker
+    // back sooner would be joined into that request, and "waiting" would end the turn before the
+    // apply.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "PARENT-OF-A-LINKED-REDIRECTION",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"REDIRECT-IN-THE-CHECKOUT","isolation":"checkout"}"#,
+                    ),
+                    reply_with("waiting"),
+                    tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
+                    tool_request(
+                        "apply_checkout",
+                        r#"{"checkout":"c1","paths":["vendor/docs/out.txt"]}"#,
+                    ),
+                    reply_with("applied"),
+                ],
+            ),
+            (
+                "REDIRECT-IN-THE-CHECKOUT",
+                vec![
+                    tool_request(
+                        "run",
+                        r#"{"command":"sed -n p note.txt > out.txt","directory":"vendor/docs"}"#,
+                    ),
+                    reply_with("redirected"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "REDIRECT-IN-THE-CHECKOUT",
+            after: "PARENT-OF-A-LINKED-REDIRECTION",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -70458,6 +70579,10 @@ fn a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling() 
         trust,
     )
     .expect("turn runs");
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the worker had ended before the planner answered \"waiting\""
+    );
     let asked = every_request(&received);
 
     let made = checkouts_under(&home.path);
@@ -70498,6 +70623,7 @@ fn a_kept_checkouts_redirection_through_a_link_is_named_by_the_typed_spelling() 
 /// program deleted is named as deleted and left in the working directory. The apply closes the
 /// checkout's open loop (OPEN-1).
 #[test]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
     let scratch = Scratch::new("checkout-status-apply");
     let home = Scratch::new("checkout-status-apply-home");
@@ -70511,34 +70637,45 @@ fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
         &[("README", "committed\n"), ("gone.txt", "bye\n")],
     );
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "PARENT-OF-A-PROGRAMS-WORK",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"worker","task":"RUN-TWO-PROGRAMS","isolation":"checkout"}"#,
-                ),
-                reply_with("waiting"),
-                tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
-                tool_request(
-                    "apply_checkout",
-                    r#"{"checkout":"c1","paths":["gone.txt"]}"#,
-                ),
-                reply_with("applied"),
-            ],
-        ),
-        (
-            "RUN-TWO-PROGRAMS",
-            vec![
-                tool_request("run", r#"{"command":"cp README copied.txt"}"#),
-                tool_request("run", r#"{"command":"mkdir sub"}"#),
-                tool_request("run", r#"{"command":"cp README sub/nested.txt"}"#),
-                tool_request("run", r#"{"command":"rm gone.txt"}"#),
-                reply_with("done"),
-            ],
-        ),
-    ]);
+    // The worker's replies are held until the planner's request answered "waiting" has arrived, so
+    // the worker is still outstanding when the planner answers and the turn waits for it. A worker
+    // back sooner would be joined into that request, and "waiting" would end the turn before the
+    // apply.
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "PARENT-OF-A-PROGRAMS-WORK",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"RUN-TWO-PROGRAMS","isolation":"checkout"}"#,
+                    ),
+                    reply_with("waiting"),
+                    tool_request("apply_checkout", r#"{"checkout":"c1"}"#),
+                    tool_request(
+                        "apply_checkout",
+                        r#"{"checkout":"c1","paths":["gone.txt"]}"#,
+                    ),
+                    reply_with("applied"),
+                ],
+            ),
+            (
+                "RUN-TWO-PROGRAMS",
+                vec![
+                    tool_request("run", r#"{"command":"cp README copied.txt"}"#),
+                    tool_request("run", r#"{"command":"mkdir sub"}"#),
+                    tool_request("run", r#"{"command":"cp README sub/nested.txt"}"#),
+                    tool_request("run", r#"{"command":"rm gone.txt"}"#),
+                    reply_with("done"),
+                ],
+            ),
+        ],
+        Order::After {
+            held: "RUN-TWO-PROGRAMS",
+            after: "PARENT-OF-A-PROGRAMS-WORK",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -70556,6 +70693,10 @@ fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
         trust,
     )
     .expect("turn runs");
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the worker had ended before the planner answered \"waiting\""
+    );
     let asked = every_request(&received);
 
     assert_eq!(
@@ -88270,8 +88411,15 @@ mod usage {
         ));
         // Five requests are left: the delegate's two, the parent's one and the nested delegate's
         // two. Each is answered by whose it is, since which arrives first is not settled.
+        //
+        // The nested delegate's last request is answered only once the delegate's request answered
+        // "waiting" has arrived. That request is made after the delegate last looked for finished
+        // delegates, so the nested one is still outstanding when "waiting" is answered. A nested
+        // delegate done sooner would be joined into that request, "waiting" would end the
+        // delegate, and its second request would never come.
         let mut nested_offered_tools = Vec::new();
         let (mut delegate_asked, mut nested_asked) = (0, 0);
+        let mut nested_last: Option<Pending> = None;
         for _ in 0..5 {
             let request = run.request();
             if request.body.contains("PARENT-TASK") {
@@ -88283,17 +88431,33 @@ mod usage {
                 } else {
                     "child done"
                 }));
+                if delegate_asked == 1
+                    && let Some(last) = nested_last.take()
+                {
+                    last.answer(&silent("nested done"));
+                }
             } else {
                 assert!(request.body.contains("NESTED-TASK"), "{}", request.body);
                 nested_asked += 1;
                 nested_offered_tools.push(carried_tools(&request.body));
-                request.answer(&if nested_asked == 1 {
-                    tool_request_with_usage("list_files", r#"{"directory":"."}"#, 1_500, 500)
+                if nested_asked == 1 {
+                    request.answer(&tool_request_with_usage(
+                        "list_files",
+                        r#"{"directory":"."}"#,
+                        1_500,
+                        500,
+                    ));
+                } else if delegate_asked == 0 {
+                    nested_last = Some(request);
                 } else {
-                    silent("nested done")
-                });
+                    request.answer(&silent("nested done"));
+                }
             }
         }
+        assert!(
+            nested_last.is_none(),
+            "the nested delegate's last request was never answered"
+        );
         assert_eq!(
             nested_offered_tools,
             [true, true],
