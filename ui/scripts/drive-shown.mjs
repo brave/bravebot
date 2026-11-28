@@ -48,6 +48,7 @@ try {
       if (method === 'models.list') return { ok: models }
       if (method === 'session.limit') return { ok: { limit: null, spent: 0 } }
       if (method === 'session.variant') return { ok: { model: p.model ?? null, offered: [], variant: null } }
+      if (method === 'loops.list') return { ok: { loops: [], soonest: null } }
       if (method === 'session.open') return { ok: { ...opened, session: 's-' + id, record: { ...row, ...opened.record } } }
       return { ok: {} }
     })
@@ -230,6 +231,11 @@ try {
     assert.deepEqual(smooth, [], `${name}: the window started a smooth scroll while the card waited: ${smooth.join(', ')}`)
     const tops = await page.evaluate(() => [...globalThis.oracle.state.tops])
     assert.ok(tops.length <= 2, `${name}: the transcript scrolled across the card by itself, through ${tops.length} positions: ${tops.join(', ')}`)
+    // A smooth scroll to where the transcript already is moves no rows. The watcher records it, so
+    // the empty list above comes from a watcher that records calls.
+    await card.evaluate((card) => { const entries = card.closest('.entries'); entries.scrollTo({ top: entries.scrollTop, behavior: 'smooth' }) })
+    assert.deepEqual(await page.evaluate(() => globalThis.oracle.state.smooth), ['scrollTo'], `${name}: the watcher did not record a smooth scroll made while the card waited`)
+    await page.evaluate(() => { globalThis.oracle.state.smooth = [] })
     await toBottom(card)
 
     // Too tall for the window, so at the bottom of the transcript some of it is above the fold.
