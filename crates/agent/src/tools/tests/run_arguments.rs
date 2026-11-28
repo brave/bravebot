@@ -252,8 +252,8 @@ fn run_takes_one_command_line_and_nothing_else() {
     let scopes = properties["scopes"]["description"].as_str().unwrap();
     assert!(
         scopes.contains(
-            "A stage with a NAME=value assignment in front of its program gets none of them, \
-             and a line where every stage has one is refused."
+            "A stage with a NAME=value in front of its program gets none, and a line where \
+             every stage has one is refused."
         ),
         "{scopes}"
     );
@@ -265,13 +265,11 @@ fn run_takes_one_command_line_and_nothing_else() {
     assert_eq!(properties["unconfined"]["type"], "boolean");
     let said = properties["unconfined"]["description"].as_str().unwrap();
     for told in [
-        "Start every line without it first",
-        "only after that same line failed because the sandbox refused it access",
-        "is not a reason to ask",
-        "Say in 'why' what the sandbox refused",
-        "asked about the line every time",
-        "before a line has run with the sandbox and failed in this turn is refused",
-        "A session that does not accept it refuses the call",
+        "only after the same line failed because the sandbox refused access",
+        "not for another failure",
+        "say what in why",
+        "asked every time",
+        "a session that does not accept it refuses the call",
     ] {
         assert!(said.contains(told), "{told} missing from {said}");
     }
@@ -419,10 +417,7 @@ fn the_run_tool_says_a_gate_that_may_outlast_the_ceiling_starts_in_the_backgroun
     .function
     .description;
     assert!(
-        prose.contains(
-            "A build or test gate that may take longer than the ceiling also starts with \
-             background: true"
-        ),
+        prose.contains("Use background: true for servers and builds that may outlast the deadline"),
         "the run description does not send a long gate to the background: {prose}"
     );
 }
@@ -464,7 +459,7 @@ fn the_run_tool_quotes_the_deadlines_in_force() {
         "the tool's own description quoted a figure nobody configured: {prose}"
     );
     assert!(
-        argument.contains("Defaults to 900") && argument.contains("and 1800 seconds"),
+        argument.contains("Default 900") && argument.contains("to 1800"),
         "the deadline argument quoted a figure nobody configured: {argument}"
     );
 
@@ -475,7 +470,7 @@ fn the_run_tool_quotes_the_deadlines_in_force() {
         "a turn under the built-in figures was told something else: {prose}"
     );
     assert!(
-        argument.contains("Defaults to 300") && argument.contains("between 1 and 600 seconds"),
+        argument.contains("Default 300") && argument.contains("from 1 to 600"),
         "a turn under the built-in figures was told something else: {argument}"
     );
 }

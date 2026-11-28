@@ -36,7 +36,7 @@ mod local_servers;
 mod stand_in;
 
 use bravebot_config::provider::Patience;
-use bravebot_config::{CacheTtl, Config, Secret};
+use bravebot_config::{CacheLifetimes, Config, Secret};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
@@ -744,13 +744,15 @@ impl<'a> AichatClient<'a> {
         }
     }
 
-    /// The cache lifetime a request asks for: the one the settings chose, for a gateway that has
-    /// not refused it.
-    fn cache_ttl_asked(&self) -> Option<CacheTtl> {
-        self.gateway
-            .as_ref()
-            .and(self.config.prompt_cache_ttl)
-            .filter(|_| !self.call.refusals.cache_ttl)
+    /// The cache lifetimes a request asks for, for a gateway that has not refused a lifetime: the
+    /// ones the settings make, which where they chose none is an hour on the tools and the system
+    /// prompt and nothing on the conversation. Brave's own endpoint is asked for none.
+    fn cache_ttl_asked(&self) -> CacheLifetimes {
+        if self.gateway.is_none() || self.call.refusals.cache_ttl {
+            CacheLifetimes::NONE
+        } else {
+            CacheLifetimes::for_setting(self.config.prompt_cache_ttl)
+        }
     }
 
     /// The order a refusal of the body is answered in, in both loops.
@@ -1513,12 +1515,13 @@ impl Driven for AichatClient<'_> {
     /// Only a refusal of the body is answered by giving something up, and only where the request
     /// carried what would be given up, so a service that answers this status for its own reasons
     /// cannot make a retry loop out of it. The lifetime is only in question while breakpoints are
-    /// sent, the breakpoints being what carries it.
+    /// sent and one of those the request carries states a lifetime, the breakpoints being what
+    /// carries it.
     fn refused(&self, request: &ChatRequest, concession: Concession, error: &ChatError) -> bool {
         refuses_the_body(error)
             && match concession {
                 Concession::CacheTtl => {
-                    !self.call.refusals.caching && self.cache_ttl_asked().is_some()
+                    !self.call.refusals.caching && request.states_a_lifetime(self.cache_ttl_asked())
                 }
                 Concession::Breakpoints => true,
                 Concession::Effort => request.effort.is_some(),
@@ -2510,8 +2513,9 @@ mod tests {
     }
 
     /// The lifetime the settings chose goes to a gateway on the prompt's and the conversation's
-    /// breakpoints, and to nowhere else: Brave's own endpoint is sent none, and a gateway whose
-    /// settings chose none is sent the request that went before the setting existed.
+    /// breakpoints, and to nowhere else: Brave's own endpoint is sent none. A gateway whose
+    /// settings chose none is sent an hour on the prompt and nothing on the conversation, and a
+    /// gateway that refused a lifetime is sent none on either.
     #[test]
     fn a_chosen_lifetime_goes_to_a_gateway_and_to_nothing_else() {
         let egress = Egress::new();
@@ -2532,7 +2536,7 @@ mod tests {
         let plain = || serde_json::json!({"type": "ephemeral"});
 
         let mut chosen = config();
-        chosen.prompt_cache_ttl = Some(CacheTtl::OneHour);
+        chosen.prompt_cache_ttl = Some(bravebot_config::CacheTtl::OneHour);
         let gateway =
             AichatClient::new(&chosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
         let hour = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
@@ -2548,7 +2552,20 @@ mod tests {
         let unchosen = config();
         let gateway =
             AichatClient::new(&unchosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
-        assert_eq!(cache_controls(&gateway), [plain(), plain()]);
+        assert_eq!(
+            cache_controls(&gateway),
+            [
+                serde_json::json!({"type": "ephemeral", "ttl": "1h"}),
+                plain()
+            ],
+            "the default is an hour on the prompt and nothing on the conversation"
+        );
+        let own = AichatClient::new(&unchosen, &egress);
+        assert_eq!(
+            cache_controls(&own),
+            [plain(), plain()],
+            "Brave's endpoint was sent the default hour"
+        );
 
         let mut refused =
             AichatClient::new(&chosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
@@ -2557,6 +2574,14 @@ mod tests {
             cache_controls(&refused),
             [plain(), plain()],
             "a refused lifetime was sent again"
+        );
+        let mut refused =
+            AichatClient::new(&unchosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
+        refused.call.refusals.cache_ttl = true;
+        assert_eq!(
+            cache_controls(&refused),
+            [plain(), plain()],
+            "a refused default hour was sent again"
         );
     }
 
@@ -2640,6 +2665,7 @@ mod tests {
                     let body = client.body(&asked).expect("a body").to_string();
                     seen.push((
                         body.contains("cache_control"),
+                        body.contains("\"ttl\""),
                         body.contains("reasoning_effort"),
                     ));
                     Err(ChatError::Egress(EgressError::Status {
@@ -2659,13 +2685,23 @@ mod tests {
         };
 
         let seen = sent_to(&own, "backend-22-own");
-        assert_eq!(seen, [(false, true), (false, false)], "{seen:?}");
+        assert_eq!(
+            seen,
+            [(false, false, true), (false, false, false)],
+            "{seen:?}"
+        );
 
-        // A proxy keyed openai is sent the breakpoints, and gives them up before the level.
+        // A proxy keyed openai is sent the breakpoints, with the default hour on the prompt's, and
+        // gives up the lifetime, then the breakpoints, before the level.
         let seen = sent_to(&proxy, "backend-22-proxy");
         assert_eq!(
             seen,
-            [(true, true), (false, true), (false, false)],
+            [
+                (true, true, true),
+                (true, false, true),
+                (false, false, true),
+                (false, false, false)
+            ],
             "{seen:?}"
         );
     }

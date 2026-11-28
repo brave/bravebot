@@ -20,7 +20,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [processors.md](processors.md) | `PROC` | 16 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 16 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [grounding.md](grounding.md) | `GROUND` | 6 | counting what a delegate or a goal's turns actually ran and wrote, and telling the planner and the goal judge (proposed: not built) |
-| [delegation.md](delegation.md) | `DELEGATE` | 34 | a second planner, narrower than the first, and what crosses back from one |
+| [delegation.md](delegation.md) | `DELEGATE` | 35 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 14 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
 | [bots.md](bots.md) | `BOT` | 18 | how the terminal gets the bots the GUI has: one set of rows both read and write, one module that holds the code, the writes a window cannot reach, where a turn runs, the memory view, and a second layout for bots (proposed, not built) |

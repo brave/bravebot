@@ -16,11 +16,15 @@ fn asking_is_described_as_a_last_resort_after_looking() {
     .expect("ask_user is offered");
     let described = tool.function.description.to_lowercase();
     assert!(
-        described.contains("cannot find out yourself"),
+        described.contains("only for what you cannot find out yourself"),
+        "ask_user does not say to ask only for what it cannot find out itself: {described}"
+    );
+    assert!(
+        described.contains("look with list_files, search, read_file or run first"),
         "ask_user does not say to look first: {described}"
     );
     assert!(
-        described.contains("never for a fact about this machine"),
+        described.contains("not for a fact about this machine"),
         "ask_user does not rule out asking for discoverable facts: {described}"
     );
 }
@@ -42,7 +46,7 @@ fn ask_user_says_that_looking_first_does_not_forfeit_the_question() {
     assert!(
         tool.function
             .description
-            .contains("does not stop you asking afterwards"),
+            .contains("a quarantined result does not stop you asking after"),
         "ask_user still implies reading forfeits the question: {}",
         tool.function.description
     );
@@ -107,12 +111,12 @@ fn question_and_detail_descriptions(running: Running) -> [(&'static str, String)
 fn ask_user_names_run_only_where_the_turn_holds_one() {
     let offered = ask_user_description(Running::Offered);
     assert!(
-        offered.contains("look with list_files, search, read_file or run instead"),
+        offered.contains("look with list_files, search, read_file or run first"),
         "a turn with run is not sent to it: {offered}"
     );
     let withheld = ask_user_description(Running::Withheld);
     assert!(
-        withheld.contains("look with list_files, search or read_file instead")
+        withheld.contains("look with list_files, search or read_file first")
             && !withheld.contains("run"),
         "a turn without run is sent to it: {withheld}"
     );

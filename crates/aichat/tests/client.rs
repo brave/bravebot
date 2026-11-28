@@ -5459,15 +5459,16 @@ fn an_anthropic_request_refused_on_its_contents_is_asked_again_without_what_nobo
 /// BACKEND-27: an `anthropic` entry that refused a breakpoint is not sent one again, and the record
 /// is kept against the service and the name the model goes out under.
 ///
-/// The request is refused until the level, the assumed ceiling and the breakpoints have each been
-/// given up, so the fourth is the first without a breakpoint and the one that answers. The next call
-/// to that service starts from it. Another service serving the same model name was never refused, so
-/// its first request is sent whole. The regressions it rejects are the breakpoints kept on the
-/// request that was asked again, a record that is never made or never read back, and a record kept
-/// against the model name alone.
+/// The request is refused until the level, the assumed ceiling, the default hour on the prompt's
+/// breakpoint and the breakpoints have each been given up, so the fifth is the first without a
+/// breakpoint and the one that answers. The next call to that service starts from it. Another
+/// service serving the same model name was never refused, so its first request is sent whole. The
+/// regressions it rejects are the breakpoints kept on the request that was asked again, a record
+/// that is never made or never read back, and a record kept against the model name alone.
 #[test]
 fn an_anthropic_entry_that_refused_a_breakpoint_is_not_sent_one_again_per_service() {
     let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
         Attempt::Status(400),
         Attempt::Status(400),
         Attempt::Status(400),
@@ -5489,13 +5490,14 @@ fn an_anthropic_entry_that_refused_a_breakpoint_is_not_sent_one_again_per_servic
     let mut first = AnthropicClient::new(&config, &egress, &provider, slug, None);
     first
         .complete(&mut policy, &request)
-        .expect("the fourth request answered");
-    assert_eq!(first.attempts(), 4);
+        .expect("the fifth request answered");
+    assert_eq!(first.attempts(), 5);
     let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
     assert_eq!(
         bodies.iter().map(carries_a_breakpoint).collect::<Vec<_>>(),
-        [true, true, true, false],
-        "the request asked again after the level and the ceiling went kept its breakpoints"
+        [true, true, true, true, false],
+        "the request asked again after the level, the ceiling and the lifetime went kept its \
+         breakpoints"
     );
 
     // The next call to the same service and model starts from what was refused.
@@ -5530,7 +5532,7 @@ fn an_anthropic_entry_that_refused_a_breakpoint_is_not_sent_one_again_per_servic
 /// Nothing is remembered from probes that all failed.
 #[test]
 fn a_probe_that_failed_as_well_leaves_what_was_known_alone() {
-    let (endpoint, received) = serve_attempts((0..8).map(|_| Attempt::Status(400)).collect());
+    let (endpoint, received) = serve_attempts((0..10).map(|_| Attempt::Status(400)).collect());
     let config = config_for(&endpoint);
     let provider = anthropic_at(&endpoint);
     let egress = Egress::new();
@@ -5545,10 +5547,11 @@ fn a_probe_that_failed_as_well_leaves_what_was_known_alone() {
     }
 
     let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
-    // The first and the fifth are the first request of each call.
-    assert_eq!(bodies.len(), 8);
-    assert_eq!(bodies[0], bodies[4], "the second call started from a probe");
-    assert!(carries_a_breakpoint(&bodies[4]));
+    // The first and the sixth are the first request of each call: each call gives up the level,
+    // the ceiling, the lifetime and the breakpoints.
+    assert_eq!(bodies.len(), 10);
+    assert_eq!(bodies[0], bodies[5], "the second call started from a probe");
+    assert!(carries_a_breakpoint(&bodies[5]));
     assert!(bravebot_aichat::reads_effort(
         &provider.completion_url(),
         "claude-test"
@@ -5589,7 +5592,11 @@ fn an_assumed_ceiling_a_model_refuses_is_stepped_down_and_a_stated_one_never_is(
         "the cache was given up for a ceiling it had nothing to do with"
     );
 
-    let (endpoint, received) = serve_attempts(vec![Attempt::Status(400), Attempt::Status(400)]);
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Status(400),
+        Attempt::Status(400),
+    ]);
     let config = config_for(&endpoint);
     let provider = anthropic_with(
         &endpoint,
@@ -5606,10 +5613,11 @@ fn an_assumed_ceiling_a_model_refuses_is_stepped_down_and_a_stated_one_never_is(
         )
         .expect_err("the stated ceiling was refused");
     let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
-    assert_eq!(client.attempts(), 2);
+    // The lifetime and the breakpoints are given up, and the ceiling never is.
+    assert_eq!(client.attempts(), 3);
     assert_eq!(
         bodies.iter().map(assumed).collect::<Vec<_>>(),
-        [64_000, 64_000]
+        [64_000, 64_000, 64_000]
     );
 }
 
@@ -6000,8 +6008,9 @@ fn an_anthropic_request_giving_up_its_conversation_is_sent_without_the_breakpoin
     let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
     assert_eq!(bodies.len(), 2);
     let ephemeral = serde_json::json!({"type": "ephemeral"});
+    let hour = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
     for body in &bodies {
-        assert_eq!(body["system"][0]["cache_control"], ephemeral, "{body}");
+        assert_eq!(body["system"][0]["cache_control"], hour, "{body}");
     }
     assert!(
         !carries_a_breakpoint(&serde_json::json!(bodies[0]["messages"])),
@@ -6064,6 +6073,141 @@ fn an_anthropic_refused_lifetime_is_given_up_before_the_breakpoints() {
     }
 }
 
+/// BACKEND-27: with no `promptCacheTtl`, an `anthropic` request asks for an hour on the breakpoints
+/// after the tools and on the system prompt, and for the service's default on the conversation's.
+/// A model that refuses that hour is asked again with every breakpoint kept and no lifetime on any,
+/// and the next call starts from that. Rejects a default that sends no lifetime, an hour on the
+/// conversation, a refusal of the default hour answered by giving up the breakpoints, and a refusal
+/// that is not remembered.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_anthropic_request_asks_an_hour_for_its_prefix_by_default_and_none_once_refused() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Json(MESSAGES_REPLY.into()),
+        Attempt::Json(MESSAGES_REPLY.into()),
+    ]);
+    let config = config_for(&endpoint);
+    assert_eq!(config.prompt_cache_ttl, None);
+    // A stated ceiling, so the lifetime is the first thing left to be refused.
+    let provider = anthropic_with(
+        &endpoint,
+        r#", "models": {"claude-default": {"limit": {"context": 200000, "output": 64000}}}"#,
+    );
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let request = ChatRequest::new(
+        "anthropic/claude-default",
+        vec![Message::system("be brief"), Message::user("hello")],
+    )
+    .with_tools(reading_tool());
+
+    let mut client = AnthropicClient::new(&config, &egress, &provider, "claude-default", None);
+    client
+        .complete(&mut policy, &request)
+        .expect("the request without the lifetime answered");
+    assert_eq!(client.attempts(), 2);
+    let mut later = AnthropicClient::new(&config, &egress, &provider, "claude-default", None);
+    later
+        .complete(&mut policy, &request)
+        .expect("the remembered shape answered");
+    assert_eq!(later.attempts(), 1);
+
+    let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    assert_eq!(bodies.len(), 3);
+    let hour = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+    let default = serde_json::json!({"type": "ephemeral"});
+    let marks = |body: &serde_json::Value| {
+        [
+            body["tools"][0]["cache_control"].clone(),
+            body["system"][0]["cache_control"].clone(),
+            body["messages"][0]["content"][0]["cache_control"].clone(),
+        ]
+    };
+    assert_eq!(
+        marks(&bodies[0]),
+        [hour.clone(), hour, default.clone()],
+        "{}",
+        bodies[0]
+    );
+    for refused in &bodies[1..] {
+        assert_eq!(
+            marks(refused),
+            [default.clone(), default.clone(), default.clone()],
+            "the refused hour was sent again or the breakpoints went with it: {refused}"
+        );
+    }
+}
+
+/// BACKEND-32: with no `promptCacheTtl`, a gateway is asked for an hour on the tools' and the system
+/// prompt's breakpoints and for nothing on the last thing the user said. A gateway that refuses the
+/// hour is asked again with the breakpoints and no lifetime, and is not asked for the hour again.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_gateway_is_asked_an_hour_for_its_prefix_by_default_and_none_once_refused() {
+    let model = "a-model-that-refuses-the-default-hour";
+    let reply = || {
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ])
+    };
+    let (endpoint, received) = serve_attempts(vec![Attempt::Status(400), reply(), reply()]);
+    let config = config_for(&endpoint);
+    assert_eq!(config.prompt_cache_ttl, None);
+    let gateway = gateway_naming(&endpoint, model);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let request = ChatRequest::new(
+        model,
+        vec![Message::system("be brief"), Message::user("hello")],
+    )
+    .with_tools(reading_tool());
+
+    for turn in 0..2 {
+        AichatClient::new(&config, &egress)
+            .for_gateway(&gateway, model, None)
+            .complete_streaming(&mut policy, &request, |_| {})
+            .unwrap_or_else(|error| panic!("turn {turn} did not survive the refusal: {error:?}"));
+    }
+
+    let marks = |body: &str| {
+        let body: serde_json::Value = serde_json::from_str(body).expect("a JSON body");
+        [
+            body["tools"][0]["cache_control"].clone(),
+            body["messages"][0]["content"][0]["cache_control"].clone(),
+            body["messages"][1]["content"][0]["cache_control"].clone(),
+        ]
+    };
+    let hour = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+    let default = serde_json::json!({"type": "ephemeral"});
+    let first = received.recv().expect("a first request");
+    assert_eq!(
+        marks(&first.body),
+        [hour.clone(), hour, default.clone()],
+        "{}",
+        first.body
+    );
+    for name in ["second", "next turn's"] {
+        let sent = received.recv().expect("a later request");
+        assert_eq!(
+            marks(&sent.body),
+            [default.clone(), default.clone(), default.clone()],
+            "the {name} request was not the first one without its lifetime: {}",
+            sent.body
+        );
+    }
+}
+
 /// The ask for arguments as they are written is the last thing a refusal can be about, because
 /// giving it up costs a model every long argument written into a silence and giving up the ceiling
 /// or the cache does not. A request refused on its contents loses the ceiling, then the cache, then
@@ -6074,6 +6218,7 @@ fn an_anthropic_stream_refused_on_its_contents_gives_up_the_ask_for_arguments_la
     answered.extend(text_block(0, &["done"]));
     answered.extend(message_end("end_turn", 3));
     let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
         Attempt::Status(400),
         Attempt::Status(400),
         Attempt::Status(400),
@@ -6093,13 +6238,15 @@ fn an_anthropic_stream_refused_on_its_contents_gives_up_the_ask_for_arguments_la
                 .with_tools(reading_tool()),
             |_| {},
         )
-        .expect("the fourth request answered");
-    assert_eq!(client.attempts(), 4);
+        .expect("the fifth request answered");
+    assert_eq!(client.attempts(), 5);
 
     let bodies: Vec<serde_json::Value> = received.try_iter().map(|c| json_of(&c)).collect();
+    // (a breakpoint, a lifetime on one, the ceiling, the ask for arguments as written)
     let shape = |body: &serde_json::Value| {
         (
             carries_a_breakpoint(body),
+            body.to_string().contains(r#""ttl""#),
             body["max_tokens"].as_u64().expect("a ceiling"),
             body["tools"][0].get("eager_input_streaming").is_some(),
         )
@@ -6107,10 +6254,11 @@ fn an_anthropic_stream_refused_on_its_contents_gives_up_the_ask_for_arguments_la
     assert_eq!(
         bodies.iter().map(shape).collect::<Vec<_>>(),
         [
-            (true, 32_000, true),
-            (true, 8_192, true),
-            (false, 8_192, true),
-            (false, 8_192, false),
+            (true, true, 32_000, true),
+            (true, true, 8_192, true),
+            (true, false, 8_192, true),
+            (false, false, 8_192, true),
+            (false, false, 8_192, false),
         ]
     );
 }

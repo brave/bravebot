@@ -3,7 +3,7 @@
 //! Only the fields this client uses are modelled. Unknown response fields are ignored
 //! rather than rejected, so a server-side addition does not break the client.
 
-use bravebot_config::CacheTtl;
+use bravebot_config::{CacheLifetimes, CacheTtl};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -506,8 +506,10 @@ impl ChatRequest {
     /// every project while the system prompt is not, so without it a session in another directory
     /// writes the schemas again along with the prompt (BACKEND-32).
     ///
-    /// `ttl` is the lifetime each breakpoint asks for, or `None` for the service's own default.
-    pub fn marked_body(&self, ttl: Option<CacheTtl>) -> Result<Value, serde_json::Error> {
+    /// `lifetimes` says what each breakpoint asks for: `prefix` on the last tool and the system
+    /// prompt, `conversation` on the last thing the user said, `None` being the service's own
+    /// default.
+    pub fn marked_body(&self, lifetimes: CacheLifetimes) -> Result<Value, serde_json::Error> {
         let mut body = serde_json::to_value(self)?;
         if let Some(last) = body
             .get_mut("tools")
@@ -518,7 +520,7 @@ impl ChatRequest {
             last.insert(
                 "cache_control".to_string(),
                 serde_json::to_value(CacheControl::Ephemeral {
-                    ttl: ttl.map(CacheTtl::wire),
+                    ttl: lifetimes.prefix.map(CacheTtl::wire),
                 })?,
             );
         }
@@ -526,12 +528,34 @@ impl ChatRequest {
             return Ok(body);
         };
         for at in breakpoints(&self.messages, self.conversation_is_sent_again) {
+            let ttl = match self.messages[at].role {
+                Role::System => lifetimes.prefix,
+                _ => lifetimes.conversation,
+            };
             let content = serde_json::to_value(marked(&self.messages[at].content, ttl))?;
             if let Some(message) = messages.get_mut(at).and_then(Value::as_object_mut) {
                 message.insert("content".to_string(), content);
             }
         }
         Ok(body)
+    }
+
+    /// Whether the body [`ChatRequest::marked_body`] builds with `lifetimes` states a lifetime on
+    /// any breakpoint, which is what a refusal of a lifetime could be about.
+    ///
+    /// Decided from where the breakpoints go, which is the tool list and the roles and the last
+    /// block of the marked messages, and never from what the words say.
+    pub fn states_a_lifetime(&self, lifetimes: CacheLifetimes) -> bool {
+        let marked = breakpoints(&self.messages, self.conversation_is_sent_again);
+        let on_the_prompt = marked
+            .iter()
+            .any(|&at| matches!(self.messages[at].role, Role::System));
+        let on_the_conversation = marked
+            .iter()
+            .any(|&at| !matches!(self.messages[at].role, Role::System));
+        let on_the_prefix = self.tools.is_some() || on_the_prompt;
+        (on_the_prefix && lifetimes.prefix.is_some())
+            || (on_the_conversation && lifetimes.conversation.is_some())
     }
 }
 
@@ -2567,7 +2591,7 @@ mod tests {
                 ],
             );
 
-            let messages = &request.marked_body(None).unwrap()["messages"];
+            let messages = &request.marked_body(CacheLifetimes::NONE).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"],
@@ -2599,7 +2623,7 @@ mod tests {
             )
             .giving_up_its_conversation();
 
-            let messages = &request.marked_body(None).unwrap()["messages"];
+            let messages = &request.marked_body(CacheLifetimes::NONE).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"][0]["cache_control"],
@@ -2625,7 +2649,7 @@ mod tests {
                 ],
             );
 
-            let messages = &request.marked_body(None).unwrap()["messages"];
+            let messages = &request.marked_body(CacheLifetimes::NONE).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"][0]["cache_control"],
@@ -2659,7 +2683,7 @@ mod tests {
                 ],
             );
 
-            let messages = &request.marked_body(None).unwrap()["messages"];
+            let messages = &request.marked_body(CacheLifetimes::NONE).unwrap()["messages"];
 
             assert_eq!(messages[1]["content"], json!("first question"));
             assert_eq!(
@@ -2685,7 +2709,7 @@ mod tests {
                 ])],
             );
 
-            let messages = &request.marked_body(None).unwrap()["messages"];
+            let messages = &request.marked_body(CacheLifetimes::NONE).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"],
@@ -2710,7 +2734,7 @@ mod tests {
                 ])],
             );
 
-            let messages = &request.marked_body(None).unwrap()["messages"];
+            let messages = &request.marked_body(CacheLifetimes::NONE).unwrap()["messages"];
 
             assert_eq!(
                 messages[0]["content"][1]["cache_control"],
@@ -2731,7 +2755,7 @@ mod tests {
                 .streamed();
 
             let plain = serde_json::to_value(&request).unwrap();
-            let marked = request.marked_body(None).unwrap();
+            let marked = request.marked_body(CacheLifetimes::NONE).unwrap();
 
             let plain = plain.as_object().unwrap();
             let marked = marked.as_object().unwrap();
@@ -2771,7 +2795,7 @@ mod tests {
                     Tool::function("write", "writes", json!({})),
                 ]);
 
-            let body = request.marked_body(None).unwrap();
+            let body = request.marked_body(CacheLifetimes::NONE).unwrap();
             assert_eq!(body["tools"][0].get("cache_control"), None, "{body}");
             assert_eq!(
                 body["tools"][1]["cache_control"],
@@ -2779,14 +2803,44 @@ mod tests {
                 "{body}"
             );
 
-            let hour = request.marked_body(Some(CacheTtl::OneHour)).unwrap();
+            let hour = request
+                .marked_body(CacheLifetimes::for_setting(Some(CacheTtl::OneHour)))
+                .unwrap();
             assert_eq!(
                 hour["tools"][1]["cache_control"],
                 json!({"type": "ephemeral", "ttl": "1h"})
             );
 
+            // With no lifetime chosen the schemas ask for an hour, as the system prompt does,
+            // and the last thing the user said asks for nothing.
+            let defaulted = ChatRequest::new(
+                DEFAULT_MODEL,
+                vec![Message::system("be brief"), Message::user("hi")],
+            )
+            .with_tools(vec![
+                Tool::function("read", "reads", json!({})),
+                Tool::function("write", "writes", json!({})),
+            ])
+            .marked_body(CacheLifetimes::for_setting(None))
+            .unwrap();
+            assert_eq!(
+                defaulted["tools"][1]["cache_control"],
+                json!({"type": "ephemeral", "ttl": "1h"}),
+                "{defaulted}"
+            );
+            assert_eq!(
+                defaulted["messages"][0]["content"][0]["cache_control"],
+                json!({"type": "ephemeral", "ttl": "1h"}),
+                "{defaulted}"
+            );
+            assert_eq!(
+                defaulted["messages"][1]["content"][0]["cache_control"],
+                json!({"type": "ephemeral"}),
+                "{defaulted}"
+            );
+
             let toolless = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
-            let body = toolless.marked_body(None).unwrap();
+            let body = toolless.marked_body(CacheLifetimes::NONE).unwrap();
             assert_eq!(body.get("tools"), None, "{body}");
         }
 
@@ -2813,7 +2867,7 @@ mod tests {
                 json!({"type": "ephemeral"});
 
             assert_eq!(
-                request.marked_body(None).unwrap()["messages"][0]["content"],
+                request.marked_body(CacheLifetimes::NONE).unwrap()["messages"][0]["content"],
                 expected
             );
         }
@@ -2823,7 +2877,7 @@ mod tests {
         #[test]
         fn an_empty_turn_is_left_alone() {
             let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("")]);
-            let messages = &request.marked_body(None).unwrap()["messages"];
+            let messages = &request.marked_body(CacheLifetimes::NONE).unwrap()["messages"];
             assert_eq!(messages[0]["content"], json!(""));
         }
     }

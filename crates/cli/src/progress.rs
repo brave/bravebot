@@ -146,6 +146,12 @@ pub struct Progress<W: Write> {
     /// Kept here because this is the one thing told about every call, start and finish, and a
     /// second listener would be a second set of hooks to keep in step with dispatch.
     calls: Vec<Call>,
+    /// How many delegates the run started, at every level, as the driver announced each one.
+    ///
+    /// Counted from [`Reporter::delegate_started`], which the driver sends once for each delegate
+    /// it starts, so one `spawn_agent` call that starts four counts four. The calls list cannot say
+    /// this: it holds one entry for that call.
+    delegates: usize,
     /// Every notice the turn said as it ran, in order, for a run that ends without an outcome.
     ///
     /// Kept rather than printed as it arrives, because a turn that produces an outcome carries
@@ -168,6 +174,7 @@ impl<W: Write> Progress<W> {
             spent: Default::default(),
             earlier: Default::default(),
             calls: Vec::new(),
+            delegates: 0,
             notices: Vec::new(),
             earlier_notices: 0,
             stream: None,
@@ -236,6 +243,11 @@ impl<W: Write> Progress<W> {
     /// What the run called, in the order it called it.
     pub fn calls(&self) -> &[Call] {
         &self.calls
+    }
+
+    /// How many delegates the run started, its delegates' own delegates included.
+    pub fn delegates(&self) -> usize {
+        self.delegates
     }
 
     /// What the turn said as it ran, in the order it said it.
@@ -337,6 +349,12 @@ impl<W: Write> Reporter for Progress<W> {
             let waited = bravebot_tui::indicator::format_waited(activity.waited);
             self.say(&format!("  {DETAIL_MARKER} {note}{waited}"));
         }
+    }
+
+    /// Counted for the result object. Nothing is printed: the calls already say a delegate was
+    /// asked for.
+    fn delegate_started(&mut self, _delegation: bravebot_agent::report::Delegation) {
+        self.delegates += 1;
     }
 
     /// Written where the interactive transcript would draw the block, and for the same reason:
@@ -481,6 +499,35 @@ mod tests {
         let mut progress = Progress::new(&mut buffer);
         run(&mut progress);
         String::from_utf8(buffer).expect("utf-8")
+    }
+
+    fn delegation(n: u32) -> bravebot_agent::report::Delegation {
+        bravebot_agent::report::Delegation {
+            id: bravebot_core::delegate::DelegateId::nth(n),
+            kind: "reader".to_string(),
+            task: format!("read part {n}"),
+            stop: bravebot_core::cancel::DelegateStop::new(),
+        }
+    }
+
+    /// One `spawn_agent` call that starts four delegates is one call and four delegates. The count
+    /// comes from the driver's announcement of each delegate, so a reporter that counted
+    /// `spawn_agent` calls instead would say one here.
+    #[test]
+    fn every_delegate_the_driver_starts_is_counted_however_many_calls_started_them() {
+        let mut buffer = Vec::new();
+        let mut progress = Progress::new(&mut buffer);
+        assert_eq!(progress.delegates(), 0);
+        progress.tool_started(Activity::running("Delegate", "reader"));
+        for n in 1..=4 {
+            progress.delegate_started(delegation(n));
+        }
+        let mut finished = Activity::running("Delegate", "reader");
+        finished.tool = "spawn_agent".to_string();
+        progress.tool_finished(finished);
+
+        assert_eq!(progress.calls().len(), 1);
+        assert_eq!(progress.delegates(), 4);
     }
 
     /// The line has to appear before the call finishes, or a one-shot run is silent for

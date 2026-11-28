@@ -1829,14 +1829,14 @@ fn a_catalogue_holding_only_a_skill_kept_from_the_planner_has_no_section_of_skil
 
     let kept_alone = text_for(&["ship-it"]);
     assert!(
-        !kept_alone.contains("Skills. Each is a set of instructions")
+        !kept_alone.contains("Skills. When a task matches one")
             && !kept_alone.contains("ship-it")
             && !kept_alone.contains("DESCRIPTION-OF-ship-it"),
         "a skill kept from the planner reached the prompt: {kept_alone}"
     );
     let with_an_ordinary_one = text_for(&["ship-it", "commit-style"]);
     assert!(
-        with_an_ordinary_one.contains("Skills. Each is a set of instructions")
+        with_an_ordinary_one.contains("Skills. When a task matches one")
             && with_an_ordinary_one.contains("DESCRIPTION-OF-commit-style")
             && !with_an_ordinary_one.contains("DESCRIPTION-OF-ship-it"),
         "the ordinary skill was not advertised, or the kept one was: {with_an_ordinary_one}"

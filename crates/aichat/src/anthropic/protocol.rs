@@ -22,7 +22,7 @@ use crate::conversation::{self, Spelling};
 use crate::protocol::{
     CacheControl, Cached, Effort, Message, Tool, ToolCall, ToolCallFunction, Usage,
 };
-use bravebot_config::CacheTtl;
+use bravebot_config::{CacheLifetimes, CacheTtl};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -264,36 +264,57 @@ impl MessagesRequest {
         self
     }
 
-    /// The same request with every breakpoint asking the service to keep its prefix for `ttl`.
+    /// The same request with each breakpoint asking the service to keep its prefix for the
+    /// lifetime `lifetimes` gives it: the tools' and the system prompt's for `prefix`, the
+    /// conversation's for `conversation`.
     ///
     /// Not every model reads a lifetime, and one that does not refuses the request, so this is
-    /// something a refusal is worth trying without before the breakpoints are given up. `None`
-    /// leaves each breakpoint as the service's default.
-    pub fn with_cache_ttl(mut self, ttl: Option<CacheTtl>) -> Self {
-        let Some(ttl) = ttl else {
-            return self;
+    /// something a refusal is worth trying without before the breakpoints are given up. A `None`
+    /// leaves those breakpoints at the service's default, and no breakpoint is added.
+    pub fn with_cache_ttl(mut self, lifetimes: CacheLifetimes) -> Self {
+        let point = |ttl: Option<CacheTtl>| {
+            Some(CacheControl::Ephemeral {
+                ttl: ttl.map(CacheTtl::wire),
+            })
         };
-        let point = Some(CacheControl::Ephemeral {
-            ttl: Some(ttl.wire()),
-        });
+        let prefix = point(lifetimes.prefix);
+        let conversation = point(lifetimes.conversation);
         for tool in self.tools.iter_mut().flatten() {
             if tool.cache_control.is_some() {
-                tool.cache_control = point;
+                tool.cache_control = prefix;
             }
         }
         for block in self.system.iter_mut().flatten() {
             if breakpoint(block).is_some() {
-                set_breakpoint(block, point);
+                set_breakpoint(block, prefix);
             }
         }
         for turn in &mut self.messages {
             for block in &mut turn.content {
                 if breakpoint(block).is_some() {
-                    set_breakpoint(block, point);
+                    set_breakpoint(block, conversation);
                 }
             }
         }
         self
+    }
+
+    /// Whether any breakpoint this request carries states a lifetime, which is what a refusal of a
+    /// lifetime could be about.
+    pub fn states_a_lifetime(&self) -> bool {
+        let lasting = |point: Option<CacheControl>| {
+            matches!(point, Some(CacheControl::Ephemeral { ttl: Some(_) }))
+        };
+        self.tools
+            .iter()
+            .flatten()
+            .any(|tool| lasting(tool.cache_control))
+            || self.system.iter().flatten().any(|b| lasting(breakpoint(b)))
+            || self
+                .messages
+                .iter()
+                .flat_map(|turn| &turn.content)
+                .any(|b| lasting(breakpoint(b)))
     }
 
     /// The same request without the breakpoint on the end of its conversation, the prompt's kept.
@@ -1152,31 +1173,62 @@ mod tests {
         assert!(!body_of(&without).to_string().contains("cache_control"));
     }
 
-    /// A lifetime goes on every breakpoint the request carries and adds none, and a request
-    /// nobody chose one for states none.
+    /// A lifetime a person chose goes on every breakpoint the request carries and adds none, and
+    /// each lifetime is its own word, so a request cannot pass by sending the same one for all.
+    /// A request whose lifetime was refused states none.
     #[test]
     fn a_chosen_lifetime_is_stated_on_every_breakpoint_and_none_is_added() {
         let base = request(&[Message::system("be brief"), Message::user("one")]);
 
-        let chosen = body_of(&base.clone().with_cache_ttl(Some(CacheTtl::OneHour)));
-        let hour = json!({"type": "ephemeral", "ttl": "1h"});
-        assert_eq!(chosen["tools"][0]["cache_control"], hour);
-        assert_eq!(chosen["system"][0]["cache_control"], hour);
-        assert_eq!(chosen["messages"][0]["content"][0]["cache_control"], hour);
+        for ttl in CacheTtl::ALL {
+            let chosen = body_of(
+                &base
+                    .clone()
+                    .with_cache_ttl(CacheLifetimes::for_setting(Some(ttl))),
+            );
+            let point = json!({"type": "ephemeral", "ttl": ttl.wire()});
+            assert_eq!(chosen["tools"][0]["cache_control"], point, "{ttl:?}");
+            assert_eq!(chosen["system"][0]["cache_control"], point, "{ttl:?}");
+            assert_eq!(
+                chosen["messages"][0]["content"][0]["cache_control"], point,
+                "{ttl:?}"
+            );
+        }
 
-        let none = body_of(&base.clone().with_cache_ttl(None));
-        assert_eq!(
-            none["system"][0]["cache_control"],
-            json!({"type": "ephemeral"})
-        );
+        let none = body_of(&base.clone().with_cache_ttl(CacheLifetimes::NONE));
+        let plain = json!({"type": "ephemeral"});
+        assert_eq!(none["tools"][0]["cache_control"], plain);
+        assert_eq!(none["system"][0]["cache_control"], plain);
+        assert_eq!(none["messages"][0]["content"][0]["cache_control"], plain);
 
         // Not added where a breakpoint is not: a request that gave them up stays without them.
         let bare = body_of(
             &base
                 .without_breakpoints()
-                .with_cache_ttl(Some(CacheTtl::OneHour)),
+                .with_cache_ttl(CacheLifetimes::for_setting(Some(CacheTtl::OneHour))),
         );
         assert!(!bare.to_string().contains("cache_control"));
+    }
+
+    /// With no lifetime chosen, the breakpoints on the tool definitions and the system prompt ask
+    /// for an hour and the one on the conversation asks for nothing, so a request after a pause of
+    /// more than five minutes reads the fixed prefix back. Rejects an hour on the conversation as
+    /// well, which raises the write rate of every round, and an hour on one of the two prefix
+    /// breakpoints only.
+    #[test]
+    fn the_default_asks_an_hour_for_the_tools_and_the_prompt_and_nothing_for_the_conversation() {
+        let body = body_of(
+            &request(&[Message::system("be brief"), Message::user("one")])
+                .with_cache_ttl(CacheLifetimes::for_setting(None)),
+        );
+        let hour = json!({"type": "ephemeral", "ttl": "1h"});
+        assert_eq!(body["tools"][0]["cache_control"], hour, "{body}");
+        assert_eq!(body["system"][0]["cache_control"], hour, "{body}");
+        assert_eq!(
+            body["messages"][0]["content"][0]["cache_control"],
+            json!({"type": "ephemeral"}),
+            "{body}"
+        );
     }
 
     /// A reply is what the agent works from, so each kind of block lands where the rest of the agent

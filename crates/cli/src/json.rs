@@ -82,6 +82,10 @@ pub struct Report<'a> {
     pub steps: usize,
     pub tokens: Tokens,
     pub calls: &'a [Call],
+    /// How many delegates the run started, at every level, as the driver counted them when it
+    /// started each one (CLI-12). One `spawn_agent` call can start several, so `calls` cannot say
+    /// this. Added within schema 1.
+    pub delegates: usize,
     pub refusals: &'a [Refusal],
     /// The driver's own words about what loaded and what did not.
     pub notices: &'a [String],
@@ -169,6 +173,7 @@ pub fn render(report: &Report<'_>) -> String {
         ("steps", report.steps.to_string()),
         ("tokens", token_fields(&report.tokens)),
         ("calls", calls),
+        ("delegates", report.delegates.to_string()),
         ("refusals", refusals),
         ("notices", strings(report.notices)),
         (
@@ -427,6 +432,7 @@ mod tests {
                 cache_written: 100,
             },
             calls,
+            delegates: 0,
             refusals,
             notices: &[],
             structured: None,
@@ -503,6 +509,7 @@ mod tests {
             steps: 0,
             tokens: Tokens::default(),
             calls: &[],
+            delegates: 0,
             refusals: &[],
             notices: &[],
             structured: None,
@@ -515,7 +522,7 @@ mod tests {
                 r#""identifier":"BB1003","message":"l'adresse n'a pas de schema","#,
                 r#""reply":"","model":"","agent":null,"session":null,"steps":0,"#,
                 r#""tokens":{"total":0,"output":0,"context":0,"cache_read":0,"cache_written":0},"#,
-                r#""calls":[],"refusals":[],"notices":[],"structured":null}"#,
+                r#""calls":[],"delegates":0,"refusals":[],"notices":[],"structured":null}"#,
             )
         );
     }
@@ -550,6 +557,28 @@ mod tests {
             written.contains(r#""agent":null,"session":"1787860306-65099","steps":2"#),
             "{written}"
         );
+    }
+
+    /// A run whose one `spawn_agent` call started four delegates says four. The count is the
+    /// report's own field and not the number of `spawn_agent` entries in `calls`, which here is
+    /// one, so an object that counted calls would say one.
+    #[test]
+    fn a_run_says_how_many_delegates_it_started_apart_from_its_calls() {
+        let calls = [Call {
+            tool: "spawn_agent".to_string(),
+            target: "reader".to_string(),
+            skill: None,
+            refused: false,
+        }];
+        let mut report = finished(Ending::Done, &calls, &[]);
+        report.delegates = 4;
+        let written = render(&report);
+
+        assert!(
+            written.contains(r#""refused":false}],"delegates":4,"refusals":[]"#),
+            "{written}"
+        );
+        assert_eq!(written.matches(r#""delegates":"#).count(), 1, "{written}");
     }
 
     /// Which principle a refusal upholds is what tells a caller whether to retry, ask somebody, or

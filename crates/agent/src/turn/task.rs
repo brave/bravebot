@@ -440,6 +440,9 @@ pub struct Task {
     /// Read at a round boundary and treated as that round's limit: the delegate loses its tools
     /// and answers with what it has (DELEGATE-25). `None` for a turn, which has the stop keys.
     pub stop: Option<bravebot_core::cancel::DelegateStop>,
+    /// Where a delegate stands in the order its call's first requests go out in (DELEGATE-35).
+    /// `None` for a turn and for a call that started one delegate.
+    pub(crate) first_request: Option<crate::delegate::FirstRequest>,
     /// How much of what a program printed may enter this turn's conversation, or `None` for the
     /// built-in cap.
     ///
@@ -767,6 +770,7 @@ impl Task {
             spend_limit: crate::spend_limit::SpendLimit::default(),
             spent_before: 0,
             stop: None,
+            first_request: None,
             // The built-in cap, which is a caller that read no settings file saying nothing about
             // what a command's output may spend.
             output_cap: None,
@@ -1134,6 +1138,15 @@ impl Task {
     /// Let a person stop this delegate alone, without stopping the turn that started it.
     pub fn stoppable_by(mut self, stop: bravebot_core::cancel::DelegateStop) -> Self {
         self.stop = Some(stop);
+        self
+    }
+
+    /// Put this delegate in the order its call's first requests go out in (DELEGATE-35).
+    pub(crate) fn with_first_request(
+        mut self,
+        first_request: Option<crate::delegate::FirstRequest>,
+    ) -> Self {
+        self.first_request = first_request;
         self
     }
 

@@ -3399,7 +3399,7 @@ status-cache-written = written to it for the next turn
 status-cache-lifetime = lifetime asked of the service
 status-cache-lifetime-five-minutes = 5 minutes
 status-cache-lifetime-one-hour = 1 hour
-status-cache-lifetime-service-default = none, the service's own
+status-cache-lifetime-service-default = 1 hour for the tools and system prompt, the service's own for the conversation
 # Shown in place of the figures when the model has refused the cache breakpoints on two requests, so
 # that requests to it carry none and the whole prompt is read at the full rate every turn. Nothing
 # else says so: a prompt that is not cached draws no figure.

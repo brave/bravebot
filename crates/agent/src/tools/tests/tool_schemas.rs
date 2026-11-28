@@ -39,7 +39,7 @@ fn the_edit_tool_states_that_matching_is_exact() {
         .as_str()
         .expect("old_text is described");
     assert!(
-        old_text.contains("exact") && old_text.contains("whitespace"),
+        old_text.to_lowercase().contains("exact text"),
         "the description does not require an exact match: {old_text}"
     );
 }

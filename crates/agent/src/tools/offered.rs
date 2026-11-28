@@ -246,16 +246,13 @@ pub fn available(
 /// `isolation` and in the answer to a spawn that made one (CHECKOUT-7).
 pub(super) fn checkouts_share_refs(running: Running) -> String {
     let fetch = if running.offered() {
-        "run it once yourself before starting them rather than asking each to"
+        "run a fetch they need once yourself before starting them"
     } else {
-        "ask one of them for it rather than each"
+        "have one of them run a fetch they need, not each"
     };
     format!(
-        "Checkouts share remote-tracking refs and tags with your working directory and with each \
-         other, so a git fetch in one updates them in all of them, and two fetches at the same \
-         time can fail. Where delegates need a fetch, {fetch}. Checkouts also share one stash, so \
-         changes git stash sets aside in one can be popped in any of them. Do not ask a delegate \
-         in a checkout to use git stash."
+        "Checkouts share refs, tags and the stash with your working directory and each other, so \
+         {fetch}, and do not have a delegate in one use git stash."
     )
 }
 
@@ -267,11 +264,9 @@ pub(super) fn checkouts_share_refs(running: Running) -> String {
 /// round on a refusal it cannot act on.
 fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
     let changing = if beside("write_file") {
-        "This is how to change a file you cannot see: name the file's reference, say what has to \
-         be true of it afterwards, then pass the reference that comes back to write_file as \
-         contents_ref. You are not shown its output either, and nobody reads it before it is \
-         written, so be exact about the shape of the answer: the complete document and nothing \
-         else."
+        "To change a file you cannot see, say what must be true of it afterwards and write the \
+         returned reference with write_file as contents_ref. Nobody reads it first, so ask for the \
+         whole document and nothing else."
     } else {
         "You are not shown its output."
     };
@@ -283,41 +278,34 @@ fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
     // answer to a file needs `write_file`, so a list without it is sent to `stdin_ref` alone.
     let derived_text = if beside("run") {
         let answer_reaches_it = if beside("write_file") {
-            "A fetched page or a run's output needs no file: name its reference in reads. Then \
-             give the answer's reference to run as stdin_ref, or write the answer with write_file \
-             and contents_ref to a new file in the scratch directory and run the program that \
-             sends it with the file's path as an argument, so it reads the body from the file."
+            "Name a fetched page or run output in reads directly. To send the answer, give its \
+             reference to run as stdin_ref, or write it with write_file to a new file in the \
+             scratch directory and pass that path."
         } else {
-            "A fetched page or a run's output needs no file: name its reference in reads. Then \
-             give the answer's reference to run as stdin_ref, in the line of the program that \
-             sends it."
+            "Name a fetched page or run output in reads directly. To send the answer, give its \
+             reference to run as stdin_ref."
         };
         format!(
-            "A summary, a translation, a rewrite, an explanation or a list of the points made of \
-             content you were not shown is written by this tool, because you cannot write it from \
-             what you have not read. Ask for the form wanted, for example a plain-text summary of \
-             each of six stories, two sentences each, with each link kept. Do not leave it to a \
-             script you write, which can only cut the original down. {answer_reaches_it} The \
-             recipient and the subject are yours and only the body comes from the processor. Your \
-             final message says what was sent and to whom. Call the text a summary in your final \
-             message only if a processor wrote one."
+            "Summaries, translations, rewrites, explanations and lists of points made from \
+             content you were not shown are written by this tool, not by you; a script you write \
+             can only cut the original down. Ask for the form, e.g. a plain-text summary of each \
+             of six stories, two sentences each, with each link kept. {answer_reaches_it} \
+             Recipient and subject are yours; only the body \
+             is the processor's. Say what was sent to whom, and call text a summary only if a \
+             processor wrote it."
         )
     } else {
-        "A summary, a translation, a rewrite, an explanation or a list of the points made of \
-         content you were not shown is written by this tool, because you cannot write it from \
-         what you have not read. Ask for the form wanted, for example a plain-text summary of \
-         each of six stories, two sentences each, with each link kept. Call the text a summary \
-         in your final message only if a processor wrote one."
+        "Summaries, translations, rewrites, explanations and lists of points made from content \
+         you were not shown are written by this tool, not by you; ask for the form, e.g. a \
+         plain-text summary of each of six stories, two sentences each, with each link kept. \
+         Call text a summary only if a processor wrote it."
             .to_string()
     };
 
     format!(
-        "Transform quarantined content you were not shown. Spawns an isolated model with no \
-         tools, no memory and nothing to read but the references you name; it follows your \
-         instruction and its output is quarantined as a new reference. {changing} What the change \
-         should be is its decision, not yours. It reads the whole document, so it can work out \
-         what is wrong and where the fix goes, and leave a file alone if it turns out not to be \
-         the one you are after. {derived_text}"
+        "Transform quarantined content you were not shown: a model with no tools reads only the \
+         references you name, follows your instruction and returns a new quarantined reference. \
+         {changing} It decides the change and may leave a file alone. {derived_text}"
     )
 }
 
@@ -345,10 +333,7 @@ fn spawn_agent_lacks(beside: &dyn Fn(&str) -> bool) -> String {
     } else {
         ""
     };
-    format!(
-        " A delegate cannot call {named}, so do work that needs {needs} yourself, before you \
-         delegate or instead of delegating.{whole}"
-    )
+    format!(" A delegate cannot call {named}; do work needing {needs} yourself.{whole}")
 }
 
 /// What `spawn_agent` says about output the planner may not read: a delegate is quarantined as the
@@ -362,14 +347,14 @@ fn spawn_agent_lacks(beside: &dyn Fn(&str) -> bool) -> String {
 /// same reference and could not read it either.
 fn spawn_agent_quarantined(beside: &dyn Fn(&str) -> bool) -> String {
     let instead = if beside("spawn_processor") {
-        " Give its reference to spawn_processor for a bounded question about it instead, or have \
-         a person vouch for the command."
+        " Ask spawn_processor a bounded question about the reference instead, or have a person \
+         vouch for the command."
     } else {
         " Have a person vouch for the command instead."
     };
     format!(
-        " A delegate is quarantined exactly as you are, so delegating a run whose output you may \
-         not read does not make that output readable.{instead}"
+        " A delegate is quarantined as you are: run output you may not read stays unreadable to \
+         it.{instead}"
     )
 }
 
@@ -377,32 +362,22 @@ fn spawn_agent_quarantined(beside: &dyn Fn(&str) -> bool) -> String {
 /// [`spawn_processor_description`].
 fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
     let anything_else = if beside("vet_content") {
-        "For anything else you are holding a reference to, vet_content is the question to ask. "
+        "ask vet_content for other references. "
     } else {
         ""
     };
     let filter = if beside("run") {
-        ", and a filter such as tail or grep run on it with the reference as stdin_ref and \
-         read: true reads part of it instead"
+        "; for a large one, run tail or grep with it as stdin_ref and read: true"
     } else {
         ""
     };
     format!(
-        "Ask to be shown what a command printed. Give the reference a run handed back. Use it \
-         whenever you ran something to find something out, which is most of the time: a run's \
-         output is quarantined by default, so `which`, `find`, `uname` and the like tell you \
-         nothing until you ask for the result. Ask for the errors too when a run fails, or you \
-         will not know why it failed and must not claim it succeeded. Only for output from run; \
-         a quarantined file is not readable this way. {anything_else}Output you were shown the \
-         beginning and end of, because the whole was too long for one result, is the exception: \
-         you may read all of it, so nobody is asked, and it comes back a page at a time from the \
-         offset you give. A pattern searches that output instead of paging it: you get the \
-         matching lines, each numbered with the byte it starts at, so a second call with that \
-         byte as the offset reads on from the match you wanted. A pattern on output you may not \
-         read is refused rather than asked about. Called on output you may not read, with no \
-         offset or pattern, it returns all of it, and what it returns stays in every later \
-         request at about a token for every four bytes. Where the reference states a size of \
-         hundreds of kilobytes, that is tens of thousands of tokens or more{filter}."
+        "Show what a run printed: give its reference. Run output is quarantined by default, so \
+         ask for results you need, errors included, and do not claim success unseen. Not for a \
+         quarantined file; {anything_else}Output cut for length may be read without asking, paged \
+         by byte offset or searched with pattern. A pattern on output you may not read is \
+         refused. Output you may not read comes back whole and stays in every later request, \
+         about a token per four bytes{filter}."
     )
 }
 
@@ -412,13 +387,10 @@ fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
 fn quarantined_reference_moves(beside: &dyn Fn(&str) -> bool) -> &'static str {
     match (beside("spawn_processor"), beside("write_file")) {
         (true, true) => {
-            " Hand the reference to spawn_processor to have a question answered about it, or to \
-             write_file as contents_ref to save it."
+            " Give it to spawn_processor with a question, or to write_file as contents_ref."
         }
-        (true, false) => {
-            " Hand the reference to spawn_processor to have a question answered about it."
-        }
-        (false, true) => " Hand the reference to write_file as contents_ref to save it.",
+        (true, false) => " Give it to spawn_processor with a question.",
+        (false, true) => " Give it to write_file as contents_ref to save it.",
         (false, false) => "",
     }
 }
@@ -427,7 +399,7 @@ fn quarantined_reference_moves(beside: &dyn Fn(&str) -> bool) -> &'static str {
 /// quarantined result holds. Empty where `beside` says `vet_content` is not on the list.
 fn read_it_yourself(beside: &dyn Fn(&str) -> bool, what: &str) -> String {
     if beside("vet_content") {
-        format!(" Where you have to read the {what} yourself, vet_content is the question to ask.")
+        format!(" To read the {what} yourself, ask vet_content.")
     } else {
         String::new()
     }
@@ -439,11 +411,9 @@ fn fetch_url_description(beside: &dyn Fn(&str) -> bool) -> String {
     let moves = quarantined_reference_moves(beside);
     let reading = read_it_yourself(beside, "page");
     format!(
-        "Fetch an http or https URL. Not the way to read a github.com pull request or issue \
-         where the prompt says the GitHub CLI is on PATH, which names the commands that are. \
-         What comes back is quarantined, like a file nobody vouched for: you get a reference \
-         rather than the text, and you cannot read it or be told what it says.{moves}{reading} \
-         The user is asked before anything leaves the machine."
+        "Fetch an http or https URL, but not a github.com pull request or issue where the \
+         prompt says the GitHub CLI is on PATH. The result is a quarantined reference you cannot \
+         read.{moves}{reading} The user is asked before anything leaves the machine."
     )
 }
 
@@ -460,28 +430,13 @@ fn job_output_description(beside: &dyn Fn(&str) -> bool) -> String {
         [init @ .., last] => format!("a reference to pass to {} or {last}", init.join(", ")),
     };
     format!(
-        "See what a background job has printed, and whether it has ended. Give the job name run \
-         handed back. Each call hands back a slice of what the job printed since your previous \
-         look, so calling it again after doing something else shows what happened in between \
-         rather than repeating what you have seen. The result gives the range of lines the slice \
-         covers, and the earlier slices are in the earlier references the result lists, so a line \
-         printed before this slice is in one of those and not in this one. Output is quarantined \
-         exactly as a run's is: it comes back as text where \
-         the user vouched for every command in the line, and otherwise as {reference}. Use \
-         wait_seconds to wait for the job rather than asking it again and again. Without it a \
-         wait costs a whole turn per look: you call, are told nothing has happened, and answer \
-         only to be asked the same question. A wait ends at the job's next output, so a job that \
-         prints a line every second ends it every second. A line the user types while you wait \
-         also ends the wait, with the job still running, so you can answer it. When what you need \
-         is the end of the job and not its output as it arrives, add until_exit: true, which \
-         waits for the job to end or for wait_seconds to run out and returns what it printed \
-         since your last look in one answer. It is still a wait inside this turn, so it cannot \
-         tell you about anything that happens after the turn ends, and the account of the job's \
-         start says whether it is killed then or kept. Repeated waits on a job that is still \
-         running are not held. The same job_output call without wait_seconds, or on a job that \
-         has ended, is held at the third in a row. A wait longer than the prompt cache lifetime \
-         makes the next request write the whole conversation to the cache again, so wait_seconds \
-         is bounded under that lifetime: call again to keep watching."
+        "See what a background job printed since your last look, and whether it ended. Each \
+         look is a slice; the result gives its line range, and earlier slices are in the \
+         references it lists. Output is quarantined as a run's is: text where the user vouched \
+         for every command in the line, otherwise {reference}. wait_seconds waits for new \
+         output, the end or a typed line; until_exit waits for the end. A wait stays inside \
+         this turn; the job's start says whether it outlives the turn. The same call without \
+         wait_seconds, or on an ended job, is held at the third in a row."
     )
 }
 
@@ -492,9 +447,9 @@ fn job_output_description(beside: &dyn Fn(&str) -> bool) -> String {
 /// look, so the table joins this into it and [`state_what_is_beside`] replaces it there.
 fn run_reference_moves(beside: &dyn Fn(&str) -> bool) -> String {
     let moves: Vec<&str> = [
-        beside("read_output").then_some("pass it to read_output to see it"),
-        beside("spawn_processor").then_some("hand it to spawn_processor"),
-        beside("write_file").then_some("write it to a file with write_file"),
+        beside("read_output").then_some("read it with read_output"),
+        beside("spawn_processor").then_some("give it to spawn_processor"),
+        beside("write_file").then_some("save it with write_file"),
     ]
     .into_iter()
     .flatten()
@@ -513,8 +468,8 @@ fn run_reference_moves(beside: &dyn Fn(&str) -> bool) -> String {
 /// replaces it.
 fn run_text_made_from_it(beside: &dyn Fn(&str) -> bool) -> String {
     if beside("spawn_processor") {
-        ". A summary, a translation or other text made from it is written by spawn_processor, \
-         whose description says how that text reaches a program"
+        ". Text made from it, such as a summary, is written by spawn_processor, whose \
+         description says how it reaches a program"
             .to_string()
     } else {
         String::new()
@@ -525,18 +480,13 @@ fn run_text_made_from_it(beside: &dyn Fn(&str) -> bool) -> String {
 /// it is on the list.
 fn run_background_description(beside: &dyn Fn(&str) -> bool) -> String {
     let look = if beside("job_output") {
-        " Call job_output with the name to see what it has printed before then."
+        " job_output shows its output."
     } else {
         ""
     };
     format!(
-        "Leave it running instead of waiting for it, and hand back a job name. For a program \
-         meant to keep going: a server, a watcher, a log follower. Use it when you need the \
-         program still up while you do something else, such as starting a server and then \
-         fetching a page from it. While this turn is still going you are told when it ends, with \
-         how it ended and what it printed, so nothing has to poll for that.{look} Must be one \
-         pipeline with no redirection, and it is killed when this turn ends. Defaults to false, \
-         which waits and hands back the output."
+        "Leave it running and return a job name; you are told when it ends during this \
+         turn.{look} One pipeline, no redirection; killed when the turn ends."
     )
 }
 
@@ -548,29 +498,18 @@ fn run_background_description(beside: &dyn Fn(&str) -> bool) -> String {
 /// The table joins this into the description and [`state_what_is_beside`] replaces it there.
 fn run_watching(beside: &dyn Fn(&str) -> bool) -> String {
     let file = if beside("read_file") {
-        "A file takes no command at all: read_file hands back a change token, and comparing the \
-         token from one look with the token from the next is the whole of the technique."
+        "comparing read_file's change token between looks"
     } else {
-        "A file is watched by comparing what one look at it returned with what the next look \
-         returns."
+        "comparing one look with the next"
     };
     let program = if beside("job_output") {
-        "A program's own output is watched here: start it with background: true and call \
-         job_output with wait_seconds, which is one call covering a window rather than a look \
-         per turn."
+        "running it with background: true and calling job_output with wait_seconds"
     } else {
-        "A program's own output is watched here: start it with background: true, and you are \
-         told when it ends."
-    };
-    let later = if beside("read_file") {
-        "comparing a token needs a later look."
-    } else {
-        "comparing two looks needs a later look."
+        "running it with background: true"
     };
     format!(
-        "{file} {program} Neither reaches past this turn by itself: a background job is killed \
-         when the turn ends unless the account of its start says the session keeps it, and \
-         {later}"
+        "What is watched decides how. A file is watched by {file}, a program by {program}. Neither reaches past this turn: a \
+         background job is killed when the turn ends unless its start says the session keeps it."
     )
 }
 
@@ -579,19 +518,11 @@ fn run_watching(beside: &dyn Fn(&str) -> bool) -> String {
 /// nothing there and where the output goes.
 fn run_read_description(beside: &dyn Fn(&str) -> bool) -> String {
     if beside("read_output") {
-        "Ask to read what the command prints in this result. Where read_output would hand it to \
-         you without asking the user, or would hand it back at once, it comes back here as text \
-         you can read, and there is no read_output call to make. Where it would be kept back, \
-         it still comes back as a reference. Output too long for one result still comes back as \
-         a reference, with its size, and read_output is not held to that size. Everywhere else \
-         this changes nothing, and output you may not read still comes back as a reference. \
-         Defaults to false. Not with background: true, which has printed nothing yet."
+        "Return the output as text here where read_output would release it without asking; \
+         otherwise, or if too long, a reference."
             .to_string()
     } else {
-        "Ask to read what the command prints in this result. This changes nothing in this turn: \
-         output you may not read comes back as a reference. Defaults to false. Not with \
-         background: true, which has printed nothing yet."
-            .to_string()
+        "Changes nothing in this turn; output you may not read stays a reference.".to_string()
     }
 }
 
@@ -599,19 +530,12 @@ fn run_read_description(beside: &dyn Fn(&str) -> bool) -> String {
 /// says it is on the list, for the reason [`run_read_description`] does.
 fn job_output_read_description(beside: &dyn Fn(&str) -> bool) -> String {
     if beside("read_output") {
-        "Ask to read what the job printed in this result. Where read_output would hand it to you \
-         without asking the user, or would hand it back at once, it comes back here as text you \
-         can read, and there is no read_output call to make. Where it would be kept back, it \
-         still comes back as a reference. Output too long for one result still comes back as a \
-         reference, with its size, and read_output is not held to that size. Everywhere else \
-         this changes nothing, and output you may not read still comes back as a reference. The \
-         account of the job's end that the turn gives you follows your latest look's read. \
-         Defaults to false."
+        "Return the output as text here where read_output would release it without asking; \
+         otherwise, or if too long, a reference. The report of the job's end follows the latest \
+         look's read."
             .to_string()
     } else {
-        "Ask to read what the job printed in this result. This changes nothing in this turn: \
-         output you may not read comes back as a reference. Defaults to false."
-            .to_string()
+        "Changes nothing in this turn; output you may not read stays a reference.".to_string()
     }
 }
 
@@ -619,15 +543,13 @@ fn job_output_read_description(beside: &dyn Fn(&str) -> bool) -> String {
 /// only where `beside` says it is on the list.
 fn read_file_pictures(beside: &dyn Fn(&str) -> bool) -> String {
     let and_then = if beside("spawn_processor") {
-        " Give that reference to spawn_processor with a question about it and the answer comes \
-         back the way any processor's does. That is how to check a screenshot or read a scanned \
-         page."
+        "; give it to spawn_processor with a question"
     } else {
         ""
     };
     format!(
-        "A picture or a PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference rather \
-         than as anything you can look at, whoever vouched for the directory it is in.{and_then}"
+        "A picture or PDF (.png, .jpg, .gif, .webp, .pdf) comes back as a reference you cannot \
+         look at, whoever vouched for it{and_then}."
     )
 }
 
@@ -635,15 +557,13 @@ fn read_file_pictures(beside: &dyn Fn(&str) -> bool) -> String {
 /// `beside` says it is on the list.
 fn read_file_notebook(beside: &dyn Fn(&str) -> bool) -> String {
     let cells = if beside("edit_file") {
-        ": edit_file changes a cell by that number."
+        "; edit_file edits a cell by number"
     } else {
-        "."
+        ""
     };
     format!(
-        "A .ipynb notebook comes back as its cells, numbered from 1, with their source \
-         only{cells} Saved outputs are not shown unless you ask for one cell's with output_of, \
-         and they come back as a reference like a picture does, because a program or a web page \
-         may have written them."
+        "A .ipynb notebook comes back as its cells' source numbered from 1{cells}; outputs come \
+         only through output_of."
     )
 }
 
@@ -656,10 +576,8 @@ fn read_file_output_of(beside: &dyn Fn(&str) -> bool) -> String {
         "a reference"
     };
     format!(
-        "In a .ipynb notebook, the number of a code cell, from 1 as a read of the notebook \
-         shows them, to get the cell's saved outputs instead of the cells. They come back as \
-         {reference}, never as text, and a picture in one is a line giving its size. offset and \
-         limit are ignored."
+        "A notebook code cell whose saved outputs to return, as {reference}; offset and limit \
+         are ignored."
     )
 }
 
@@ -669,37 +587,29 @@ fn read_file_output_of(beside: &dyn Fn(&str) -> bool) -> String {
 /// whatever the description says (PROC-6).
 fn write_file_contents_ref_description(beside: &dyn Fn(&str) -> bool) -> String {
     let lands = if beside("spawn_processor") {
-        " What spawn_processor produced may be written only over the file that call was about. \
-         When the call read only references that are no file, such as a fetched page or a run's \
-         output, it may be written only to a new file in the scratch directory."
+        " A spawn_processor answer may go only over the file that call was about, or, where it \
+         read no file, to a new file in the scratch directory."
     } else {
         ""
     };
     format!(
-        "A reference whose quarantined content becomes the whole file, e.g. \"ref:2\". This is \
-         how to write out something you were never shown, such as a fetched page.{lands} A \
-         picture or PDF reference is written as the file it encodes, to a path you name ending \
-         in its extension, such as .png."
+        "A reference whose quarantined content becomes the file, such as a fetched page.{lands} \
+         A picture or PDF is written as the file it encodes, to a path with its extension."
     )
 }
 
 /// The description of `edit_file`, naming `write_file` only where `beside` says it is on the list.
 fn edit_file_description(beside: &dyn Fn(&str) -> bool) -> String {
     let diff = if beside("write_file") {
-        " Prefer this to write_file when changing part of a file: a diff is easier to review \
-         than a whole body."
+        " Prefer it to write_file for part of a file."
     } else {
         ""
     };
     format!(
-        "Replace an exact passage of text in an existing workspace file.{diff} An edit inside a \
-         directory the user vouched for is applied without a prompt; elsewhere the user \
-         approves each edit as a diff before it happens unless a permission rule or mode \
-         answers for them. Explain what you are changing either \
-         way. To change several places in one file, give them together in edits: they are one \
-         diff. In a .ipynb notebook, name a cell by the number a read showed instead of a passage: \
-         give cell and new_text to replace that cell's source (its saved outputs are dropped), \
-         or cell_action insert_after or delete."
+        "Replace an exact passage in a workspace file.{diff} In a directory the user vouched for \
+         it applies without a prompt; elsewhere the user approves the diff unless a permission \
+         rule or mode answers. edits applies several passages as one diff. In a .ipynb notebook, \
+         cell and new_text replace a cell's source, or use cell_action."
     )
 }
 
@@ -846,19 +756,13 @@ fn state_fetch_url_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
 /// What `read` says on `search`: the release `vet_content` makes, asked for in the result of the
 /// walk. Planner-facing, so it is English in the code and not in a catalog (localization.md). It
 /// says nothing of who answers or whether a check is made (VET-5).
-const READ_A_WALK: &str = "Ask to have a result that would come back quarantined released in \
-                           this result, as vet_content would release it, so there is no \
-                           vet_content call to make. Where it would be kept back, or it is too \
-                           long for one result, it still comes back as a reference. Defaults to \
-                           false.";
+const READ_A_WALK: &str = "Release a quarantined result here as vet_content would; kept back \
+                           or too long, it is still a reference. Defaults to false.";
 
 /// What `read` says on `list_files`: [`READ_A_WALK`] for a listing, which comes back kept back as
 /// one reference or as one per entry depending on who answers vet_content (LIST-2).
-const READ_A_LISTING: &str = "Ask to have a listing that would come back quarantined released in \
-                              this result, as vet_content would release it, so there is no \
-                              vet_content call to make. Where it would be kept back, or it is \
-                              too long for one result, it still comes back quarantined, as \
-                              references. Defaults to false.";
+const READ_A_LISTING: &str = "Release a quarantined listing here as vet_content would; kept \
+                              back or too long, it is still references. Defaults to false.";
 
 /// `read` asks for the release `vet_content` makes, so a list without it has nothing for the
 /// argument to ask.
@@ -911,18 +815,12 @@ fn table(
     // a description that named neither as the better one would leave the planner picking the one
     // it read first, which is the read's own paragraph and therefore always the loop.
     let watching = if arming.offered() {
-        let mut said = " Where what is being waited on is this one file, watch_file is the better \
-                         answer: it arms a standing watch that outlives this turn and reports the \
-                         change with no turn of yours running at all."
-            .to_string();
+        let mut said = " For one file, watch_file outlives this turn.".to_string();
         // The second half only where there is a schedule_next to keep for something. A turn
         // offered no way to arrange a later look has nothing to save one for, and saying
         // otherwise sends it to a name that is not on its list.
         if scheduling.offered() {
-            said.push_str(
-                " Keep schedule_next for a wait that is not about one file, or where the user \
-                 asked for their own line to be run again.",
-            );
+            said.push_str(" Keep schedule_next for anything else.");
         }
         said
     } else {
@@ -936,12 +834,12 @@ fn table(
     // refusal to explain to somebody who asked to be told when something changes.
     let (look_again_after_a_read, look_again_after_a_run) = match scheduling {
         Scheduling::ArrangingALook => (
-            "The next look is yours to arrange: call schedule_next at the end of this turn and you are asked again after the wait, with the user's line sent unchanged, so a request to be told when a file changes is answered by reading it now and scheduling the look that would catch a change. Do that rather than telling somebody to arrange it themselves.",
-            "So take the first look now and call schedule_next at the end of the turn, which has you asked again after the wait with the user's line unchanged.",
+            "Call schedule_next at the end of this turn: you are asked again after the wait with the user's line unchanged, so a request to be told when a file changes is answered by reading it now and scheduling the look that would catch a change. Do not tell somebody to arrange it.",
+            "Take the first look now and call schedule_next at the end of the turn, which has you asked again after the wait with the user's line unchanged.",
         ),
         Scheduling::PacingALoop | Scheduling::TheirInterval => (
-            "Inside a loop the next tick is the next look, so there is nothing to arrange: report what this tick saw and leave the rest to the next one.",
-            "Inside a loop that is already what happens, so take this tick's look, report what it saw and leave the rest to the next one.",
+            "In a loop the next tick is the next look; there is nothing to arrange.",
+            "In a loop, report this tick's look; the next tick looks again.",
         ),
         // A line the person typed while the session's own loop, goal or watch is live. Something
         // of the session's starts another turn, so the turn is not told that nothing will, and
@@ -951,12 +849,12 @@ fn table(
         // look they take; the goal does not, because GOAL-15 has a turn under a goal wait inside
         // the turn for a condition outside the session.
         Scheduling::UnderALoop => (
-            "This session's loop sends its line again without this turn, and this turn does not set the wait. Where the request is to watch something or to be told when it changes, report what this look found and say that the loop's next turn looks again at what the loop's line asks about; where the loop's line does not ask about what was asked here, say plainly that no later look at it is coming, and do not wait in this turn for the look the loop's next turn takes.",
-            "This session's loop sends its line again without this turn, and this turn does not set the wait. Where the request is to watch something or to be told when it changes, take this look now, report what it found and say that the loop's next turn looks again at what the loop's line asks about; where the loop's line does not ask about what was asked here, say plainly that no later look at it is coming, and do not wait in this turn for the look the loop's next turn takes.",
+            "This session's loop sends its line again without this turn, and this turn does not set the wait. Where asked to watch something or be told when it changes, report what this look found and say that the loop's next turn looks again at what the loop's line asks about; where the loop's line does not ask about what was asked here, say plainly that no later look at it is coming, and do not wait in this turn for the look the loop's next turn takes.",
+            "This session's loop sends its line again without this turn, and this turn does not set the wait. Where asked to watch something or be told when it changes, take this look now, report what it found and say that the loop's next turn looks again at what the loop's line asks about; where the loop's line does not ask about what was asked here, say plainly that no later look at it is coming, and do not wait in this turn for the look the loop's next turn takes.",
         ),
         Scheduling::UnderAGoal => (
-            "This session's goal sends the work back for another turn while its condition is unmet, and this turn does not set the wait. Where the request is to watch something or to be told when it changes, report what this look found and say that the goal's next turn, while its condition is unmet, looks again only at what the condition asks about; where the condition does not ask about what was asked here, say plainly that no later look at it is coming. What the goal's instructions say about waiting for the condition inside a turn still holds.",
-            "This session's goal sends the work back for another turn while its condition is unmet, and this turn does not set the wait. Where the request is to watch something or to be told when it changes, take this look now, report what it found and say that the goal's next turn, while its condition is unmet, looks again only at what the condition asks about; where the condition does not ask about what was asked here, say plainly that no later look at it is coming. What the goal's instructions say about waiting for the condition inside a turn still holds.",
+            "This session's goal sends the work back for another turn while its condition is unmet, and this turn does not set the wait. Where asked to watch something or be told when it changes, report what this look found and say that the goal's next turn, while its condition is unmet, looks again only at what the condition asks about; where the condition does not ask about what was asked here, say plainly that no later look at it is coming. What the goal's instructions say about waiting for the condition inside a turn still holds.",
+            "This session's goal sends the work back for another turn while its condition is unmet, and this turn does not set the wait. Where asked to watch something or be told when it changes, take this look now, report what it found and say that the goal's next turn, while its condition is unmet, looks again only at what the condition asks about; where the condition does not ask about what was asked here, say plainly that no later look at it is coming. What the goal's instructions say about waiting for the condition inside a turn still holds.",
         ),
         // The turn is not told which files the session's watches cover, and a session may hold
         // several, so neither wording asks it to compare. Where it may arm a watch, arming one of
@@ -964,16 +862,16 @@ fn table(
         // it is not told that no later look at that file is coming. Where it may not, it is told
         // only what the watches report on, and names no tool it is not offered (ARM-6).
         Scheduling::UnderAWatch if arming.offered() => (
-            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where the request is to watch something or to be told when it changes, report what this look found; where what was asked about is a file, arm a standing watch of it with watch_file, which reports its change and arms nothing new where a watch already covers that file, and do not wait in this turn for that file to change; where it is not a file, or no watch of it could be armed, say plainly that no later look at it is coming.",
-            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where the request is to watch something or to be told when it changes, take this look now and report what it found; where what was asked about is a file, arm a standing watch of it with watch_file, which reports its change and arms nothing new where a watch already covers that file, and do not wait in this turn for that file to change; where it is not a file, or no watch of it could be armed, say plainly that no later look at it is coming.",
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, report what this look found; where what was asked about is a file, arm a standing watch of it with watch_file, which reports its change and arms nothing new where a watch already covers that file, and do not wait in this turn for that file to change; where it is not a file, or no watch of it could be armed, say plainly that no later look at it is coming.",
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, take this look now and report what it found; where what was asked about is a file, arm a standing watch of it with watch_file, which reports its change and arms nothing new where a watch already covers that file, and do not wait in this turn for that file to change; where it is not a file, or no watch of it could be armed, say plainly that no later look at it is coming.",
         ),
         Scheduling::UnderAWatch => (
-            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where the request is to watch something or to be told when it changes, report what this look found, say that this session's standing watches report a change only to the files they cover and that no later look at anything else is coming, and do not wait in this turn for a change one of them reports.",
-            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where the request is to watch something or to be told when it changes, take this look now, report what it found, say that this session's standing watches report a change only to the files they cover and that no later look at anything else is coming, and do not wait in this turn for a change one of them reports.",
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, report what this look found, say that this session's standing watches report a change only to the files they cover and that no later look at anything else is coming, and do not wait in this turn for a change one of them reports.",
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, take this look now, report what it found, say that this session's standing watches report a change only to the files they cover and that no later look at anything else is coming, and do not wait in this turn for a change one of them reports.",
         ),
         Scheduling::NoLaterLook => (
-            "Comparing a second token needs a later turn, and nothing will ask you again: this turn is the last one asked about the user's line. Where the request is to watch something or to be told when it changes, report what this look found and say plainly that no later look is coming, rather than promising a later report or telling the user to arrange one.",
-            "Nothing will ask you again, though: this turn is the last one asked about the user's line, so take the look you can take inside it. Where the request is to watch something or to be told when it changes, say plainly that no later one is coming.",
+            "Nothing asks about this line again. Where asked to watch something or be told when it changes, report this look and say plainly no later look is coming.",
+            "Nothing asks about this line again. Where asked to watch something or be told when it changes, say plainly no later look is coming.",
         ),
     };
     // The two figures `run` quotes, in seconds, wherever its description names them. Written out
@@ -989,15 +887,13 @@ fn table(
     // back on unanswered.
     let (git_elsewhere, git_beyond) = if running.offered() {
         (
-            "elsewhere it says so and you use run",
+            "elsewhere use run",
             "For --follow, blame or anything else use run.",
         )
     } else {
         (
-            "elsewhere it says so, and no tool on your list reads that history instead",
-            "--follow, blame and anything else this does not answer cannot be read here either. \
-             Report what you could not read rather than describing how somebody with a shell would \
-             read it.",
+            "elsewhere no tool on your list reads that history",
+            "--follow, blame and the rest cannot be read here: report what you could not read.",
         )
     };
     // The tools ask_user sends the planner to for a fact about this machine. `run` is named only
@@ -1012,48 +908,27 @@ fn table(
     let pictures = read_file_pictures(&|_| true);
     let notebook = read_file_notebook(&|_| true);
     let mut tools = vec![
-
         Tool::function(
             "read_file",
             format!(
-                "Read a file from the workspace. Returns its lines. Ask for the whole \
-             file: long ones come back one page at a time, and the result says so and gives the \
-             offset to continue from. Name the file with path, or with path_ref where a listing \
-             gave you a reference instead of a name. \
-             \
-             Every read comes back with a change token, an opaque string standing for the file as \
-             it is now. The same token on a later read means nobody wrote the file in between; a \
-             different one means somebody did. So answer a question about whether something \
-             changes by reading it now, keeping the token, and comparing it with the token from \
-             your next look. Take that baseline in this turn rather than describing how one would \
-             be taken. For a file you may not be shown, the size in its reference is what there is \
-             to compare instead. Two things to say when you report a comparison. A change shows up \
-             at the look after it happened rather than when it happened, so say which looks you \
-             compared and never a time of day, which you have no clock for. And a token that moved \
-             says the file was written, not what changed: a rewrite of the same bytes moves it \
-             too, and a change that leaves the file's modification time alone moves nothing. \
-             {look_again_after_a_read} \
-             Where the request is to watch something or to be told when it changes, and you \
-             have taken a look and not scheduled another, say so, because no change with \
-             nothing watching reads as a promise to report the next one. Any other request gets \
-             no sentence about a later look.{watching} \
-             \
-             Ask for the same window of a file again while it is as it was and the answer is a \
-             short notice carrying the same token, because the lines are already earlier in this \
-             conversation. A different window, or a file somebody has written since, comes back as \
-             lines. \
-             \
-             {pictures} \
-             \
-             {notebook}"
+                "Read a workspace file's lines, a page at a time, by path or a listing's \
+             path_ref. Each read returns a change token: the same token on a later read means \
+             nobody wrote the file in between, a different one means somebody did, even with \
+             the same bytes, and a change that keeps the modification time moves nothing; \
+             for a file you may not see, compare its size. Answer whether something changes by \
+             reading it now, keeping the token and comparing it with the next look's, taking the \
+             first in this turn, and name the looks, never a time \
+             of day, which you have no clock for. {look_again_after_a_read} Where asked to watch \
+             something or be told when it changes, with no later look scheduled, say so. Any \
+             other request gets no sentence about a \
+             later look.{watching} {pictures} {notebook}"
             ),
             json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Workspace-relative path, e.g. src/main.rs. Give this \
-                                        or path_ref, never both."
+                        "description": "Workspace-relative."
                     },
                     "output_of": {
                         "type": "integer",
@@ -1061,25 +936,15 @@ fn table(
                     },
                     "path_ref": {
                         "type": "string",
-                        "description": "A reference to a file whose name you were not shown, \
-                                        e.g. \"ref:2\" from a listing. Only useful where that \
-                                        file is one you may be shown: a reference to a \
-                                        quarantined file already is the file, so reading it \
-                                        returns nothing you do not have."
+                        "description": "A listing's reference, instead of path."
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "1-based line to start at. Defaults to the start of \
-                                        the file."
+                        "description": "1-based line."
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum lines to return, capped so one read cannot \
-                                        fill the conversation. Omit it and you get the file \
-                                        up to that cap, which is what you want almost always: \
-                                        this is for stepping through something long, not for \
-                                        sampling something short, and several windows of one \
-                                        file cost more than the file did."
+                        "description": "Most lines; omit to read the whole file."
                     }
                 },
                 "required": []
@@ -1088,24 +953,13 @@ fn table(
         Tool::function(
             "list_files",
             format!(
-                "List files in the workspace under a directory, recursively unless you give a \
-                 depth. Give a glob pattern or a depth to narrow the result rather than listing \
-                 everything: depth 1 is the one directory itself, the way ls reads it, and is \
-                 what to use when you want to know what a project holds rather than every file \
-                 it contains. A listing does not enter a directory with one of these names, at \
-                 any depth, and does not report it, so its absence from a result does not mean \
-                 the project has none: {}, and .claude/worktrees. Name one as directory to list \
-                 it. A listing does not enter a symbolic link, to a file or to a directory, and \
-                 does not name it: it says how many it did not enter, so a directory made of \
-                 links lists as that count and not as empty. List the directory a link points \
-                 to, by its own name, to see what is behind it. A listing stops at a time \
-                 limit and says so: a directory, a depth, or a pattern that starts with the \
-                 directory it wants (src/**) narrows it, and the walk skips the directories \
-                 such a pattern cannot reach. In a directory you may not \
-                 read, the names are quarantined and you get a reference for each file, and for \
-                 the directories the walk stopped at a count with the first and last reference \
-                 of each run, instead: use a file's as path_ref to read it, process it, and \
-                 write it back, without ever being told what it is called.",
+                "List workspace files under a directory, recursively unless depth is given. Not \
+                 entered or reported at any depth unless named as directory: {}, \
+                 .claude/worktrees. Symbolic links are counted, not entered, and the result says \
+                 how many; list the directory one points to by its own name. A listing stops at a \
+                 time limit and says so: a directory, a depth or a pattern that starts with a \
+                 directory (src/**) narrows it. Where names are quarantined, each file is a \
+                 reference usable as path_ref.",
                 bravebot_filetype::ignored_directories().join(", ")
             ),
             json!({
@@ -1113,33 +967,18 @@ fn table(
                 "properties": {
                     "directory": {
                         "type": "string",
-                        "description": "Workspace-relative directory. Use \".\" for the root."
+                        "description": "Workspace-relative; \".\" for the root."
                     },
                     "pattern": {
                         "type": "string",
-                        "description": "Optional glob, e.g. \"*.rs\" for Rust files at any \
-                                        depth, \"src/**/*.rs\" to anchor it, or \
-                                        \"**/*.{rs,toml}\" for either extension. Supports *, ?, \
-                                        ** and brace groups. Character classes and extended \
-                                        globs are not supported. Matching is case-sensitive: \
-                                        readme* does not match README.md, and {r,R}eadme* \
-                                        matches both. A pattern with a / in it may \
-                                        be written from the directory or from the workspace \
-                                        root."
+                        "description": "Case-sensitive glob with *, ?, ** and braces, e.g. \
+                                        \"src/**/*.{rs,toml}\"; {r,R}eadme* matches both cases."
                     },
                     "depth": {
                         "type": "integer",
                         "description": format!(
-                            "Optional number of directory levels to descend. 1 lists this \
-                             directory and no deeper, naming each subdirectory it stopped at so \
-                             you can see where the tree continues: with a trailing / where you \
-                             are shown the names, and as a reference that says it is a \
-                             directory where they are quarantined. A directory with more than \
-                             {per} files gives {per} of them, and one with more than {dirs} \
-                             subdirectories gives {dirs} of them, and the listing says how many it \
-                             left out; list it with no depth to see the rest of its files and the \
-                             files under its subdirectories. Omit it to walk the whole tree, \
-                             which in a large project is thousands of paths.",
+                            "Levels to descend; 1 is the directory itself. Each directory \
+                             gives at most {per} files and {dirs} subdirectories.",
                             per = crate::workspace::MAX_FILES_PER_DIRECTORY,
                             dirs = crate::workspace::MAX_SUBDIRECTORIES_PER_DIRECTORY
                         ),
@@ -1155,34 +994,25 @@ fn table(
         ),
         Tool::function(
             "write_file",
-            "Write a UTF-8 text file in the workspace. If the path already holds a file, this \
-             replaces it whole and the old contents are gone, so read or list the path first \
-             when the file may exist. Name the destination with path, or with path_ref to \
-             write back to a file a listing gave you a reference to. Give either the contents \
-             or a reference to quarantined content that becomes the contents. A write inside a \
-             directory the user vouched for is applied without a prompt; elsewhere the user \
-             approves each write before it happens unless a permission rule or mode answers for \
-             them. Explain what you are changing either way; \
-             a write to a path_ref is always shown, since the user is the only one who sees \
-             which file it is.",
+            "Write a UTF-8 workspace file, by path or a listing's path_ref, from contents or \
+             contents_ref. It replaces an existing file whole, so read or list the path first if \
+             one may exist. In a directory the user vouched for it applies without a prompt; \
+             elsewhere the user approves it unless a permission rule or mode answers. A path_ref \
+             write is always shown.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Workspace-relative path, e.g. src/main.rs. Give this \
-                                        or path_ref, never both."
+                        "description": "Workspace-relative."
                     },
                     "path_ref": {
                         "type": "string",
-                        "description": "A reference to the file to write, e.g. \"ref:2\". Use \
-                                        the reference a listing gave you to write back to a \
-                                        file whose name you were never shown."
+                        "description": "A listing's reference, instead of path."
                     },
                     "contents": {
                         "type": "string",
-                        "description": "The complete new contents of the file. Give this or \
-                                        contents_ref, never both."
+                        "description": "The whole text."
                     },
                     "contents_ref": {
                         "type": "string",
@@ -1200,59 +1030,37 @@ fn table(
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Workspace-relative path, e.g. src/main.rs. Give this \
-                                        or path_ref, never both."
+                        "description": "Workspace-relative."
                     },
                     "path_ref": {
                         "type": "string",
-                        "description": "A reference to the file to edit, e.g. \"ref:2\". Only \
-                                        useful where that file is trusted, since an edit \
-                                        locates a passage and that means reading it."
+                        "description": "A reference to a trusted file."
                     },
                     "old_text": {
                         "type": "string",
-                        "description": "The exact text to replace, matched byte for byte \
-                                        including whitespace and indentation. Must occur \
-                                        exactly once unless replace_all is true. Include \
-                                        enough surrounding lines to be unique."
+                        "description": "Exact text, occurring once unless replace_all."
                     },
                     "new_text": {
-                        "type": "string",
-                        "description": "The text to put in its place."
+                        "type": "string"
                     },
                     "replace_all": {
-                        "type": "boolean",
-                        "description": "Replace every occurrence instead of requiring \
-                                        exactly one. Defaults to false."
+                        "type": "boolean"
                     },
                     "cell": {
                         "type": "integer",
-                        "description": "In a .ipynb notebook, the number of the cell to \
-                                        change, from 1 as a read of the notebook shows \
-                                        them, with new_text as the cell's whole new \
-                                        source. With cell_action insert_after, the cell \
-                                        the new one goes after, or 0 to put it first. \
-                                        Not given with old_text, edits or replace_all."
+                        "description": "Notebook cell from 1; with insert_after, 0 is first."
                     },
                     "cell_action": {
                         "type": "string",
-                        "enum": ["replace", "insert_after", "delete"],
-                        "description": "What to do to the cell. Defaults to replace. \
-                                        delete takes no new_text."
+                        "enum": ["replace", "insert_after", "delete"]
                     },
                     "cell_type": {
                         "type": "string",
-                        "enum": ["code", "markdown"],
-                        "description": "The kind of cell insert_after makes. Defaults to \
-                                        code."
+                        "enum": ["code", "markdown"]
                     },
                     "edits": {
                         "type": "array",
-                        "description": "Several passages to replace in this one file, \
-                                        instead of old_text and new_text. Applied in order, \
-                                        each to the text the one before left, and all or \
-                                        none: if one fails nothing is changed. The user \
-                                        approves one diff of the result.",
+                        "description": "Passages applied in order, all or none.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1268,28 +1076,19 @@ fn table(
         ),
         Tool::function(
             "apply_checkout",
-            "Bring the files a delegate wrote in a checkout back into the user's working \
-             directory. Name the checkout with the number its report gave, such as c1. Without \
-             paths it takes every file the report said the driver recorded a write to by name; \
-             with paths, only those. Each file is a write of the checkout's file to the same \
-             path in the working directory, and the user is asked about each one and sees the \
-             difference from their file as it is now, so explain what is coming back. A file \
-             written through a reference, or by a program other than through a redirection, is \
-             not brought back by this.",
+            "Copy files a delegate wrote in a checkout back to the working directory: all it \
+             recorded by name, or paths. The user approves each, shown the difference. Files \
+             written through a reference or by a program are not copied.",
             json!({
                 "type": "object",
                 "properties": {
                     "checkout": {
                         "type": "string",
-                        "description": "The checkout's number, e.g. \"c1\", as a delegate's \
-                                        report gave it."
+                        "description": "As the report named it, e.g. \"c1\"."
                     },
                     "paths": {
                         "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional. Paths relative to the checkout, taken from \
-                                        the ones the report named. Leave it out to bring back \
-                                        every file the driver recorded a write to."
+                        "items": {"type": "string"}
                     }
                 },
                 "required": ["checkout"]
@@ -1297,35 +1096,25 @@ fn table(
         ),
         Tool::function(
             "todo_write",
-            "Record the task list for what you are doing, and keep it current. Send the whole \
-             list every time: it replaces the previous one, so include finished tasks with \
-             status completed rather than dropping them. Use it when the work takes several \
-             steps, and update it as you go so the user can see progress. Skip it for a single \
-             step or a question.",
+            "Replace the task list for multi-step work with the whole current list, finished \
+             tasks included.",
             json!({
                 "type": "object",
                 "properties": {
                     "todos": {
                         "type": "array",
-                        "description": "The complete list, in the order the work will happen.",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "content": {
-                                    "type": "string",
-                                    "description": "The task, in a few words."
+                                    "type": "string"
                                 },
                                 "status": {
                                     "type": "string",
                                     "enum": TODO_STATUSES,
-                                    "description": "Mark exactly one task in_progress while \
-                                                    work remains on it. Use waiting for a \
-                                                    task that is still open but whose next \
-                                                    step is not yours, such as one that needs \
-                                                    a person or an outside event. Use \
-                                                    cancelled for a task you have decided \
-                                                    not to do, rather than dropping it or \
-                                                    marking it completed."
+                                    "description": "One in_progress at a time; waiting for a \
+                                                    task still open whose next step is not \
+                                                    yours; cancelled for one you dropped."
                                 }
                             },
                             "required": ["content", "status"]
@@ -1337,26 +1126,15 @@ fn table(
         ),
         Tool::function(
             "search",
-            "Find regular expressions in workspace files. Returns matching lines as \
-             path:line:text, with the text exactly as the file has it, including leading \
-             whitespace. Give every \
-             spelling you would otherwise search for one at a time: a list of patterns costs \
-             one call and matches a line matching any of them. A search does not enter a \
-             symbolic link, to a file or to a directory: it says how many it did not enter, \
-             and files behind a link are searched by naming the directory it points to.",
+            "Find regular expressions in workspace files; returns path:line:text. Put every \
+             spelling in one call. Symbolic links are counted, not entered; search the directory \
+             one points to by its own name.",
             json!({
                 "type": "object",
                 "properties": {
                     "pattern": {
-                        "description": "Regular expression to find. Supports ., *, +, ?, |, \
-                                        (), (?:), [], \\d, \\w, \\s, ^, $, \\b, and (?i) to \
-                                        ignore case. Counted repetition such as a{2,3}, \
-                                        lookaround and other flags are not supported, and { is \
-                                        an ordinary character. Escape a metacharacter with a \
-                                        backslash to match it literally. May be a list, in \
-                                        which case a line matches if it matches any of them: \
-                                        prefer one call with every spelling you want over one \
-                                        call each.",
+                        "description": "Regex or list of them: ., *, +, ?, |, (), (?:), [], \
+                                        \\d, \\w, \\s, ^, $, \\b, (?i). No {n} or lookaround.",
                         "anyOf": [
                             {"type": "string"},
                             {"type": "array", "items": {"type": "string"}}
@@ -1364,52 +1142,27 @@ fn table(
                     },
                     "directory": {
                         "type": "string",
-                        "description": "Workspace-relative directory or file to search. A \
-                                        file is the only one searched and include is not \
-                                        consulted for it. Defaults to \".\"."
+                        "description": "Directory or file. Defaults to \".\"."
                     },
                     "include": {
                         "type": "string",
-                        "description": "Optional glob limiting which files are searched, \
-                                        e.g. \"*.rs\" or \"**/*.{cc,h,mm}\". Supports *, ?, \
-                                        ** and brace groups. Character classes and extended \
-                                        globs are not supported. Matching is case-sensitive: \
-                                        readme* does not match README.md, and {r,R}eadme* \
-                                        matches both. A pattern with a / in it may \
-                                        be written from the directory or from the workspace \
-                                        root."
+                        "description": "Case-sensitive glob with *, ?, ** and braces, e.g. \
+                                        \"**/*.{cc,h}\"; {r,R}eadme* matches both cases."
                     },
                     "case_sensitive": {
-                        "type": "boolean",
-                        "description": "Whether case matters. Defaults to true. Set false \
-                                        rather than shortening the pattern to dodge a capital."
+                        "type": "boolean"
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "1-based match to start from. Defaults to the first. A \
-                                        result that stopped at the match cap gives the offset to \
-                                        continue from: use it rather than guessing a narrower \
-                                        glob, which drops the matches you have not seen yet."
+                        "description": "1-based match, as a capped result gives it."
                     },
                     "context": {
                         "type": "integer",
-                        "description": "Lines to show before and after each match, as grep -C \
-                                        does, written path-line-text. Defaults to 0, at most \
-                                        10. Use it to read a hit \
-                                        without a second call. Lines of context are not \
-                                        matches and do not count toward the match cap or the \
-                                        offset."
+                        "description": "Lines around each match, at most 10."
                     },
                     "output": {
                         "type": "string",
-                        "enum": ["lines", "files", "count"],
-                        "description": "What to return. 'lines' (the default) is the matching \
-                                        lines. 'files' is only the paths of the files with a \
-                                        match, each once. 'count' is how many lines match in \
-                                        each file and in all. Use files or count to survey \
-                                        where something occurs without paying for the lines; \
-                                        they ignore offset and context and are not held to the \
-                                        match cap."
+                        "enum": ["lines", "files", "count"]
                     },
                     "read": {
                         "type": "boolean",
@@ -1422,97 +1175,66 @@ fn table(
         Tool::function(
             "read_git",
             format!(
-                "Read a repository's history from its .git directory without starting git: log lists \
-             commits one per line, or each with its whole message, a page at a time; show \
-             prints a commit with its diff or a file or directory at \
-             a revision, diff compares two commits, and status lists staged, unstaged and \
-             untracked paths as git status --short does. tags lists tags newest version first, \
-             as git tag --sort=-v:refname does, and with a revision only those it reaches, as \
-             --merged does; search finds the lines matching a regular expression in the files \
-             at a revision, as git grep -n does, one path:line:text per line. Works only \
-             where the whole of .git is \
-             trusted, and for status the whole working tree, and where .git is a directory: it \
-             declines the .git file a linked worktree or a submodule has, except at the root of \
-             a checkout you were started in; {git_elsewhere}. Nothing git's \
-             configuration names is applied: no diff drivers, textconv, \
-             filters or signature checks, and no remote URL is ever returned. Status detects no \
-             renames and lists a file an attribute would convert as not compared. {git_beyond}"
+                "Read git history from .git without starting git: log, show (a commit, or \
+             <rev>:<path>), diff, status (--short), tags, or search (git grep -n). Only where all \
+             of .git is trusted (and the working tree, for status) and .git is a directory: the \
+             .git file of a linked worktree or a submodule is declined except at the root of \
+             your checkout; {git_elsewhere}. git configuration is not \
+             applied and no remote URL is returned. {git_beyond}"
             ),
             json!({
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "enum": ["log", "show", "diff", "status", "tags", "search"],
-                        "description": "log, show, diff, status, tags or search."
+                        "enum": ["log", "show", "diff", "status", "tags", "search"]
                     },
                     "repository": {
                         "type": "string",
-                        "description": "Workspace-relative directory holding the .git \
-                                        directory. Defaults to \".\"."
+                        "description": "Holds .git. Defaults to \".\"."
                     },
                     "revision": {
                         "type": "string",
-                        "description": "In git's syntax: a branch, tag, HEAD or an id or its \
-                                        prefix, followed by ~N, ^N or ^{commit}. log takes one \
-                                        revision or a range A..B and defaults to HEAD; A...B lists \
-                                        what either side has that the other lacks. show takes \
-                                        one and defaults to HEAD; <revision>:<path> shows a file \
-                                        or directory as it was. diff needs two, written A..B or \
-                                        \"A B\"; A...B compares the merge base of the two with \
-                                        B, which is a branch's own changes. tags takes none, or one to list only the tags \
-                                        it reaches. search takes one and defaults to HEAD."
+                        "description": "log: one, A..B or A...B. diff: A..B, \
+                                        \"A B\" or A...B. tags: those it reaches. Default \
+                                        HEAD."
                     },
                     "path": {
                         "type": "string",
-                        "description": "Relative to the repository's root. Limits log to commits \
-                                        that changed it, show, diff and status to changes \
-                                        under it, and search to files under it."
+                        "description": "Limits the query to it."
                     },
                     "pattern": {
                         "type": "string",
-                        "description": "search only, and required there: the regular expression \
-                                        to look for, matched against each line."
+                        "description": "search's regex."
                     },
                     "count": {
                         "type": "integer",
-                        "description": "Commits a log lists, tags a list of tags shows, or lines \
-                                        a search prints. Defaults to 20, at most 200."
+                        "description": "Default 20, most 200."
                     },
                     "skip": {
-                        "type": "integer",
-                        "description": "log, tags and search: how many to pass over before \
-                                        listing, as git log --skip does. An answer that stopped \
-                                        with more left gives the skip that lists the next of \
-                                        them."
+                        "type": "integer"
                     },
                     "messages": {
                         "type": "boolean",
-                        "description": "log only: print each commit's whole message beneath its \
-                                        line, which is where a commit says why it was made and \
-                                        what it closes. Defaults to false."
+                        "description": "log: whole messages."
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "show of <revision>:<path> naming a file only: the line \
-                                        to start at, counting from 1. A show that stopped with \
-                                        more of the file left gives the offset that prints the \
-                                        next of its lines."
+                        "description": "show of <revision>:<path> only: first line, from 1; a \
+                                        cut show gives the next offset."
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "show of <revision>:<path> naming a file only: the most \
-                                        lines to print. Defaults to 2000, at most 2000."
+                        "description": "show of <revision>:<path> only: most lines, default \
+                                        and most 2000."
                     },
                     "since": {
                         "type": "string",
-                        "description": "log only: skip commits made before this day, YYYY-MM-DD, \
-                                        in UTC."
+                        "description": "log: YYYY-MM-DD UTC."
                     },
                     "until": {
                         "type": "string",
-                        "description": "log only: skip commits made after this day, YYYY-MM-DD, \
-                                        in UTC."
+                        "description": "log: YYYY-MM-DD UTC."
                     }
                 },
                 "required": ["query"]
@@ -1520,30 +1242,19 @@ fn table(
         ),
         Tool::function(
             "repo_map",
-            "Get a map of the code in a directory: the declarations (functions, types, classes, \
-             constants) its source files make, each with the line it is on and the line that \
-             opens it, the ones other files mention most first. Use it first on a project you \
-             have not read, or to find where something lives, instead of listing the tree and \
-             reading files one at a time. It reads Rust, Python, JavaScript and TypeScript, Go, \
-             Java and Kotlin, and C and C++ files, needs no language server, and shows names \
-             and signatures only, never bodies: read_file reads the lines it points at. In \
-             Java and in C and C++ it finds types and macros but not functions or methods. It maps \
-             only files you have been allowed to read; files nobody vouched for are counted, \
-             never named, and a file that holds what looks like a credential is left out.",
+            "Map the declarations in a directory's source files, with lines, most-referenced \
+             first: Rust, Python, JS/TS, Go, Java, Kotlin, C, C++. Signatures only, never \
+             bodies: read_file reads the lines it points at. Files nobody vouched for are \
+             counted, not named.",
             json!({
                 "type": "object",
                 "properties": {
                     "directory": {
-                        "type": "string",
-                        "description": "Workspace-relative directory to map. Defaults to \".\". \
-                                        Map a subdirectory rather than raising budget when the \
-                                        project is large."
+                        "type": "string"
                     },
                     "budget": {
                         "type": "integer",
-                        "description": "Roughly how many tokens the map may take. Defaults to \
-                                        1000, at least 100 and at most 8000. A map that did not \
-                                        fit says how many declarations it left out."
+                        "description": "Tokens, 100 to 8000, default 1000."
                     }
                 },
                 "required": []
@@ -1551,29 +1262,16 @@ fn table(
         ),
         Tool::function(
             "lsp",
-            "Ask a language server about a symbol: where it is defined, what refers to it, what \
-             implements it, what calls it. Use this instead of search when the question is about \
-             a symbol rather than about text, because a search for a name finds every comment \
-             and string that mentions it while this finds the declaration the compiler agrees \
-             on. Give the position of the symbol you are asking about, taken from a line you \
-             were already shown by a search or a read; nothing here works out where a name is \
-             for you. Answers with the places it found, one per line. Where a definition is in \
-             a dependency rather than in this project the line says so, and read_file will not \
-             open it. hover answers with prose, and that prose always comes back as a reference \
-             you cannot read rather than as text, because nothing in a server's answer says \
-             which file wrote it. diagnostics takes a path and no position and reports what the \
-             server has found wrong with that file: how many errors, the line each starts on, \
-             and how many warnings. Use it after an edit to learn what the edit broke before \
-             running a build. The server's messages come back as a reference you cannot read, \
-             for the same reason as hover. A server that has not reported says so, which is not \
-             the same as a file with no errors, and a report with no errors is not a passing \
-             build: a server can report more once it has finished working.",
+            "Ask a language server about the symbol at a position you were shown. Where a \
+             definition is in a dependency the line says so, and read_file will not open it. \
+             hover, and diagnostics' messages, come back as references you cannot read; \
+             diagnostics takes only a path and gives error lines and counts. No errors is not a \
+             passing build.",
             json!({
                 "type": "object",
                 "properties": {
                     "operation": {
                         "type": "string",
-                        "description": "Which question to ask.",
                         "enum": [
                             "goToDefinition",
                             "findReferences",
@@ -1588,30 +1286,20 @@ fn table(
                     },
                     "path": {
                         "type": "string",
-                        "description": "Workspace-relative path to the file holding the symbol, \
-                                        e.g. src/main.rs. Required for every operation but \
-                                        workspaceSymbol. For diagnostics, the file to check."
+                        "description": "Required except for workspaceSymbol."
                     },
                     "line": {
                         "type": "integer",
-                        "description": "1-based line of the symbol, as a search or a read \
-                                        reported it. A line that no longer holds the symbol \
-                                        answers with nothing rather than failing. Not used by \
-                                        diagnostics.",
                         "minimum": 1
                     },
                     "character": {
                         "type": "integer",
-                        "description": "1-based column of the symbol on that line. Point at the \
-                                        name itself rather than at the start of the line.",
+                        "description": "Column of the name.",
                         "minimum": 1
                     },
                     "query": {
                         "type": "string",
-                        "description": "The name to look for. Only for workspaceSymbol, which \
-                                        searches a language server's index rather than starting \
-                                        from a position, and so needs a server already running: \
-                                        ask about a symbol in a file of that language first."
+                        "description": "workspaceSymbol's name."
                     }
                 },
                 "required": ["operation"]
@@ -1625,53 +1313,29 @@ fn table(
                 "properties": {
                     "reads": {
                         "type": "array",
-                        "description": "The references to give it, e.g. [\"ref:0\", \"ref:1\"]. \
-                                        At least one, and usually every reference that bears on \
-                                        the task: the input names each block by its reference, \
-                                        so one that can see the whole set can tell which file is \
-                                        which. It still returns one document.",
+                        "description": "Every reference bearing on the task.",
                         "items": {"type": "string"}
                     },
                     "about": {
                         "type": "string",
-                        "description": "Which of the references in reads this call is about. \
-                                        The answer replaces that document and may be written to \
-                                        no other file, and an answer that marks no document \
-                                        leaves that one standing, which is how a processor with \
-                                        nothing to change says so. Required when reads names \
-                                        more than one file: one answer has one destination, and \
-                                        nothing else can say which."
+                        "description": "The reference in reads the answer replaces, and the \
+                                        only file it may be written to. Required with several."
                     },
                     "choose_upto": {
                         "type": "integer",
                         "minimum": 2,
                         "maximum": 99,
-                        "description": "Ask the processor to choose one entry of a numbered \
-                                        list in the references, in place of producing a \
-                                        document. It answers with a whole number from 1 to this \
-                                        limit, or 0 where no entry fits. What comes back is a \
-                                        reference to the choice, which holds no text and names \
-                                        no file, and you are not shown the number. Name it only \
-                                        where a tool offers an argument ending in _ref beside \
-                                        one that takes a number. Not with about."
+                        "description": "Choose one numbered entry instead (0 for none), \
+                                        returned as a reference, for a tool's _ref argument. \
+                                        Not with about."
                     },
                     "instruction": {
                         "type": "string",
-                        "description": "What to do with them and what to produce. Where the \
-                                        result is going into a file, ask for the whole document \
-                                        and nothing else: no remarks about what it did, no code \
-                                        fence. Where the document is itself a summary, a \
-                                        translation or an explanation, name that form and its \
-                                        length. Whatever comes back is what gets written. Give \
-                                        the symptom the user reported and ask for the cause to \
-                                        be found; naming a remedy you have not verified makes \
-                                        it apply your guess rather than diagnose. Include the \
-                                        file's name and language if that matters, because the \
-                                        processor knows nothing but what you tell it and what \
-                                        the references hold. May be conditional: say what the \
-                                        document must look like if it is the one the task is \
-                                        about, and to say why and produce no document if it is \
-                                        not."
+                        "description": "What to produce; for a file, the whole document and \
+                                        nothing else, no remarks about what it did. For a \
+                                        summary, translation or explanation, name the form and \
+                                        length. Give the symptom, not an unverified remedy. It \
+                                        knows only this and the references."
                     }
                 },
                 "required": ["reads", "instruction"]
@@ -1679,17 +1343,13 @@ fn table(
         ),
         Tool::function(
             "load_skill",
-            "Read one of the skills listed for you, or one search_skills found. A skill is \
-             instructions the user wrote for a kind of task. Load one before doing that kind of \
-             work, and follow what it says. Only a name you were listed or that search_skills \
-             returned exists; there is no path to give.",
+            "Load a skill you were listed or search_skills found, before its kind of work, and \
+             follow it.",
             json!({
                 "type": "object",
                 "properties": {
                     "name": {
-                        "type": "string",
-                        "description": "The name of a skill exactly as it was listed for you \
-                                        or as search_skills returned it, e.g. commit-style."
+                        "type": "string"
                     }
                 },
                 "required": ["name"]
@@ -1697,19 +1357,12 @@ fn table(
         ),
         Tool::function(
             "search_skills",
-            "Find a skill by a word or phrase, among skills of the user's own and the \
-             project's own that are not listed for you up front. Matches a skill whose name or \
-             description holds every word of the query, and returns each match's name and \
-             description in full. Load a match with load_skill before doing the kind of work it \
-             names.",
+            "Find unlisted skills whose name or description holds every word of the query.",
             json!({
                 "type": "object",
                 "properties": {
                     "query": {
-                        "type": "string",
-                        "description": "One or more words. A skill matches only where every \
-                                        word is in its name or its description, so a longer \
-                                        query narrows the search rather than widening it."
+                        "type": "string"
                     }
                 },
                 "required": ["query"]
@@ -1724,18 +1377,16 @@ fn table(
         Tool::function(
             "ask_user",
             format!(
-                "Ask the user up to four questions and wait for their answers. Only for what you \
-             cannot find out yourself: which of two approaches to take, whether something is in \
-             scope, which of two plausible files they meant. Never for a fact about this machine. \
-             A path, a filename, whether a program is installed, what something is called: go and \
-             look with {looking_tools} instead, and note that a quarantined \
-             result does not stop you asking afterwards, so looking first costs you nothing. Do \
+                "Ask the user up to four questions, put one at a time, and wait. Only for what you \
+             cannot find out yourself; not for a fact about this machine: look with \
+             {looking_tools} first; a quarantined result does not \
+             stop you asking after. Do \
              not ask a question whose answer the request states. Do not ask whether to do what \
              the user asked, or whether to do it automatically, because they asked for it. What \
              is left to ask is a choice that the request leaves open and that differs in \
              consequence, such as which of two accounts to send from. Each question you ask \
              costs the user's attention. Ask everything the plan turns on in one call rather \
-             than a question per turn; they are put to the user one at a time. Offer concrete \
+             than a question per turn. Offer concrete \
              options where you can; the user may also answer in their own words or skip a \
              question, and a skipped question is an answer to work with rather than a reason to \
              ask again. Write each question and option so that somebody who has not seen what \
@@ -1749,17 +1400,12 @@ fn table(
                 "properties": {
                     "questions": {
                         "type": "array",
-                        "description": "The questions to put, at most four. A limit rather than \
-                                        a target: ask what the work turns on and no more.",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "header": {
                                     "type": "string",
-                                    "description": "Two or three words naming what this asks \
-                                                    about, shown as a tag beside it, e.g. \
-                                                    \"Cache layer\". It is how the user tells \
-                                                    one question from the next."
+                                    "description": "Two or three words."
                                 },
                                 "question": {
                                     "type": "string",
@@ -1771,20 +1417,12 @@ fn table(
                                 },
                                 "options": {
                                     "type": "array",
-                                    "description": "The choices to offer. Give them here rather \
-                                                    than listing them inside the question text: \
-                                                    only these are shown as choices. Each may \
-                                                    be a plain string, or an object with a \
-                                                    'label'. The user can always answer in \
-                                                    their own words instead, so there is no \
-                                                    need to offer an 'other'. Omit only for a \
-                                                    question that genuinely has no set answers.",
+                                    "description": "The choices, not in the question text.",
                                     "items": {
                                         "type": "object",
                                         "properties": {
                                             "label": {
-                                                "type": "string",
-                                                "description": "The option, in a few words."
+                                                "type": "string"
                                             },
                                             "detail": {
                                                 "type": "string",
@@ -1802,10 +1440,7 @@ fn table(
                                 },
                                 "multiple": {
                                     "type": "boolean",
-                                    "description": "Set true when this question asks for more \
-                                                    than one answer, such as \"which of these\" \
-                                                    or \"pick any that apply\". Left false the \
-                                                    user can pick only one. Defaults to false."
+                                    "description": "Allow several answers."
                                 }
                             },
                             "required": ["header", "question"]
@@ -1820,172 +1455,86 @@ fn table(
             // Joined rather than formatted: this description states shell syntax the planner may
             // not use, `${...}` and `{a,b}` among it, and a format string would have to escape
             // every brace in it to say so.
-            "Run a command line. Write it the way you would type it: `grep -rn thing src/ | \
-             head -30`. Pipes, &&, ||, ;, ( ), quoting, redirection (>, >>, <, 2>, 2>&1, &>), \
-             globs and {a,b} all work in the operands. There is no shell: the line is compiled \
-             here into the programs and arguments it names, and anything that cannot be worked \
-             out from the line itself is refused rather than guessed at. $(...), backticks, $VAR \
-             and ${...} are refused for that reason: write the value out. Only in a session that \
-             runs everything without asking, `NAME=$VAR cmd` and `NAME=\"$(cmd)\" cmd` are \
-             accepted in the assignment prefix of a program, and nothing else is expanded: not \
-             as an argument or a program, and no backticks. `$?`, `$$`, `$@`, \
-             `$*`, `$#`, `$-`, `$!` and `$'...'` are refused too: the result of a run already says \
-             how each step ended, no shell keeps parameters between steps, and escapes in \
-             `$'...'` are not read, so a newline comes from a file or from standard input. Name \
-             the program \
-             outright for the same reason, since a pattern there stands for whichever file it \
-             matches today: `./scr*.sh` is refused where `./script.sh` runs. Single quotes settle \
-             all of them, so '$HOME' is six characters and reaches the program as one \
-             argument. Double quotes do not: \"$HOME\", \"$?\" and \"$(ls)\" are refused too. A \
-             `$` followed by no name, brace, parenthesis, special parameter or quote, as the end \
-             anchor in `grep -E \"x$\"`, is an ordinary character. \
-             A \
-             pattern the program should match itself is quoted for the same reason, so write \
-             `find . -name '*.md'`: unquoted, `*.md` is replaced by the files it matches here, \
-             and passed as written only when none matches. A pattern after the = of an option, as in `grep -r x . --include=*.md`, \
-             is passed to the program as written. The user \
-             approves the compiled plan before anything runs, so say what you are running and \
-             why first. \
-             A `cd` step is refused because it moves nothing for the steps after it: the \
-             `directory` argument is how a line runs elsewhere. \
-             A `ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash` or `wait` step is refused \
-             too, because it changes nothing for the steps after it: to run a program under a \
-             limit or a mask, write the whole line as `sh -c '... ulimit ...'`, which is \
-             approved as one line. \
-             \
-             Narrowing the result inside the line is the cheapest thing you can do, and usually \
-             the difference between a few lines and a few thousand tokens: pipe to `head -n`, \
-             ask grep for `-l` to get names only or `-c` for a count, take a line range with \
-             `sed -n 40,80p` rather than reading a whole file. Use whichever tool returns less, \
-             and a command that filters usually returns less. \
-             \
-             Output comes back as text you can read where the user has vouched for every \
-             command in the line; otherwise it comes back as a reference, like a file you may \
-             not read"
-            .to_string()
+            "Run one command line. Pipes, &&, ||, ;, ( ), quotes, redirection, globs and {a,b} \
+             work, but there is no shell: $(...), backticks, $VAR, ${...}, $?, $$, $@, $*, $#, \
+             $-, $! and $'...' are refused, so write values out (`NAME=$VAR cmd` and \
+             `NAME=\"$(cmd)\" cmd` pass only where everything runs unasked). Single quotes \
+             are literal, double quotes are not; a `$` before no name, \
+             brace, parenthesis or quote is literal. Quote a pattern meant for the program: an \
+             unquoted one is replaced by the files it matches (`find . -name '*.md'`), but one \
+             after an option's `=` is passed as written (`--include=*.md`). A \
+             `cd` step is refused since it moves nothing for later steps; the `directory` \
+             argument runs a line elsewhere. A `ulimit`, `umask`, `unset`, `alias`, `unalias`, \
+             `hash` or `wait` step is refused since it changes nothing for later steps; for a \
+             limit or mask, write the whole line as `sh -c '... ulimit ...'`, approved as one \
+             line. Narrowing inside the line is cheapest: `head -n`, `grep -l`, `grep -c`, `sed \
+             -n 40,80p`; use whichever tool returns less. \
+             Output is text where the user vouched for every command in the line, else a \
+             reference"
+                .to_string()
                 + &run_reference_moves(&|_| true)
                 + &run_text_made_from_it(&|_| true)
-                + ". Do use it to compile and \
-             test what you changed. \
-             \
-             Before asking whether a browser is running, or whether to quit or relaunch it, look \
-             for its debugging port. A browser started with --remote-debugging-port=9222 answers \
-             `curl http://127.0.0.1:9222/json/version`. Ask about quitting or relaunching a \
-             browser only after that probe is refused. \
-             \
-             A program meant to keep running, such as a server or a watcher, needs \
-             background: true. A build or test gate that may take longer than the ceiling \
-             also starts with background: true, because a foreground run is stopped at \
-             its deadline and has to be run again from the start. Without it the line is \
-             waited on and stopped at its deadline ("
+                + ". Before asking whether a browser is running, or whether to quit or relaunch \
+                   it, probe its debugging port. One started with --remote-debugging-port=9222 \
+                   answers `curl http://127.0.0.1:9222/json/version`. Ask about quitting or \
+                   relaunching a browser only after that probe is refused. Use background: true \
+                   for servers and builds that may outlast the deadline ("
                 + &format!(
                     "{deadline_default} seconds by default; set deadline_seconds to allow up to \
                      {deadline_ceiling}"
                 )
-                + "), so there is \
-             no moment at which it is up and you can do anything with it. \
-             \
-             Asked to watch something, or to say when it changes, decide first what is being \
-             watched, because a file and a program are watched by different means. "
+                + "). "
                 + &run_watching(&|_| true)
                 + " "
                 + look_again_after_a_run
-                + " And say which window you watched, or which looks you compared, rather than \
-                   a time of day, which you have no clock for. Where the request is to watch \
-                   something or to be told when it changes, and you have scheduled no further \
-                   look, say that too. Any other request gets no sentence about a later look.",
+                + " Name the looks you compared, never a time of day, which you have no clock \
+                   for. Where asked to watch something or be told when it changes, with no \
+                   further look scheduled, say so. Any other \
+                   request gets no sentence about a later look.",
             json!({
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "One command line. Programs are looked up on PATH, or \
-                                        taken as paths relative to the directory the line runs \
-                                        in, which is where its arguments are resolved too. A \
-                                        newline is not accepted, since this is one line and not \
-                                        a script."
+                        "description": "One line; programs are found on PATH or relative to \
+                                        directory."
                     },
                     "stdin_ref": {
                         "type": "string",
-                        "description": "A reference whose contents are fed to the first \
-                                        program's standard input, e.g. \"ref:1\". This is how \
-                                        sed, awk, grep or jq are run over a document you may \
-                                        not read: you name the reference and the contents go \
-                                        into the program without passing through you. The \
-                                        program reads them as if they had been typed at it, so \
-                                        do not also add a '<' redirection to the line, and do \
-                                        not use it with background: true. What comes back is \
-                                        quarantined the same way any other run's output is. A \
-                                        program that sends text, such as a summary a processor \
-                                        wrote, takes its body this way: name the processor's \
-                                        answer here."
+                        "description": "A reference fed to standard input without passing \
+                                        through you; a program sending a processor's answer \
+                                        as its body takes it here. Not with '<' or background."
                     },
                     "scopes": {
                         "type": "array",
                         "items": { "type": "string", "enum": bravebot_sandbox::scope::Requested::MENU },
                         "description": format!(
-                            "Credential scopes, toolchain lists and `loopback` to add to \
-                             every stage of this one line, by name from the list \
-                             given, for a script that runs `gh`, `aws`, `git commit` \
-                             or a build inside it and so shows no operation of its \
-                             own. A stage with a NAME=value assignment in front of its \
-                             program gets none of them, and a line where every stage \
-                             has one is refused. On macOS `loopback` is for listening on a port of \
-                             this machine, which `cargo test` and `sccache` need. \
-                             {LOOPBACK_CONNECT_RULE} On Linux and Windows `loopback` \
-                             changes nothing. `ssh-key` has the user choose again \
-                             which ssh key a `git push` offers its owner, after a \
-                             push was refused for permission. Only where the session \
-                             is told it accepts them. The user is asked about the line \
-                             every time with the names shown, and no answer to it is \
-                             remembered. A name outside the list is an error."
+                            "Added to every stage, for a script that runs `gh`, `aws`, `git \
+                             commit` or a build. A stage with a NAME=value in front of its \
+                             program gets none, and a line where every stage has one is refused. \
+                             macOS `loopback` lets a line listen on a local port. \
+                             {LOOPBACK_CONNECT_RULE} On Linux and Windows `loopback` changes \
+                             nothing. `ssh-key` re-picks the key a refused `git push` offers."
                         )
                     },
                     "unconfined": {
                         "type": "boolean",
-                        "description": "Start this one line with no sandbox. Start every \
-                                        line without it first, and ask for it only after \
-                                        that same line failed because the sandbox refused it \
-                                        access: a program that has to write where the sandbox \
-                                        does not let it, such as a login that stores a \
-                                        credential in its own directory, a line that \
-                                        redirects its output to a file outside the \
-                                        workspace, which a sandboxed line cannot do, or a \
-                                        script that runs git as a child process, which a \
-                                        sandboxed line on macOS cannot write a .git for. A \
-                                        failure that is not a refusal of access, such as a \
-                                        wrong argument or a missing file, is not a reason to \
-                                        ask. Say in 'why' what the sandbox refused. The user \
-                                        is asked about the line every time, shown the files \
-                                        it writes, your reason and that it runs with no \
-                                        sandbox, and no answer to it is remembered. A request \
-                                        before a line has run with the sandbox and failed in \
-                                        this turn is refused. A session that does not accept it \
-                                        refuses the call with a sentence saying so. What it \
-                                        prints is not trusted. \
-                                        Do not combine it with 'scopes'."
+                        "description": "No sandbox for this line, only after the same line \
+                                        failed because the sandbox refused access, not for \
+                                        another failure; say what in why. The user is asked \
+                                        every time; a session that does not accept it \
+                                        refuses the call. Not with scopes."
                     },
                     "directory": {
                         "type": "string",
-                        "description": "Directory to run the command in, relative to the \
-                                        workspace or inside a directory the user added. \
-                                        Defaults to \".\" on the first call, and the last one \
-                                        given is where a later call with no directory runs. \
-                                        Naming one asks the user every time, since where a \
-                                        program runs decides as much as its arguments do."
+                        "description": "Kept for later calls. Naming one asks the user."
                     },
                     "deadline_seconds": {
                         "type": "integer",
                         "description": format!(
-                            "How long to wait for the command, in seconds. Defaults to \
-                             {deadline_default}. Held to between {} and {deadline_ceiling} \
-                             seconds, so anything outside that becomes the nearest of the two. A \
-                             command that outlasts its deadline is stopped and what it printed \
-                             comes back. Has no effect with background: true, which is not waited \
-                             for at all. A deadline longer than the prompt cache lifetime makes the \
-                             next request write the whole conversation to the cache again, so a \
-                             command expected to take that long is better started with background: \
-                             true and watched with job_output in shorter waits.",
+                            "Default {deadline_default}, from {} to {deadline_ceiling}. One past \
+                             the prompt cache lifetime rewrites the cache; prefer background: \
+                             true, watched with job_output in shorter waits.",
                             crate::exec::FLOOR.as_secs()
                         )
                     },
@@ -2008,46 +1557,22 @@ fn table(
                 "type": "object",
                 "properties": {
                     "job": {
-                        "type": "string",
-                        "description": "The job name run gave you, e.g. \"job:1\"."
+                        "type": "string"
                     },
                     "kill": {
                         "type": "boolean",
-                        "description": "Stop the job after reading what it printed. Use it once \
-                                        you are done with a server you started. Defaults to \
-                                        false, which leaves it running."
+                        "description": "Stop the job after reading."
                     },
                     "wait_seconds": {
                         "type": "integer",
-                        "description": format!("Wait up to this many seconds instead of answering \
-                                        at once. Returns as soon as the job prints something you \
-                                        have not been shown, the job ends or the user types \
-                                        a line, and at the bound if it stays silent. A wait \
-                                        longer than the prompt cache lifetime makes the next \
-                                        request write the whole conversation to the cache again \
-                                        and read none of it, so the bound is held under that \
-                                        lifetime: to watch longer, call again. Between {} and \
-                                        {}. A value outside that is refused rather than \
-                                        adjusted, so the wait you get is the wait you asked for. \
-                                        Omit it to look and answer straight away. With \
-                                        until_exit it returns only when the job ends, the user \
-                                        types a line or the bound is reached. The same wait \
-                                        repeated while the job is running is not held.",
+                        "description": format!("From {} to {}, under the prompt cache lifetime; outside is refused. A longer wait makes the next request write the whole conversation to the cache again.",
                             crate::exec::WAIT_FLOOR.as_secs(),
                             deadlines.wait_ceiling.as_secs().max(crate::exec::WAIT_FLOOR.as_secs())
                         )
                     },
                     "until_exit": {
                         "type": "boolean",
-                        "description": "Wait for the job to end rather than for its output. \
-                                        Needs wait_seconds, which is then the longest to wait, \
-                                        and cannot be given with kill. \
-                                        The job printing does not end the wait, so one call \
-                                        covers a build that prints a line per step, and what \
-                                        comes back is what it printed since your last look, in \
-                                        one answer. If the job is still running at the bound, \
-                                        you are told so. Defaults to false, which returns at \
-                                        the job's next output."
+                        "description": "Needs wait_seconds; not with kill."
                     },
                     "read": {
                         "type": "boolean",
@@ -2064,29 +1589,20 @@ fn table(
                 "type": "object",
                 "properties": {
                     "ref": {
-                        "type": "string",
-                        "description": "The reference a run gave you, e.g. \"ref:5\"."
+                        "type": "string"
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "For output too long for one result, the byte to start \
-                                        from: the sample you were shown says where its middle \
-                                        begins, and each page names the offset of the next. \
-                                        Defaults to 0. Not for output you were not shown."
+                        "description": "Byte to start from, as the sample or last page names \
+                                        it."
                     },
                     "pattern": {
                         "anyOf": [
                             {"type": "string"},
                             {"type": "array", "items": {"type": "string"}}
                         ],
-                        "description": "Regular expression to find in output you may already \
-                                        read, in the subset search accepts. Answers with the \
-                                        matching lines, each numbered with the byte it starts at, \
-                                        and a little context either side. Use the byte of the \
-                                        match you want as the offset of a second call to read on \
-                                        from there. May be a list, in which case a line matches \
-                                        if it matches any of them. Not with offset, and not for \
-                                        output you were not shown."
+                        "description": "Regex, as search takes; returns matching lines by \
+                                        starting byte. Not with offset."
                     }
                 },
                 "required": ["ref"]
@@ -2094,28 +1610,19 @@ fn table(
         ),
         Tool::function(
             "vet_content",
-            "Ask to be shown something you are holding a reference to. Give the reference and say \
-             what you expect it to hold. \
-             \
-             Use it for a page you fetched or a file nobody has vouched for, when working blind \
-             on it is not enough and you actually need to know what it says. Say plainly in your \
+            "Ask to be shown content you hold a reference to, when working blind is not \
+             enough. Say plainly in your \
              reply why you need to read it rather than pass it to spawn_processor. \
-             \
-             What it releases is this content, this once. Nothing about the file or the host is \
-             vouched for.",
+             It releases this content once and vouches for nothing else.",
             json!({
                 "type": "object",
                 "properties": {
                     "ref": {
-                        "type": "string",
-                        "description": "The reference you are holding, e.g. \"ref:5\"."
+                        "type": "string"
                     },
                     "expects": {
                         "type": "string",
-                        "description": "What you think this holds and why you want it, in a \
-                                        sentence, e.g. \"the changelog for version 2, to find \
-                                        out what changed\". Your own words, not anything you \
-                                        were shown."
+                        "description": "In your own words, what it holds and why you want it."
                     }
                 },
                 "required": ["ref", "expects"]
@@ -2126,20 +1633,10 @@ fn table(
             // No numbers for the depth or the ceiling, which delegates read here too: a model
             // told how many it has left spends them.
             format!(
-                "Hand a whole sub-task to a second agent and get back one report. It has its own \
-                 context, so everything it reads stays with it and only what it says at the end \
-                 reaches you. That is what this is for: running a build reads the whole log, and \
-                 asking a delegate to run a build whose output you may read tells you what \
-                 failed.{quarantined} Use it when finding \
-                 something out would cost you more context than the answer is worth, or when a \
-                 sub-task is separable enough to describe in a paragraph. It cannot ask the user \
-                 anything, so give it everything it needs in the task. It may hand parts of that \
-                 task to delegates of its own, though not without end: the tree stops a few \
-                 levels down, and one turn starts only so many however they are arranged. Its \
-                 writes, its runs and its calls to an MCP server's tools are still shown to the \
-                 user for approval, so this saves you context and never an approval.\
-                 {lacks} Do not use it for something one read would answer: it is a whole second \
-                 agent and costs like one.",
+                "Hand a separable sub-task to an agent with its own context and get one report; \
+                 not for one read. A delegate whose run output you may read reports what \
+                 failed.{quarantined} It cannot ask the user, so the task must hold everything. \
+                 Its writes, runs and MCP calls still need the user's approval.{lacks}",
                 lacks = spawn_agent_lacks(&|_| true),
                 quarantined = spawn_agent_quarantined(&|_| true)
             ),
@@ -2148,82 +1645,42 @@ fn table(
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "description": "Which kind of agent, narrowest first. \"reader\" reads, \
-                                        lists, searches and runs processors: use it to find \
-                                        something out. \"checker\" also runs programs and asks \
-                                        a language server, so it can build, test and lint, but \
-                                        writes nothing: use it to \
-                                        find out whether something works. \"worker\" also \
-                                        writes files and calls the tools of the MCP servers you \
-                                        may: use it to finish a sub-task. Pick the narrowest \
-                                        one that can do the job.",
+                        "description": "reader reads and runs processors; checker also runs \
+                                        programs; worker also writes.",
                         "enum": ["reader", "checker", "worker"]
                     },
                     "task": {
                         "type": "string",
-                        "description": "What it has to do, in your own words, as the whole of what \
-                                        it will know. It cannot see this conversation, your \
-                                        references, the user's prompt or anything you have read, \
-                                        and it cannot come back for more, so name the paths, the \
-                                        commands, the symptom and what a finished answer has to \
-                                        contain. Say what you want reported, not just what you \
-                                        want done."
+                        "description": "All it will know: it sees nothing of yours. Name \
+                                        paths, commands and what to report."
                     },
                     "each": {
                         "type": "array",
                         "description": format!(
-                            "Optional. Start one delegate per entry instead of one in total, \
-                             each told the task followed by its own entry. Put what they share \
-                             in task and only the differing part here, e.g. one path per \
-                             entry. One call starts at most {MAX_FANOUT} delegates and a call \
-                             with more entries is refused; for more, make a further call with \
-                             the same task and the next entries. Writing the same paragraph \
-                             out four times costs you the seconds it takes to say it, and the \
-                             delegates cannot start until you have."
+                            "One delegate per entry, told the task and its entry; at most \
+                             {MAX_FANOUT} delegates per call; a further call starts more."
                         ),
                         "items": {"type": "string"}
                     },
                     "isolation": {
                         "type": "string",
                         "description": format!(
-                            "Optional. \"checkout\" gives each delegate a new checkout of the \
-                             last commit to work in, so that delegates writing at the same time \
-                             do not edit or build in one working tree. Changes not yet committed \
-                             are not in it, and what it changes stays there until it is brought \
-                             back. \"checkout_with_changes\" is the same, and also copies into it \
-                             the changes your working directory has now: the files you wrote and \
-                             the ones git status lists as changed. Use it for a delegate that has \
-                             to check or build what you have written and not the last commit. \
-                             Which files were carried, and which were not, is in the answer. Not \
-                             for a \"reader\", and not for a delegate that is already in one. A \
-                             definition may ask for one itself, and its delegates are then \
-                             started as if \"checkout\" were set. {}",
+                            "A new checkout of the last commit per delegate, with your changes \
+                             copied in for checkout_with_changes. Not for a reader. {}",
                             checkouts_share_refs(running)
                         ),
                         "enum": ["checkout", "checkout_with_changes"]
                     },
                     "mcp_servers": {
                         "type": "array",
-                        "description": "Optional. The MCP servers a \"worker\" keeps, each named \
-                                        as the server's part of its tools' names \
-                                        (mcp__<server>__<tool>), out of the ones you may call. \
-                                        Leave it out and it keeps every one; [] keeps none. \
-                                        Give it only the servers its task needs. A \"reader\" \
-                                        and a \"checker\" keep none either way.",
+                        "description": "MCP servers a worker keeps; omitted keeps all.",
                         "items": {"type": "string"}
                     },
                     "budget": {
                         "type": "string",
-                        "description": "Optional. The most tokens each delegate may spend, \
-                                        written as \"500000\", \"500k\" or \"2m\". A delegate that has spent it \
-                                        loses its tools and answers with what it has, and you \
-                                        are told so beside its report. Every request counts \
-                                        the whole conversation so far, so a figure buys a few \
-                                        dozen requests, not a few dozen thousand tokens of \
-                                        reading: 2m is about thirty requests at 70k tokens \
-                                        each. It can only lower the \
-                                        bound the delegate's definition sets. Leave it out to \
-                                        set none."
+                        "description": "Most tokens per delegate, e.g. \"500k\" or \"2m\". Each \
+                                        request counts the whole conversation, so 2m is about \
+                                        thirty requests, not 2m tokens of reading."
                     },
                     "wake_after": {
                         "type": "integer",
@@ -2241,17 +1698,12 @@ fn table(
                 "type": "object",
                 "properties": {
                     "url": {
-                        "type": "string",
-                        "description": "The absolute http or https URL to fetch."
+                        "type": "string"
                     },
                     "read": {
                         "type": "boolean",
-                        "description": "Ask to have the page checked and released in this \
-                                        result, as vet_content would, so there is no \
-                                        vet_content call to make. Where it would be kept \
-                                        back, or the page is longer than one result may \
-                                        hold, 16 KiB by default, it still comes back as a \
-                                        reference. Defaults to false."
+                        "description": "Release the page here as vet_content would; kept back or over \
+                                        16 KiB, it is still a reference."
                     }
                 },
                 "required": ["url"]
@@ -2259,23 +1711,17 @@ fn table(
         ),
         Tool::function(
             "download_url",
-            "Save an http or https URL to a file in the workspace without reading it: binary \
-             safe, and the bytes go from the network to the file and never into your context. \
-             Use it for a picture, archive, PDF, font or any file fetch_url would corrupt. It \
-             replaces an existing file at the path. The file is quarantined like anything fetched, so \
-             you cannot read it back or be told what it says. The user is asked about the host and \
-             about the destination before anything is written.",
+            "Save an http or https URL to a workspace file, bytes unread, for binaries fetch_url \
+             would corrupt. The file is quarantined. The user is asked about the host and the \
+             destination first.",
             json!({
                 "type": "object",
                 "properties": {
                     "url": {
-                        "type": "string",
-                        "description": "The absolute http or https URL to download."
+                        "type": "string"
                     },
                     "path": {
-                        "type": "string",
-                        "description": "Workspace-relative path to save it to, e.g. \
-                                        assets/logo.png."
+                        "type": "string"
                     }
                 },
                 "required": ["url", "path"]
@@ -2286,36 +1732,21 @@ fn table(
     if running.offered() {
         tools.push(Tool::function(
             "request_path",
-            "Ask the user to let the programs you start with run reach one path outside the \
-             workspace, for the rest of this session. Use it when a run was refused or failed \
-             because it could not read or write a path you need, and name that path. The user is \
-             shown the path and your reason and answers yes or no. A yes lasts until the session \
-             ends or the user ends it, applies to every later run, and, except as said below, \
-             does not make the directory trusted: files in it are still not believed any more \
-             than before. It never reaches a filesystem root, the home directory or a \
-             directory above it, credential locations, or a pattern, and it is refused where \
-             the user turned the sandbox off or the workspace is not trusted. It does not widen \
-             read_file, write_file, edit_file or the other file tools, which stay inside the \
-             workspace and the directories the user added with /add-dir, unless the user has \
-             turned permission prompts off: there those tools reach a path outside the workspace \
-             with no request, except the places a request is refused too, so call this for the \
-             programs you start with run; a request is granted without a question, also opens \
-             the directory to those tools and trusts it, as /add-dir does, and the result says \
-             whether they now reach it.",
+            "Ask the user to let programs started by run reach one path outside the workspace \
+             for this session, after a run could not. A yes does not trust the directory. Never \
+             a root, home or above, a credential location or a pattern; refused where the \
+             sandbox is off or the workspace untrusted. The file tools are not widened, except \
+             with permission prompts off, where they reach outside paths with no request, and a \
+             request is granted unasked and also opens and trusts the directory for them.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "One existing absolute path, or one beginning ~/, e.g. \
-                                        /opt/toolchain/include. A file or a directory; a \
-                                        directory covers what is inside it."
+                        "description": "An existing absolute or ~/ path."
                     },
                     "write": {
-                        "type": "boolean",
-                        "description": "True when programs must also write there. Writing \
-                                        implies reading. Defaults to false, which asks for \
-                                        reading only."
+                        "type": "boolean"
                     }
                 },
                 "required": ["path"]
@@ -2442,10 +1873,7 @@ fn ask_why(tool: &mut Tool) {
     let parameters = &mut tool.function.parameters;
     parameters["properties"][WHY] = json!({
         "type": "string",
-        "description": "One short line saying why you are making this call: what you want to \
-                        find out, or what you are about to change. The user reads it beside the \
-                        call, which already shows the tool and what it acts on, so give the \
-                        reason rather than repeating those."
+        "description": "Why you make this call."
     });
     // A tool with no required argument of its own gets a list of one. Indexing the missing key to
     // write through it would store `null` there, which Bedrock refuses as a schema for the whole
@@ -2568,17 +1996,10 @@ pub fn for_delegate(
 /// delegate's list, whose wait no typed line ends.
 fn wake_after_description(typed_lines_wake: bool) -> String {
     let also = match typed_lines_wake {
-        true => " A line from the user still wakes you, and so does another call's count.",
+        true => " A typed line or another call's count also wakes you.",
         false => " Another call's count still wakes you.",
     };
-    format!(
-        "Optional. How many of this call's delegates have to end before you are asked again, \
-         once you end a round with them working. Left out it is 1: you are asked again as each \
-         one reports. A figure at or above the number of delegates the call starts means all of \
-         them. Use it when you need the reports together, such as a batch whose results you \
-         compare or merge, so the turn does not ask you once per report to name what is still \
-         outstanding.{also}"
-    )
+    format!("Delegates that must end before you are asked again; default 1.{also}")
 }
 
 /// The tools a turn offers its planner, with the kinds of delegate this turn resolved.
@@ -2670,41 +2091,31 @@ pub fn offer_propose_plan(tools: &mut Vec<Tool>) {
 pub fn offer_remember(tools: &mut Vec<Tool>) {
     let mut remember = Tool::function(
         "remember",
-        "Keep one fact about the user or their work that will still matter in a later session, \
-         such as a preference they stated, a decision and its reason, or how a project is run. \
-         Each save is shown to the user and they can undo it. Write the fact yourself, in your own \
-         words; do not copy text from a file or a web page. Keep one thing per fact, and nothing \
-         that is only true of this conversation. A new fact that says nearly what a kept one \
-         already says is refused with that fact's key: save over that key to correct it, pass \
-         supersedes to replace it with a fact under a new key, or pass new to keep both.",
+        "Keep one fact about the user or their work for later sessions, in your own words, \
+         not copied from a file or web page. The user is shown each save and can undo it. A \
+         fact close to a kept one is refused with its key: save over that key, pass supersedes, \
+         or pass new.",
         json!({
             "type": "object",
             "properties": {
                 "key": {
                     "type": "string",
-                    "description": "A short name for the fact, as lower-case words joined by \
-                                    hyphens, with slashes to group them, such as \
-                                    release/forge-poll. Saving under a key that exists replaces \
-                                    that fact."
+                    "description": "Lower-case hyphenated words, grouped with slashes."
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["everywhere", "project"],
-                    "description": "everywhere for a fact about the user that holds in every \
-                                    project, project for a fact about this project only."
+                    "enum": ["everywhere", "project"]
                 },
                 "text": {
-                    "type": "string",
-                    "description": "The fact, written so that it can be read on its own."
+                    "type": "string"
                 },
                 "supersedes": {
                     "type": "string",
-                    "description": "The key of a kept fact this one replaces because it stopped \
-                                    being true. It is marked as replaced and left out of recall."
+                    "description": "Key of a kept fact this replaces."
                 },
                 "new": {
                     "type": "boolean",
-                    "description": "Keep this fact although it is close to one already kept."
+                    "description": "Keep it beside a close fact."
                 }
             },
             "required": ["key", "scope", "text"]
@@ -2722,31 +2133,22 @@ pub fn offer_remember(tools: &mut Vec<Tool>) {
 pub fn offer_propose_rule(tools: &mut Vec<Tool>) {
     let mut propose = Tool::function(
         "propose_rule",
-        "Propose a standing rule for how to work with this user, such as a convention they \
-         stated or a mistake they corrected that should not happen again. The user is asked, \
-         with the rule, the file it would go to and your reason shown, and can keep it, edit it \
-         or refuse it. Nothing is written unless they keep it. Write the rule yourself, in your \
-         own words; do not copy text from a file or a web page. Propose one rule per call, and \
-         only a rule that will still apply in later sessions. A fact about the user or their \
-         work that is not an instruction belongs to remember.",
+        "Propose a standing rule for working with this user, in your own words, not copied \
+         from a file or web page. The user is asked and may keep, edit or refuse it; nothing is \
+         written unless kept. A fact that is not an instruction belongs to remember.",
         json!({
             "type": "object",
             "properties": {
                 "text": {
-                    "type": "string",
-                    "description": "The rule, as one short instruction that can be read on its \
-                                    own."
+                    "type": "string"
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["home", "project"],
-                    "description": "home for a rule that holds in every project, project for a \
-                                    rule about this project only."
+                    "enum": ["home", "project"]
                 },
                 "reason": {
                     "type": "string",
-                    "description": "One line saying why this should be a rule, shown to the \
-                                    user and kept beside it."
+                    "description": "One line, shown to the user."
                 }
             },
             "required": ["text", "scope", "reason"]
@@ -2907,24 +2309,17 @@ fn web_search_schema() -> serde_json::Value {
 pub fn offer_recall(tools: &mut Vec<Tool>) {
     let mut recall = Tool::function(
         "recall",
-        "Look up what the user has asked to be kept, or what an earlier session kept, about them \
-         or this project. Give a query in the words the fact would use, or the key of one fact to \
-         read it whole. A query answers with the best matches, each with its key, how strongly it \
-         matches and when it was last verified, and with the facts the best ones link to. A fact \
-         that has been replaced is left out of a query and shown, with the key that replaced it, \
-         when read by key. When the answer says probably nothing is stored, say so rather than \
-         assume.",
+        "Look up kept facts about the user or this project, by a query or one fact's key. \
+         When the answer says probably nothing is stored, say so rather than assume.",
         json!({
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Words to look for. A phrase in double quotes must appear as \
-                                    written. Give exactly one of query and key."
+                    "description": "Words; a quoted phrase must match. Give query or key."
                 },
                 "key": {
-                    "type": "string",
-                    "description": "The key of the one fact to read, instead of a query."
+                    "type": "string"
                 }
             }
         }),
@@ -3080,11 +2475,9 @@ pub(super) fn state_withheld(tools: &mut [Tool], names: &[&str]) {
 fn withheld_variables_sentence(names: &[&str]) -> String {
     let listed: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
     format!(
-        "The credentials this agent holds for itself ({}), and the variables the person's settings \
-         name as a gateway's token, as a search key or to be withheld, which are not listed, are \
-         removed from the environment of every program this tool starts, whatever the person's shell \
-         holds. A program that reports one of them unset, or fails for want of one, says nothing \
-         about whether the person has set it.",
+        "The agent's own credentials ({}), and unlisted variables the person's settings name as \
+         a gateway token, search key or to be withheld, are removed from every program this tool \
+         starts, so a program reporting one unset says nothing about whether the person set it.",
         listed.join(", ")
     )
 }
@@ -3166,9 +2559,6 @@ fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definiti
             )
         })
         .collect::<String>();
-    kind["description"] = json!(format!(
-        "Which kind of agent. Pick the narrowest one that can do the job; they are listed \
-         narrowest first.{described}"
-    ));
+    kind["description"] = json!(format!("Which kind, narrowest first.{described}"));
     kind["enum"] = json!(delegates.names());
 }

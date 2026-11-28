@@ -140,7 +140,7 @@ fn the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote
     unsafe { std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB") };
     assert!(
         !unfiltered.contains("SERVICES_KEY_AICHAT")
-            && !unfiltered.contains("says nothing about whether the person has set it"),
+            && !unfiltered.contains("says nothing about whether the person set it"),
         "the planner was told of a removal that the switch turned off: {unfiltered}"
     );
 }

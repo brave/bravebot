@@ -320,49 +320,30 @@ fn a_list_holding_every_tool_gets_the_processor_and_read_output_descriptions_it_
     let everything = the_table_without(&[]);
     assert_eq!(
         description_of(&everything, "spawn_processor"),
-        "Transform quarantined content you were not shown. Spawns an isolated model with no \
-         tools, no memory and nothing to read but the references you name; it follows your \
-         instruction and its output is quarantined as a new reference. This is how to change \
-         a file you cannot see: name the file's reference, say what has to be true of it \
-         afterwards, then pass the reference that comes back to write_file as contents_ref. \
-         You are not shown its output either, and nobody reads it before it is written, so \
-         be exact about the shape of the answer: the complete document and nothing else. \
-         What the change should be is its decision, not yours. It reads the whole document, \
-         so it can work out what is wrong and where the fix goes, and leave a file alone if \
-         it turns out not to be the one you are after. A summary, a translation, a rewrite, \
-         an explanation or a list of the points made of content you were not shown is \
-         written by this tool, because you cannot write it from what you have not read. Ask \
-         for the form wanted, for example a plain-text summary of each of six stories, two \
-         sentences each, with each link kept. Do not leave it to a script you write, which \
-         can only cut the original down. A fetched page or a run's output needs no file: \
-         name its reference in reads. Then give the answer's reference to run as stdin_ref, \
-         or write the answer with write_file and contents_ref to a new file in the scratch \
-         directory and run the program that sends it with the file's path as an argument, so \
-         it reads the body from the file. The recipient and the subject are yours and only \
-         the body comes from the processor. Your final message says what was sent and to \
-         whom. Call the text a summary in your final message only if a processor wrote one."
+        "Transform quarantined content you were not shown: a model with no tools reads only \
+         the references you name, follows your instruction and returns a new quarantined \
+         reference. To change a file you cannot see, say what must be true of it afterwards \
+         and write the returned reference with write_file as contents_ref. Nobody reads it \
+         first, so ask for the whole document and nothing else. It decides the change and \
+         may leave a file alone. Summaries, translations, rewrites, explanations and lists \
+         of points made from content you were not shown are written by this tool, not by you; \
+         a script you write can only cut the original down. Ask for the form, e.g. a \
+         plain-text summary of each of six stories, two sentences each, with each link kept. \
+         Name a fetched page or run output in reads directly. To send the answer, give its \
+         reference to run as stdin_ref, or write it with write_file to a new file in the \
+         scratch directory and pass that path. Recipient and subject are yours; only the \
+         body is the processor's. Say what was sent to whom, and call text a summary only if \
+         a processor wrote it."
     );
     assert_eq!(
         description_of(&everything, "read_output"),
-        "Ask to be shown what a command printed. Give the reference a run handed back. Use \
-         it whenever you ran something to find something out, which is most of the time: a \
-         run's output is quarantined by default, so `which`, `find`, `uname` and the like \
-         tell you nothing until you ask for the result. Ask for the errors too when a run \
-         fails, or you will not know why it failed and must not claim it succeeded. Only for \
-         output from run; a quarantined file is not readable this way. For \
-         anything else you \
-         are holding a reference to, vet_content is the question to ask. Output you were \
-         shown the beginning and end of, because the whole was too long for one result, is \
-         the exception: you may read all of it, so nobody is asked, and it comes back a page \
-         at a time from the offset you give. A pattern searches that output instead of \
-         paging it: you get the matching lines, each numbered with the byte it starts at, so \
-         a second call with that byte as the offset reads on from the match you wanted. A \
-         pattern on output you may not read is refused rather than asked about. Called on \
-         output you may not read, with no offset or pattern, it returns all of it, and what \
-         it returns stays in every later request at about a token for every four bytes. \
-         Where the reference states a size of hundreds of kilobytes, that is tens of \
-         thousands of tokens or more, and a filter such as tail or grep run on it with the \
-         reference as stdin_ref and read: true reads part of it instead."
+        "Show what a run printed: give its reference. Run output is quarantined by default, \
+         so ask for results you need, errors included, and do not claim success unseen. Not \
+         for a quarantined file; ask vet_content for other references. Output cut for length \
+         may be read without asking, paged by byte offset or searched with pattern. A \
+         pattern on output you may not read is refused. Output you may not read comes back \
+         whole and stays in every later request, about a token per four bytes; for a large \
+         one, run tail or grep with it as stdin_ref and read: true."
     );
     let table = available(
         Scheduling::ArrangingALook,
@@ -411,6 +392,24 @@ fn the_processor_description_names_only_the_tools_the_list_holds() {
     );
 }
 
+/// SPAWN-6. The description of `spawn_processor` gives the example of a plain-text summary of each
+/// of six stories, two sentences each, with each link kept, and says a script the planner writes can
+/// only cut the original down. The example is said to a list with `run` and to one without, and the
+/// reason about a script only where `run` is on the list, since a list without it has no script to
+/// write. Rejects: the example shortened to one that is not the clause's, and either sentence left
+/// out.
+#[test]
+fn the_processor_description_gives_the_summary_example_and_why_a_script_is_not_the_way() {
+    let example = "a plain-text summary of each of six stories, two sentences each, with each \
+                   link kept";
+    let reason = "a script you write can only cut the original down";
+    let with_run = description_of(&the_table_without(&[]), "spawn_processor");
+    assert!(with_run.contains(example), "{with_run}");
+    assert!(with_run.contains(reason), "{with_run}");
+    let without_run = description_of(&the_table_without(&["run"]), "spawn_processor");
+    assert!(without_run.contains(example), "{without_run}");
+}
+
 /// A planner writes a delegate's task, so the description of `spawn_agent` tells it, after the
 /// sentence on approvals, that a delegate cannot call `vet_content`, `ask_user`, `fetch_url`
 /// or `download_url` and that work needing one is the planner's own to do before delegating or
@@ -424,23 +423,20 @@ fn the_processor_description_names_only_the_tools_the_list_holds() {
 fn the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch() {
     use bravebot_core::delegate::{Definition, Definitions, Kind};
 
-    // What follows the sentence on approvals, up to the sentence on cost.
+    // What follows the sentence on approvals, which ends the description.
     fn lacks(description: &str) -> String {
         let (_, after) = description
-            .split_once("so this saves you context and never an approval.")
+            .split_once("Its writes, runs and MCP calls still need the user's approval.")
             .expect("the approvals sentence is in the description");
-        let (lacks, _) = after
-            .split_once(" Do not use it for something one read would answer")
-            .expect("the sentence on cost is in the description");
-        lacks.to_string()
+        after.to_string()
     }
 
     let everything = lacks(&description_of(&the_table_without(&[]), "spawn_agent"));
     assert_eq!(
         everything,
-        " A delegate cannot call vet_content, ask_user, fetch_url or download_url, so do \
-         work that needs one of them yourself, before you delegate or instead of \
-         delegating. A reference that has to be read whole is read by you with vet_content."
+        " A delegate cannot call vet_content, ask_user, fetch_url or download_url; do work \
+         needing one of them yourself. A reference that has to be read whole is read by you \
+         with vet_content."
     );
 
     let four = ["vet_content", "ask_user", "fetch_url", "download_url"];
@@ -473,9 +469,8 @@ fn the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch(
     ));
     assert_eq!(
         one,
-        " A delegate cannot call vet_content, so do work that needs it yourself, before you \
-         delegate or instead of delegating. A reference that has to be read whole is read by \
-         you with vet_content."
+        " A delegate cannot call vet_content; do work needing it yourself. A reference that \
+         has to be read whole is read by you with vet_content."
     );
     let none = description_of(&the_table_without(&four), "spawn_agent");
     assert!(!none.contains("A delegate cannot call"), "{none}");
@@ -517,12 +512,10 @@ fn the_planner_is_told_a_delegate_cannot_read_output_it_may_not_read_either() {
     let everything = description_of(&the_table_without(&[]), "spawn_agent");
     assert!(
         everything.contains(
-            "That is what this is for: running a build reads the whole log, and asking a \
-             delegate to run a build whose output you may read tells you what failed. A \
-             delegate is quarantined exactly as you are, so delegating a run whose output \
-             you may not read does not make that output readable. Give its reference to \
-             spawn_processor for a bounded question about it instead, or have a person vouch \
-             for the command. Use it when finding"
+            "A delegate whose run output you may read reports what failed. A delegate is \
+             quarantined as you are: run output you may not read stays unreadable to it. Ask \
+             spawn_processor a bounded question about the reference instead, or have a person \
+             vouch for the command. It cannot ask the user"
         ),
         "{everything}"
     );
@@ -534,8 +527,8 @@ fn the_planner_is_told_a_delegate_cannot_read_output_it_may_not_read_either() {
     let without = description_of(&the_table_without(&["spawn_processor"]), "spawn_agent");
     assert!(
         without.contains(
-            "does not make that output readable. Have a person vouch for the command \
-             instead. Use it when finding"
+            "stays unreadable to it. Have a person vouch for the command instead. It cannot \
+             ask the user"
         ),
         "{without}"
     );
@@ -576,10 +569,7 @@ fn no_description_says_that_private_content_closes_processors() {
         .as_str()
         .expect("a kind description")
         .to_string();
-    assert!(
-        kind.contains("lists, searches and runs processors: use it to find something out"),
-        "{kind}"
-    );
+    assert!(kind.contains("reader reads and runs processors"), "{kind}");
     assert!(!kind.contains("holds nothing private"), "{kind}");
 }
 
@@ -591,12 +581,10 @@ fn no_description_says_that_private_content_closes_processors() {
 #[test]
 fn the_write_to_a_file_is_described_only_where_the_list_holds_write_file() {
     let with = description_of(&the_table_without(&[]), "spawn_processor");
-    let to_a_file = "Then give the answer's reference to run as stdin_ref, or write the \
-                     answer with write_file and contents_ref to a new file in the scratch \
-                     directory and run the program that sends it with the file's path as an \
-                     argument, so it reads the body from the file.";
-    let stdin_alone = "Then give the answer's reference to run as stdin_ref, in the line of \
-                       the program that sends it.";
+    let to_a_file = "To send the answer, give its reference to run as stdin_ref, or write \
+                     it with write_file to a new file in the scratch directory and pass that \
+                     path.";
+    let stdin_alone = "To send the answer, give its reference to run as stdin_ref.";
     assert!(
         with.contains(to_a_file) && names_the_tool(&with, "write_file"),
         "a list holding every tool is not told it may write the answer to a file: {with}"
@@ -622,8 +610,8 @@ fn the_write_to_a_file_is_described_only_where_the_list_holds_write_file() {
     assert!(
         unwritable.contains(stdin_alone)
             && !unwritable.contains("scratch directory")
-            && unwritable.contains("Do not leave it to a script you write")
-            && unwritable.contains("The recipient and the subject are yours"),
+            && unwritable.contains("a script you write can only cut the original down")
+            && unwritable.contains("Recipient and subject are yours"),
         "a list without write_file lost more than the write to a file: {unwritable}"
     );
 
@@ -642,11 +630,7 @@ fn the_read_output_description_names_vet_content_only_where_the_list_holds_it() 
     assert!(!names_the_tool(&without, "vet_content"), "{without}");
     assert_eq!(
         without,
-        with.replace(
-            "For anything else you are holding a reference to, vet_content is the question \
-             to ask. ",
-            ""
-        ),
+        with.replace("ask vet_content for other references. ", ""),
         "taking vet_content off changed more than the sentence about it"
     );
     // Taking another tool off leaves the sentence.
@@ -657,12 +641,12 @@ fn the_read_output_description_names_vet_content_only_where_the_list_holds_it() 
 /// What the description of `run` says to do with the output that comes back as a reference.
 fn run_says_of_its_reference(offered: &[bravebot_aichat::protocol::Tool]) -> String {
     let run = description_of(offered, "run");
-    let from = "otherwise it comes back as a reference, like a file you may not read";
+    let from = "else a reference";
     let start = run
         .find(from)
         .unwrap_or_else(|| panic!("{from:?} is not in {run}"));
     let end = run[start..]
-        .find(" Do use it to compile and test what you changed.")
+        .find(". Before asking")
         .unwrap_or_else(|| panic!("the sentence about the output does not end: {run}"))
         + start;
     run[start..end].to_string()
@@ -676,50 +660,31 @@ fn a_list_holding_every_tool_gets_the_fetch_job_and_run_texts_it_always_had() {
     let everything = the_table_without(&[]);
     assert_eq!(
         description_of(&everything, "fetch_url"),
-        "Fetch an http or https URL. Not the way to read a github.com pull request or issue \
-         where the prompt says the GitHub CLI is on PATH, which names the commands that are. \
-         What comes back is quarantined, like a file nobody vouched for: you get a reference \
-         rather than the text, and you cannot read it or be told what it says. Hand the \
-         reference to spawn_processor to have a question answered about it, or to write_file \
-         as contents_ref to save it. Where you have to read the page yourself, vet_content is \
-         the question to ask. The user is asked before anything leaves the machine."
+        "Fetch an http or https URL, but not a github.com pull request or issue where the \
+         prompt says the GitHub CLI is on PATH. The result is a quarantined reference you \
+         cannot read. Give it to spawn_processor with a question, or to write_file as \
+         contents_ref. To read the page yourself, ask vet_content. The user is asked before \
+         anything leaves the machine."
     );
     assert_eq!(
         description_of(&everything, "job_output"),
-        "See what a background job has printed, and whether it has ended. Give the job name \
-         run handed back. Each call hands back a slice of what the job printed since your \
-         previous look, so calling it again after doing something else shows what happened \
-         in between rather than repeating what you have seen. The result gives the range of \
-         lines the slice covers, and the earlier slices are in the earlier references the \
-         result lists, so a line printed before this slice is in one of those and not in \
-         this one. Output is quarantined exactly as a run's is: it comes \
-         back as text where the user vouched for every command in the line, and otherwise as \
-         a reference to pass to read_output, spawn_processor or write_file. Use wait_seconds \
-         to wait for the job rather than asking it again and again. Without it a wait costs \
-         a whole turn per look: you call, are told nothing has happened, and answer only to \
-         be asked the same question. A wait ends at the job's next output, so a job that \
-         prints a line every second ends it every second. A line the user types while you \
-         wait also ends the wait, with the job still running, so you can answer it. When \
-         what you need is the end of the job and not its output as it arrives, add \
-         until_exit: true, which waits for the job to end or for wait_seconds to run out and \
-         returns what it printed since your last look in one answer. It is still a wait \
-         inside this turn, so it cannot tell you about anything that happens after the turn \
-         ends, and the account of the job's start says whether it is killed then or kept. \
-         Repeated waits on a job that is still running are not held. The same job_output \
-         call without wait_seconds, or on a job that has ended, is held at the third in a \
-         row. A wait longer than the prompt cache lifetime makes the next request write the \
-         whole conversation to the cache again, so wait_seconds is bounded under that \
-         lifetime: call again to keep watching."
+        "See what a background job printed since your last look, and whether it ended. Each \
+         look is a slice; the result gives its line range, and earlier slices are in the \
+         references it lists. Output is quarantined as a run's is: text where the user \
+         vouched for every command in the line, otherwise a reference to pass to \
+         read_output, spawn_processor or write_file. wait_seconds waits for new output, the \
+         end or a typed line; until_exit waits for the end. A wait stays inside this turn; \
+         the job's start says whether it outlives the turn. The same call without \
+         wait_seconds, or on an ended job, is held at the third in a row."
     );
     let run = description_of(&everything, "run");
     assert!(
         run.contains(
-            "Output comes back as text you can read where the user has vouched for every \
-             command in the line; otherwise it comes back as a reference, like a file you may \
-             not read: pass it to read_output to see it, hand it to spawn_processor, or write \
-             it to a file with write_file. A summary, a translation or other text made from \
-             it is written by spawn_processor, whose description says how that text reaches a \
-             program. Do use it to compile and test what you changed."
+            "Output is text where the user vouched for every command in the line, else a \
+             reference: read it with read_output, give it to spawn_processor, or save it \
+             with write_file. Text made from it, such as a summary, is written by \
+             spawn_processor, whose description says how it reaches a program. Before \
+             asking"
         ),
         "{run}"
     );
@@ -734,14 +699,9 @@ fn a_list_holding_every_tool_gets_the_fetch_job_and_run_texts_it_always_had() {
         .to_string();
     assert_eq!(
         background,
-        "Leave it running instead of waiting for it, and hand back a job name. For a program \
-         meant to keep going: a server, a watcher, a log follower. Use it when you need the \
-         program still up while you do something else, such as starting a server and then \
-         fetching a page from it. While this turn is still going you are told when it ends, \
-         with how it ended and what it printed, so nothing has to poll for that. Call \
-         job_output with the name to see what it has printed before then. Must be one pipeline \
-         with no redirection, and it is killed when this turn ends. Defaults to false, which \
-         waits and hands back the output."
+        "Leave it running and return a job name; you are told when it ends during this turn. \
+         job_output shows its output. One pipeline, no redirection; killed when the turn \
+         ends."
     );
 
     // The pass over a list holding every tool is the table's own text.
@@ -772,21 +732,17 @@ fn a_list_holding_every_tool_gets_the_fetch_job_and_run_texts_it_always_had() {
 #[test]
 fn the_fetch_description_names_only_the_tools_the_list_holds() {
     let with = description_of(&the_table_without(&[]), "fetch_url");
-    let moves = " Hand the reference to spawn_processor to have a question answered about it, \
-                 or to write_file as contents_ref to save it.";
-    let reading = " Where you have to read the page yourself, vet_content is the question to \
-                   ask.";
+    let moves = " Give it to spawn_processor with a question, or to write_file as \
+                 contents_ref.";
+    let reading = " To read the page yourself, ask vet_content.";
     assert!(with.contains(moves) && with.contains(reading), "{with}");
 
     for (gone, expected) in [
         (
             "spawn_processor",
-            " Hand the reference to write_file as contents_ref to save it.",
+            " Give it to write_file as contents_ref to save it.",
         ),
-        (
-            "write_file",
-            " Hand the reference to spawn_processor to have a question answered about it.",
-        ),
+        ("write_file", " Give it to spawn_processor with a question."),
     ] {
         let without = description_of(&the_table_without(&[gone]), "fetch_url");
         assert!(!names_the_tool(&without, gone), "{without}");
@@ -807,7 +763,7 @@ fn the_fetch_description_names_only_the_tools_the_list_holds() {
         "taking all three off changed more than the sentences about them"
     );
     assert!(
-        bare.contains("you cannot read it or be told what it says. The user is asked before"),
+        bare.contains("reference you cannot read. The user is asked before"),
         "{bare}"
     );
 }
@@ -826,24 +782,18 @@ fn the_web_search_description_names_only_the_tools_the_list_holds() {
                 cannot read it or be told what it says.";
     let tail = " The user is asked before the query leaves the machine, and it is sent to the \
                 Brave Search API and nowhere else.";
-    let reading = " Where you have to read the results yourself, vet_content is the question \
-                   to ask.";
+    let reading = " To read the results yourself, ask vet_content.";
     for (spawn, write, moves) in [
         (
             true,
             true,
-            " Hand the reference to spawn_processor to have a question answered about it, or \
-             to write_file as contents_ref to save it.",
+            " Give it to spawn_processor with a question, or to write_file as contents_ref.",
         ),
-        (
-            true,
-            false,
-            " Hand the reference to spawn_processor to have a question answered about it.",
-        ),
+        (true, false, " Give it to spawn_processor with a question."),
         (
             false,
             true,
-            " Hand the reference to write_file as contents_ref to save it.",
+            " Give it to write_file as contents_ref to save it.",
         ),
         (false, false, ""),
     ] {
@@ -876,21 +826,21 @@ fn the_web_search_description_names_only_the_tools_the_list_holds() {
 #[test]
 fn the_job_output_description_names_only_the_tools_the_list_holds() {
     let full = description_of(&the_table_without(&[]), "job_output");
-    let sentence = "otherwise as a reference to pass to read_output, spawn_processor or \
+    let sentence = "otherwise a reference to pass to read_output, spawn_processor or \
                     write_file.";
     assert!(full.contains(sentence), "{full}");
     for (gone, expected) in [
         (
             "read_output",
-            "otherwise as a reference to pass to spawn_processor or write_file.",
+            "otherwise a reference to pass to spawn_processor or write_file.",
         ),
         (
             "spawn_processor",
-            "otherwise as a reference to pass to read_output or write_file.",
+            "otherwise a reference to pass to read_output or write_file.",
         ),
         (
             "write_file",
-            "otherwise as a reference to pass to read_output or spawn_processor.",
+            "otherwise a reference to pass to read_output or spawn_processor.",
         ),
     ] {
         let without = description_of(&the_table_without(&[gone]), "job_output");
@@ -900,16 +850,13 @@ fn the_job_output_description_names_only_the_tools_the_list_holds() {
     for (kept, expected) in [
         (
             "read_output",
-            "otherwise as a reference to pass to read_output.",
+            "otherwise a reference to pass to read_output.",
         ),
         (
             "spawn_processor",
-            "otherwise as a reference to pass to spawn_processor.",
+            "otherwise a reference to pass to spawn_processor.",
         ),
-        (
-            "write_file",
-            "otherwise as a reference to pass to write_file.",
-        ),
+        ("write_file", "otherwise a reference to pass to write_file."),
     ] {
         let all = ["read_output", "spawn_processor", "write_file"];
         let gone: Vec<&str> = all.into_iter().filter(|name| *name != kept).collect();
@@ -922,7 +869,7 @@ fn the_job_output_description_names_only_the_tools_the_list_holds() {
     );
     assert_eq!(
         bare,
-        full.replace(sentence, "otherwise as a reference."),
+        full.replace(sentence, "otherwise a reference."),
         "taking all three off changed more than the sentence about them"
     );
 }
@@ -953,9 +900,9 @@ fn the_job_output_description_says_a_look_is_a_slice_and_earlier_slices_are_earl
     ] {
         let said = description_of(&offered, "job_output");
         for stated in [
-            "a slice of what the job printed since your previous look",
-            "gives the range of lines the slice covers",
-            "earlier slices are in the earlier references the result lists",
+            "Each look is a slice",
+            "the result gives its line range",
+            "earlier slices are in the references it lists",
         ] {
             assert!(
                 said.contains(stated),
@@ -986,33 +933,29 @@ fn the_run_description_names_only_the_tools_the_list_holds() {
     let in_full = run_says_of_its_reference(&the_table_without(&[]));
     assert_eq!(
         in_full,
-        "otherwise it comes back as a reference, like a file you may not read: pass it to \
-         read_output to see it, hand it to spawn_processor, or write it to a file with \
-         write_file. A summary, a translation or other text made from it is written by \
-         spawn_processor, whose description says how that text reaches a program."
+        "else a reference: read it with read_output, give it to spawn_processor, or save it \
+         with write_file. Text made from it, such as a summary, is written by \
+         spawn_processor, whose description says how it reaches a program"
     );
-    let made_from_it = " A summary, a translation or other text made from it is written by \
-                        spawn_processor, whose description says how that text reaches a \
-                        program.";
+    let made_from_it = ". Text made from it, such as a summary, is written by \
+                        spawn_processor, whose description says how it reaches a program";
     let sentence = |moves: &str, processor: bool| {
         let then = if processor { made_from_it } else { "" };
-        format!(
-            "otherwise it comes back as a reference, like a file you may not read{moves}.{then}"
-        )
+        format!("else a reference{moves}{then}")
     };
     let all = ["read_output", "spawn_processor", "write_file"];
     for (gone, moves) in [
         (
             "read_output",
-            ": hand it to spawn_processor, or write it to a file with write_file",
+            ": give it to spawn_processor, or save it with write_file",
         ),
         (
             "spawn_processor",
-            ": pass it to read_output to see it, or write it to a file with write_file",
+            ": read it with read_output, or save it with write_file",
         ),
         (
             "write_file",
-            ": pass it to read_output to see it, or hand it to spawn_processor",
+            ": read it with read_output, or give it to spawn_processor",
         ),
     ] {
         let offered = the_table_without(&[gone]);
@@ -1035,9 +978,9 @@ fn the_run_description_names_only_the_tools_the_list_holds() {
         );
     }
     for (kept, moves) in [
-        ("read_output", ": pass it to read_output to see it"),
-        ("spawn_processor", ": hand it to spawn_processor"),
-        ("write_file", ": write it to a file with write_file"),
+        ("read_output", ": read it with read_output"),
+        ("spawn_processor", ": give it to spawn_processor"),
+        ("write_file", ": save it with write_file"),
         ("", ""),
     ] {
         let gone: Vec<&str> = all.into_iter().filter(|name| *name != kept).collect();
@@ -1067,10 +1010,7 @@ fn the_run_description_names_only_the_tools_the_list_holds() {
     assert!(!names_the_tool(&without_it, "job_output"), "{without_it}");
     assert_eq!(
         without_it,
-        with_it.replace(
-            " Call job_output with the name to see what it has printed before then.",
-            ""
-        ),
+        with_it.replace(" job_output shows its output.", ""),
         "taking job_output off changed more than the sentence about it"
     );
 }
@@ -1094,14 +1034,10 @@ fn argument_of(offered: &[bravebot_aichat::protocol::Tool], tool: &str, argument
 /// table always wrote.
 #[test]
 fn the_run_description_on_watching_names_only_the_tools_the_list_holds() {
-    let old = "A file takes no command at all: read_file hands back a change token, and \
-               comparing the token from one look with the token from the next is the whole \
-               of the technique. A program's own output is watched here: start it with \
-               background: true and call job_output with wait_seconds, which is one call \
-               covering a window rather than a look per turn. Neither reaches past this turn \
-               by itself: a background job is killed when the turn ends unless the account \
-               of its start says the session keeps it, and comparing a token needs a later \
-               look.";
+    let old = "A file is watched by comparing read_file's change token between looks, a \
+               program by running it with background: true and calling job_output with \
+               wait_seconds. Neither reaches past this turn: a background job is killed \
+               when the turn ends unless its start says the session keeps it.";
     let full = description_of(&the_table_without(&[]), "run");
     assert!(
         full.contains(old),
@@ -1121,30 +1057,23 @@ fn the_run_description_on_watching_names_only_the_tools_the_list_holds() {
         "the table and a pass over a full list disagree"
     );
 
-    let file_gone = "A file is watched by comparing what one look at it returned with what \
-                     the next look returns.";
-    let program_gone = "A program's own output is watched here: start it with background: \
-                        true, and you are told when it ends.";
-    let neither = "Neither reaches past this turn by itself: a background job is killed when \
-                   the turn ends unless the account of its start says the session keeps it, \
-                   and";
+    let file_gone = "A file is watched by comparing one look with the next,";
+    let program_gone = "a program by running it with background: true.";
+    let neither = "Neither reaches past this turn: a background job is killed when the turn \
+                   ends unless its start says the session keeps it.";
     for (gone, expected) in [
         (
             "read_file",
             format!(
-                "{file_gone} A program's own output is watched here: start it with \
-                 background: true and call job_output with wait_seconds, which is one call \
-                 covering a window rather than a look per turn. {neither} comparing two \
-                 looks needs a later look."
+                "{file_gone} a program by running it with background: true and calling \
+                 job_output with wait_seconds. {neither}"
             ),
         ),
         (
             "job_output",
             format!(
-                "A file takes no command at all: read_file hands back a change token, and \
-                 comparing the token from one look with the token from the next is the \
-                 whole of the technique. {program_gone} {neither} comparing a token needs a \
-                 later look."
+                "A file is watched by comparing read_file's change token between looks, \
+                 {program_gone} {neither}"
             ),
         ),
     ] {
@@ -1166,12 +1095,7 @@ fn the_run_description_on_watching_names_only_the_tools_the_list_holds() {
     }
     assert_eq!(
         bare,
-        full.replace(
-            old,
-            &format!(
-                "{file_gone} {program_gone} {neither} comparing two looks needs a later look."
-            )
-        )
+        full.replace(old, &format!("{file_gone} {program_gone} {neither}"))
     );
 }
 
@@ -1182,18 +1106,14 @@ fn the_job_output_read_argument_names_read_output_only_where_the_list_holds_it()
     let full = argument_of(&the_table_without(&[]), "job_output", "read");
     assert!(names_the_tool(&full, "read_output"), "{full}");
     assert!(
-        full.contains(
-            "The account of the job's end that the turn gives you follows your \
-                       latest look's read."
-        ),
+        full.contains("The report of the job's end follows the latest look's read."),
         "{full}"
     );
     let without = argument_of(&the_table_without(&["read_output"]), "job_output", "read");
     assert!(!names_the_tool(&without, "read_output"), "{without}");
     assert_eq!(
         without,
-        "Ask to read what the job printed in this result. This changes nothing in this turn: \
-         output you may not read comes back as a reference. Defaults to false."
+        "Changes nothing in this turn; output you may not read stays a reference."
     );
 }
 
@@ -1204,22 +1124,14 @@ fn the_run_read_argument_names_read_output_only_where_the_list_holds_it() {
     let full = argument_of(&the_table_without(&[]), "run", "read");
     assert_eq!(
         full,
-        "Ask to read what the command prints in this result. Where read_output would hand it \
-         to you without asking the user, or would hand it back at once, it comes back here \
-         as text you can read, and there is no read_output call to make. Where it would be \
-         kept back, it still comes back as a reference. Output too long for one result still \
-         comes back as a reference, with its size, and read_output is not held to that size. \
-         Everywhere else this changes nothing, and output you may not read still comes back \
-         as a reference. Defaults to false. Not with background: true, which has printed \
-         nothing yet."
+        "Return the output as text here where read_output would release it without asking; \
+         otherwise, or if too long, a reference."
     );
     let without = argument_of(&the_table_without(&["read_output"]), "run", "read");
     assert!(!names_the_tool(&without, "read_output"), "{without}");
     assert_eq!(
         without,
-        "Ask to read what the command prints in this result. This changes nothing in this \
-         turn: output you may not read comes back as a reference. Defaults to false. Not \
-         with background: true, which has printed nothing yet."
+        "Changes nothing in this turn; output you may not read stays a reference."
     );
     // Taking another tool off leaves the words alone.
     for other in ["spawn_processor", "job_output", "write_file", "read_file"] {
@@ -1237,12 +1149,10 @@ fn the_run_read_argument_names_read_output_only_where_the_list_holds_it() {
 #[test]
 fn the_read_file_description_names_only_the_tools_the_list_holds() {
     let full = description_of(&the_table_without(&[]), "read_file");
-    let to_the_processor = " Give that reference to spawn_processor with a question about it \
-                            and the answer comes back the way any processor's does. That is \
-                            how to check a screenshot or read a scanned page.";
-    let to_edit = ": edit_file changes a cell by that number.";
+    let to_the_processor = "; give it to spawn_processor with a question";
+    let to_edit = "; edit_file edits a cell by number";
     assert!(
-        full.contains(&format!("whoever vouched for the directory it is in.{to_the_processor} A .ipynb notebook comes back as its cells, numbered from 1, with their source only{to_edit} Saved outputs")),
+        full.contains(&format!("whoever vouched for it{to_the_processor}. A .ipynb notebook comes back as its cells' source numbered from 1{to_edit}; outputs come only through output_of.")),
         "a list holding both lost the words it had: {full}"
     );
     let output_of = |offered: &[bravebot_aichat::protocol::Tool]| {
@@ -1250,7 +1160,7 @@ fn the_read_file_description_names_only_the_tools_the_list_holds() {
     };
     let full_output_of = output_of(&the_table_without(&[]));
     assert!(
-        full_output_of.contains("They come back as a reference for spawn_processor, never as text"),
+        full_output_of.contains("as a reference for spawn_processor"),
         "{full_output_of}"
     );
 
@@ -1271,14 +1181,14 @@ fn the_read_file_description_names_only_the_tools_the_list_holds() {
     let without_edit = the_table_without(&["edit_file"]);
     let described = description_of(&without_edit, "read_file");
     assert!(!names_the_tool(&described, "edit_file"), "{described}");
-    assert_eq!(described, full.replace(to_edit, "."));
+    assert_eq!(described, full.replace(to_edit, ""));
     assert_eq!(output_of(&without_edit), full_output_of);
 
     let neither = the_table_without(&["spawn_processor", "edit_file"]);
     let bare = description_of(&neither, "read_file");
     assert_eq!(
         bare,
-        full.replace(to_the_processor, "").replace(to_edit, ".")
+        full.replace(to_the_processor, "").replace(to_edit, "")
     );
 }
 
@@ -1288,17 +1198,14 @@ fn the_read_file_description_names_only_the_tools_the_list_holds() {
 #[test]
 fn the_write_file_reference_argument_names_spawn_processor_only_where_the_list_holds_it() {
     let full = argument_of(&the_table_without(&[]), "write_file", "contents_ref");
-    let lands = " What spawn_processor produced may be written only over the file that call \
-                 was about. When the call read only references that are no file, such as a \
-                 fetched page or a run's output, it may be written only to a new file in \
-                 the scratch directory.";
+    let lands = " A spawn_processor answer may go only over the file that call was about, \
+                 or, where it read no file, to a new file in the scratch directory.";
     assert_eq!(
         full,
         format!(
-            "A reference whose quarantined content becomes the whole file, e.g. \"ref:2\". \
-             This is how to write out something you were never shown, such as a fetched \
-             page.{lands} A picture or PDF reference is written as the file it encodes, to a \
-             path you name ending in its extension, such as .png."
+            "A reference whose quarantined content becomes the file, such as a fetched \
+             page.{lands} A picture or PDF is written as the file it encodes, to a path with \
+             its extension."
         )
     );
     let without = argument_of(
@@ -1322,20 +1229,15 @@ fn the_write_file_reference_argument_names_spawn_processor_only_where_the_list_h
 #[test]
 fn the_edit_file_description_names_write_file_only_where_the_list_holds_it() {
     let full = description_of(&the_table_without(&[]), "edit_file");
-    let prefer = " Prefer this to write_file when changing part of a file: a diff is easier \
-                  to review than a whole body.";
+    let prefer = " Prefer it to write_file for part of a file.";
     assert_eq!(
         full,
         format!(
-            "Replace an exact passage of text in an existing workspace file.{prefer} An \
-             edit inside a directory the user vouched for is applied without a prompt; \
-             elsewhere the user approves each edit as a diff before it happens unless a \
-             permission rule or mode answers for them. Explain what you are changing \
-             either way. To change several places in one file, give them together in \
-             edits: they are one diff. In a .ipynb notebook, name a cell \
-             by the number a read showed instead of a passage: give cell and new_text to \
-             replace that cell's source (its saved outputs are dropped), or cell_action \
-             insert_after or delete."
+            "Replace an exact passage in a workspace file.{prefer} In a directory the user \
+             vouched for it applies without a prompt; elsewhere the user approves the diff \
+             unless a permission rule or mode answers. edits applies several passages as one \
+             diff. In a .ipynb notebook, cell and new_text replace a cell's source, or use \
+             cell_action."
         )
     );
     let without = description_of(&the_table_without(&["write_file"]), "edit_file");
@@ -1361,7 +1263,8 @@ fn the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces()
     let edit = description_of(&table, "edit_file");
     for (name, text) in [("write_file", &write), ("edit_file", &edit)] {
         assert!(
-            text.contains("inside a directory the user vouched for is applied without a prompt"),
+            text.contains("In a directory the user vouched for it applies without a prompt")
+                && text.contains("elsewhere the user approves"),
             "{name}: {text}"
         );
         assert!(
@@ -1369,12 +1272,9 @@ fn the_writing_tools_describe_when_the_user_is_asked_and_what_a_write_replaces()
             "{name} still says every call needs approval: {text}"
         );
     }
+    assert!(write.contains("replaces an existing file whole"), "{write}");
     assert!(
-        write.contains("replaces it whole and the old contents are gone"),
-        "{write}"
-    );
-    assert!(
-        write.contains("read or list the path first when the file may exist"),
+        write.contains("read or list the path first if one may exist"),
         "{write}"
     );
 }
@@ -1476,24 +1376,23 @@ fn a_processor_is_described_as_the_writer_of_text_made_from_content_not_shown() 
     let description = processor_description(Running::Offered);
     for stated in [
         // The kinds of text, in the words a person asks for them in.
-        "A summary, a translation, a rewrite, an explanation or a list of the points made of \
-         content you were not shown is written by this tool",
+        "Summaries, translations, rewrites, explanations and lists of points made from \
+         content you were not shown are written by this tool",
         // The form is named in the instruction, so a summary comes back as the one asked for.
-        "Ask for the form wanted, for example a plain-text summary of each of six stories, \
-         two sentences each, with each link kept",
+        "Ask for the form, e.g. a plain-text summary of each of six stories, two sentences \
+         each, with each link kept",
         // A script that scrapes cannot summarise, which is the defect the planner showed.
-        "Do not leave it to a script you write, which can only cut the original down",
+        "a script you write can only cut the original down",
         // A reference that is no file is named in reads as it is.
-        "A fetched page or a run's output needs no file: name its reference in reads",
+        "Name a fetched page or run output in reads directly",
         // Where the answer goes (PROC-6).
-        "give the answer's reference to run as stdin_ref, or write the answer with write_file \
-         and contents_ref to a new file in the scratch directory and run the program that \
-         sends it with the file's path as an argument, so it reads the body from the file",
+        "To send the answer, give its reference to run as stdin_ref, or write it with \
+         write_file to a new file in the scratch directory and pass that path",
         // The head of the message is the planner's and only the body is derived.
-        "The recipient and the subject are yours and only the body comes from the processor",
+        "Recipient and subject are yours; only the body is the processor's",
         // What the person is told afterwards.
-        "Your final message says what was sent and to whom",
-        "Call the text a summary in your final message only if a processor wrote one",
+        "Say what was sent to whom",
+        "call text a summary only if a processor wrote it",
     ] {
         assert!(
             description.contains(stated),
@@ -1519,10 +1418,11 @@ fn a_processor_is_described_as_the_writer_of_text_made_from_content_not_shown() 
 fn the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one() {
     let withheld = processor_description(Running::Withheld);
     for stated in [
-        "A summary, a translation, a rewrite, an explanation or a list of the points made of \
-         content you were not shown is written by this tool",
-        "Ask for the form wanted, for example a plain-text summary of each of six stories",
-        "Call the text a summary in your final message only if a processor wrote one",
+        "Summaries, translations, rewrites, explanations and lists of points made from \
+         content you were not shown are written by this tool",
+        "ask for the form, e.g. a plain-text summary of each of six stories, two sentences \
+         each, with each link kept",
+        "Call text a summary only if a processor wrote it",
     ] {
         assert!(
             withheld.contains(stated),
@@ -1530,7 +1430,7 @@ fn the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one(
         );
     }
     let offered = processor_description(Running::Offered);
-    for run_only in ["run", "script", "stdin_ref", "sends it"] {
+    for run_only in ["run", "script", "stdin_ref", "To send the answer"] {
         assert!(
             offered.contains(run_only),
             "'{run_only}' is not in the text of a turn with run, so the check below shows \
@@ -1542,7 +1442,7 @@ fn the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one(
         );
     }
     assert!(
-        offered.contains("give the answer's reference to run as stdin_ref"),
+        offered.contains("give its reference to run as stdin_ref"),
         "a turn with run is not sent to it: {offered}"
     );
 }
@@ -1574,14 +1474,11 @@ fn the_processor_instruction_does_not_forbid_asking_for_a_summary() {
         "the instruction forbids the document a person may have asked for: {instruction}"
     );
     assert!(
-        instruction.contains("no remarks about what it did, no code fence"),
+        instruction.contains("the whole document and nothing else, no remarks about what it did"),
         "the instruction does not ask for the document alone: {instruction}"
     );
     assert!(
-        instruction.contains(
-            "Where the document is itself a summary, a translation or an explanation, name \
-             that form and its length"
-        ),
+        instruction.contains("For a summary, translation or explanation, name the form and length"),
         "the instruction does not tell the planner to name the form: {instruction}"
     );
 
@@ -1632,10 +1529,8 @@ fn the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_wr
         );
         assert!(
             described.contains(
-                "What spawn_processor produced may be written only over the file that call \
-                 was about. When the call read only references that are no file, such as a \
-                 fetched page or a run's output, it may be written only to a new file in \
-                 the scratch directory."
+                "A spawn_processor answer may go only over the file that call was about, or, \
+                 where it read no file, to a new file in the scratch directory."
             ),
             "contents_ref does not say where a processor's answer may go ({running:?}): \
              {described}"
