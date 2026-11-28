@@ -33178,6 +33178,48 @@ fn the_planner_is_told_to_spawn_before_doing_the_work_itself() {
     );
 }
 
+/// The paragraphs that tell a planner when to ask the person say to decide what is a
+/// conventional choice and to look up what it can find out, but neither named the request itself
+/// as a source of an answer: a planner reading only those examples could still ask whether to do
+/// what it was asked, or ask something the request already said, since the request is nowhere
+/// named as a thing to read before asking. A recorded session asked "How should the email be
+/// sent?" after the request said to send it from Gmail.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_planner_is_told_not_to_ask_what_the_request_already_answered() {
+    let scratch = Scratch::new("ask-user-request-already-answered");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(&reply_with("the answer"));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("do the work"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let body = received.recv().expect("request body");
+    assert!(
+        body.contains("start the work instead of asking for the go-ahead it already gave you"),
+        "the planner was not told that a request already decided whether to act on it: {body}"
+    );
+    assert!(
+        body.contains(
+            "asking it back wastes a round and reads as though you had not read the \
+                       request"
+        ),
+        "the planner was not told not to ask what the request already said: {body}"
+    );
+}
+
 /// A planner that never compiles what it wrote reports work it has not checked. The instruction
 /// to build and test has to reach the model on every turn, not only where a project happens to
 /// state it: a repository with no AGENTS.md is the case where nothing else will say so.
