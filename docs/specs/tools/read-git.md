@@ -22,6 +22,7 @@ governs:
   - crates/agent/src/workspace/other_names.rs
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
+  - crates/core/src/paging.rs
   - crates/core/src/policy.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
@@ -354,7 +355,8 @@ from the one git would, and the rules were held against files it did not read.
 
 A log lists 20 commits, a list of tags 20 tags and a search 20 lines unless the planner names a
 count, and never more than 200. An answer holds at most 2,000 lines and each line at most 2,000
-characters. A file past 1 MiB is described by its size, read from the object's header alone, and
+characters, and a page of a log with messages holds at most 20,000 bytes ([GIT-12](#GIT-12)). A
+file past 1 MiB is described by its size, read from the object's header alone, and
 not searched. A diff reads a file up to 4 MiB: it compares only the lines between the first line
 that differs and the last, so a one-line change in a file of 1.6 MB prints its hunk at the line
 numbers the file has. A side past 4 MiB is described by its size and not diffed. A higher cap for
@@ -385,6 +387,7 @@ though it were the whole draws conclusions from what is missing.
 `verified-by: bravebot_agent::tools::tests::delegate_offers::a_status_out_of_time_names_what_narrows_a_status_and_a_log_keeps_its_advice`
 `verified-by: bravebot_agent::git::a_listing_or_a_diff_that_fills_the_answer_says_it_was_cut_only_when_more_was_left`
 `verified-by: bravebot_agent::turn::a_log_lists_twenty_commits_unasked_and_never_more_than_two_hundred`
+`verified-by: bravebot_agent::git::a_message_over_a_page_of_bytes_is_shown_as_far_as_it_fits`
 
 <a id="GIT-10"></a>
 ### GIT-10: status lists what `git status --short --no-renames` lists
@@ -478,25 +481,31 @@ closed.
 
 `skip` passes over that many of the commits a log matches before it lists any, as `git log --skip`
 does. It counts the commits the log would list once its range, path and days are applied, not the
-commits walked on the way to them. A log that stopped with commits still to list, at its count or at
-its lines, names the skip that lists the next of them, and one that listed its last commit names
-none.
+commits walked on the way to them. A log that stopped with commits still to list, at its count, at
+its lines or, with messages, at its bytes, names the skip that lists the next of them, and one that
+listed its last commit names none.
 
 With `messages`, each commit's line is followed by the rest of its message, every line indented
-four spaces as `git show` indents it, so a line that is not indented starts a commit. A commit goes
-on a page whole or waits for the next one. The exception is a commit whose message alone is longer
-than an answer, which is shown as far as it fits and cut, so that the next skip moves past it.
+four spaces as `git show` indents it, so a line that is not indented starts a commit. A page with
+messages holds at most 20,000 bytes as well as at most 2,000 lines. A commit goes on a page whole or
+waits for the next one. The exception is a commit whose message alone is longer than an answer or
+than 20,000 bytes, which is shown as far as its whole lines fit and cut, so that the next skip moves
+past it.
 
 **Why.** A commit's body is where it says why it was made and what it closes, and a history longer
 than one answer is common. A planner given neither reruns git through `run`, where the answer may be
 sealed, or narrows the question until commits drop out of it. A skip that counted walked commits
 would pass over a different set from the one the planner was shown, and a message cut at the foot of
-a page would be read as the whole of it.
+a page would be read as the whole of it. A page of whole messages under 2,000 lines can still hold
+over 100,000 bytes, and every later request in the turn sends the answer again.
 
 `verified-by: bravebot_agent::turn::read_git_pages_through_a_log_and_shows_whole_messages_when_asked`
 `verified-by: bravebot_agent::git::a_log_with_messages_prints_each_commit_whole_beneath_its_line`
 `verified-by: bravebot_agent::git::skip_passes_over_the_commits_a_log_already_listed`
 `verified-by: bravebot_agent::git::a_page_of_messages_ends_at_a_whole_commit`
+`verified-by: bravebot_agent::git::a_page_of_messages_stops_at_its_bytes_on_a_whole_commit`
+`verified-by: bravebot_agent::git::a_message_over_a_page_of_bytes_is_shown_as_far_as_it_fits`
+`verified-by: bravebot_agent::turn::read_git_bounds_a_log_of_long_messages_by_bytes_and_names_the_skip`
 
 <a id="GIT-13"></a>
 ### GIT-13: tags are listed newest version first, and with a revision only those it reaches

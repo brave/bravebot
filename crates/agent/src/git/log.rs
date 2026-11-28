@@ -10,7 +10,7 @@ use super::dates::{day, when};
 use super::objects::Info;
 use super::out::{Out, Page, nothing_past, one_line};
 use super::revision::{Spec, spec};
-use super::{Declined, MAX_COUNT, MAX_LINES, Repository, Request, SHORT, SLOP};
+use super::{Declined, MAX_COUNT, MAX_LINES, MAX_LOG_PAGE_BYTES, Repository, Request, SHORT, SLOP};
 
 impl Repository {
     /// `Some` with the skip that lists the rest, where commits were left for another page.
@@ -210,7 +210,8 @@ impl Repository {
     }
 
     /// List `id`, a commit the log matched, unless it is among the first `skip`. `Some` with the
-    /// skip that lists it, where the page is already full by its count or by its lines.
+    /// skip that lists it, where the page is already full by its count, its lines, or with
+    /// `messages` its bytes.
     fn list(
         &self,
         out: &mut Out<'_>,
@@ -229,12 +230,21 @@ impl Repository {
         let lines = self.log_entry(id, request.messages)?;
         // A commit goes on a page whole or waits for the next one, except the first: a message
         // longer than a whole answer would otherwise wait forever.
-        if page.shown > 0 && out.text.lines + lines.len() > MAX_LINES {
+        let bounded = request.messages;
+        if page.shown > 0
+            && (out.text.lines + lines.len() > MAX_LINES
+                || bounded && !out.text.fits(&lines, MAX_LOG_PAGE_BYTES))
+        {
             out.text.cut = true;
             return Ok(Some(next));
         }
         for line in &lines {
-            if !out.text.line(line) {
+            let added = if bounded {
+                out.text.line_within(line, MAX_LOG_PAGE_BYTES)
+            } else {
+                out.text.line(line)
+            };
+            if !added {
                 break;
             }
         }

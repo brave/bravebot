@@ -55,6 +55,7 @@ crates/core/src/label.rs::new: r => ensures r.integrity == integrity, r.confiden
 crates/core/src/label.rs::degrades_to: r => ensures r == crate::spec::degrades(self, other),
 crates/core/src/label.rs::is_trusted: r => ensures r == (self.integrity == Integrity::Trusted),
 crates/core/src/label.rs::is_public: r => ensures r == (self.confidentiality == Confidentiality::Public),
+crates/core/src/paging.rs::within: r => ensures r is Some <==> used + more <= most, r is Some ==> r->Some_0 == used + more,
 crates/core/src/permissions.rs::ruling_of: r => ensures r == crate::spec::ruling_of(denied, asked, allowed),
 crates/core/src/permissions.rs::pipeline_decision: r => ensures r == crate::spec::pipeline_decision(each@),
 crates/core/src/permissions.rs::pipeline_decision/loop: invariant at <= each.len(), denied == crate::spec::some_stage_is( each@.take(at as int), Decision::Ruled(Ruling::Deny), ), asked == crate::spec::some_stage_is( each@.take(at as int), Decision::Ruled(Ruling::Ask), ), all_allowed == crate::spec::every_stage_is( each@.take(at as int), Decision::Ruled(Ruling::Allow), ), decreases each.len() - at,

@@ -405,7 +405,9 @@ working tree, **without starting git**.
 `log` prints one commit per line: the first ten characters of its id, the day it was authored, its
 author and its subject. With `messages`, the rest of each commit's message follows its line,
 indented. A log that stopped with commits left names the `skip` that lists the next page, and a page
-holds whole commits. `show` prints a commit
+holds whole commits. A page with `messages` also stops at 20,000 bytes. A single commit longer than
+that is shown as far as its whole lines fit and marked as cut, and the next `skip` moves past it.
+`show` prints a commit
 with its message and diff, a tag with its message and then its commit, or a file or directory at a
 revision. `diff` compares two commits. Two edits far apart in a file show as two hunks, and a one-line change in a file of up to 4 MiB prints its hunk at the line numbers the file has. A side past 4 MiB, and a file past 1 MiB that a `search` would read, is described by its size and named with `read_file` on the working copy and `run`, each only where the session holds it. Where a stretch of a file cannot be lined up, the answer says which line ranges differ and gives the lines removed and added as upper limits. A merge is shown without a diff and says which diff to ask for.
 `tags` lists tags newest version first, as `git tag --sort=-v:refname` does, and given a revision

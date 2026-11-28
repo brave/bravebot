@@ -893,3 +893,11 @@ replace: push_rows(out, &parts.sockets, Operation::NetworkOutbound, parts); => p
 mutation: Stamp::still_holds ignores the count of run lines where a person was asked, so a line started while they were asked voids nothing
 file: crates/core/src/file_authority.rs
 replace: self.revision == now.revision && (!person_asked || self.programs == now.programs) => self.revision == now.revision
+
+mutation: paging::within adds the counts without asking whether they fit, so a sum past usize wraps to a small number that reads as fitting
+file: crates/core/src/paging.rs
+replace: if used > most || more > most - used { => if false {
+
+mutation: paging::within lets a page pass its bound by one byte
+file: crates/core/src/paging.rs
+replace: if used > most || more > most - used { => if used > most || more > most - used + 1 {
