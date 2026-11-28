@@ -13,7 +13,8 @@ use bravebot_core::delegate::Definitions;
 /// shortening left it at 31,020 bytes and shortening `run`'s confinement statement at 30,718.
 /// Sentences that spec clauses require (the asked-again sentence of READ-6 and RUN-18, the example
 /// of SPAWN-6, ASK-12's plain-words sentences, the cache cost of a longer `job_output` wait) and
-/// the `NAME=value` sentence of SANDBOX-26 brought it to 32,896. #4712's target is under 22,000
+/// the `NAME=value` sentence of SANDBOX-26 brought it to 32,896, and the sentence of `run` on
+/// quoting a pattern to 32,983. #4712's target is under 22,000
 /// bytes, which this list does not yet meet.
 const MOST_BYTES: usize = 33_000;
 

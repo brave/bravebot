@@ -1461,8 +1461,8 @@ fn table(
             "Run one command line. Pipes, &&, ||, ;, ( ), quotes, redirection, globs and {a,b} \
              work, but there is no shell: $(...), backticks, $VAR, ${...}, $?, $$, $@, $*, $#, \
              $-, $! and $'...' are refused, so write values out (`NAME=$VAR cmd` and \
-             `NAME=\"$(cmd)\" cmd` pass only where everything runs unasked). Name programs \
-             outright. Single quotes are literal, double quotes are not; a `$` before no name, \
+             `NAME=\"$(cmd)\" cmd` pass only where everything runs unasked). Single quotes \
+             are literal, double quotes are not; a `$` before no name, \
              brace, parenthesis or quote is literal. Quote a pattern meant for the program: an \
              unquoted one is replaced by the files it matches (`find . -name '*.md'`), but one \
              after an option's `=` is passed as written (`--include=*.md`). A \
@@ -1471,7 +1471,7 @@ fn table(
              `hash` or `wait` step is refused since it changes nothing for later steps; for a \
              limit or mask, write the whole line as `sh -c '... ulimit ...'`, approved as one \
              line. Narrowing inside the line is cheapest: `head -n`, `grep -l`, `grep -c`, `sed \
-             -n 40,80p`; use whichever tool returns less. The user approves the compiled plan. \
+             -n 40,80p`; use whichever tool returns less. \
              Output is text where the user vouched for every command in the line, else a \
              reference"
                 .to_string()
