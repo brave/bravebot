@@ -39,6 +39,13 @@ pub enum Declined {
     DiffNeedsTwo,
     SearchNeedsPattern,
     PatternIsForSearch(Query),
+    /// `offset` or `limit` given to a question other than show.
+    LinesAreForShow(Query),
+    /// `offset` or `limit` given to a show of `revision`, which names `is` rather than a file.
+    LinesAreForAFile {
+        revision: String,
+        is: &'static str,
+    },
     TagsTakeNoPath,
     PairIsForDiff(String),
     NoMergeBase(String),
@@ -166,6 +173,15 @@ impl Declined {
                  none.",
                 query.word()
             ),
+            Declined::LinesAreForShow(query) => format!(
+                "offset and limit choose which lines of a file show prints, named as \
+                 <revision>:<path>, and {} takes neither.",
+                query.word()
+            ),
+            Declined::LinesAreForAFile { revision, is } => format!(
+                "{revision} names {is}, not a file, and offset and limit choose which lines of a \
+                 file show prints, named as <revision>:<path>."
+            ),
             Declined::TagsTakeNoPath => "tags lists the repository's tags and takes no path; to \
                  find the commits that changed a file, use log with the path."
                 .to_owned(),
@@ -251,6 +267,8 @@ impl Declined {
             | Declined::TakesOne(..)
             | Declined::SearchNeedsPattern
             | Declined::PatternIsForSearch(_)
+            | Declined::LinesAreForShow(_)
+            | Declined::LinesAreForAFile { .. }
             | Declined::TagsTakeNoPath
             | Declined::PairIsForDiff(_)
             | Declined::NoMergeBase(_)

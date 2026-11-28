@@ -1705,6 +1705,11 @@ impl Bridge {
 
         let mut begun = self.begin_unique(&project)?;
         begun.inherit_rewind_warnings(&parent);
+        // The fork's record names the service that answered the parent until a turn of its own
+        // replaces it, as the record a terminal fork copies does (SESSION-11).
+        if let Some(service) = parent.service() {
+            begun.set_service(service);
+        }
         let parent_id = parent.id().to_string();
         let parent_title = parent.title().to_string();
         let id = begun.id().to_string();
@@ -5121,8 +5126,14 @@ fn addressed_sessions(request: &Request) -> Result<Value, Failure> {
 /// ([CLI-37](../../../docs/specs/cli.md#CLI-37)).
 ///
 /// Reads the records and writes nothing, so it needs no open session and answers the same under
-/// incognito. The model rows are the ones [`bravebot_session::stats::Totals::by_shown_model`]
-/// gives, already cleaned, with `null` for the row whose records name no model.
+/// incognito. The model rows are the ones
+/// [`bravebot_session::stats::Totals::by_shown_model_and_service`] gives, already cleaned, with
+/// `null` for the row whose records name no model and for the row whose records name no service.
+/// The service is the record's fixed word for the backend, so no row carries a word the service
+/// wrote. The hit rate, the service's shown word and the note on the sessions without cache figures
+/// are the terminal's own wording of them, in the `en-US` catalog `bravebot-rpc` chose
+/// ([LOCALE-7](../../../docs/specs/localization.md#LOCALE-7)), so the window lays them out and
+/// words none of them itself.
 fn session_stats(request: &Request) -> Result<Value, Failure> {
     use bravebot_session::stats::{Scope, Spent};
     let directory = match request.param("directory") {
@@ -5155,14 +5166,20 @@ fn session_stats(request: &Request) -> Result<Value, Failure> {
             "read": spent.split.read,
             "written": spent.split.written,
             "unsplit": spent.unsplit(),
+            "cacheRead": spent.split.cache.read_tokens,
+            "cacheWritten": spent.split.cache.written_tokens,
+            "hitRatePermille": spent.hit_rate_permille(),
+            "hitRate": spent.shown_hit_rate(),
         })
     };
     let models: Vec<Value> = totals
-        .by_shown_model()
+        .by_shown_model_and_service()
         .iter()
-        .map(|(model, spent)| {
+        .map(|((model, service), spent)| {
             let mut row = figures(spent);
             row["model"] = json!(model);
+            row["service"] = json!(service.map(bravebot_agent::BackendKind::as_str));
+            row["serviceWord"] = json!(bravebot_session::stats::service_word(*service));
             row
         })
         .collect();
@@ -5175,6 +5192,13 @@ fn session_stats(request: &Request) -> Result<Value, Failure> {
         "total": figures(&totals.all),
         "models": models,
         "unreadable": totals.unreadable,
+        // The sessions the hit rate leaves out, as the command's note on stderr counts them.
+        "withoutCache": {
+            "sessions": totals.all.without_cache(),
+            "silent": totals.all.silent_without_cache(),
+            "older": totals.all.older_without_cache,
+            "note": totals.all.without_cache_note(),
+        },
     }))
 }
 
@@ -6139,6 +6163,9 @@ fn work(work: Work) {
             if !outcome.model.is_empty() {
                 state.model = Some(outcome.model.clone());
             }
+            if outcome.backend.is_some() {
+                state.service = outcome.backend;
+            }
 
             state.answered_by_mode |= permission_mode.has_bypassed();
             sink.write_notes();
@@ -6618,6 +6645,9 @@ pub(crate) fn save(
     let handle = state
         .handle
         .get_or_insert_with(|| crate::running::begin_named(named, handed_off_from, project));
+    if let Some(service) = state.service {
+        handle.set_service(service);
+    }
     // What every turn did and the files it wrote, so a resume in either front end can say what was
     // left open (OPEN-6).
     handle.set_work(state.work);
@@ -7409,6 +7439,59 @@ mod coverage_tests {
                 "the fork of a parent with mark {marked} has the other"
             );
         }
+    }
+
+    /// SESSION-11: a desktop fork's record names the service that answered its parent until a turn of
+    /// its own replaces it, as the record a terminal fork copies does. The fault this rejects is a
+    /// fork whose new record names no service, which `bravebot stats` counts under the `unknown`
+    /// service and as a record that may be older than the cache figures.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_desktop_fork_keeps_the_service_that_answered_its_parent() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("fork-service");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("work"));
+        let record: Record = serde_json::from_value(json!({
+            "id": "service-parent", "directory": root, "title": "work",
+            "started": 1, "updated": 1, "service": "bedrock",
+            "conversation": conversation.snapshot()
+        }))
+        .unwrap();
+        let parent_state =
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            parent_state,
+            true,
+            None,
+            false,
+        ));
+
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.fork", "params": {
+                "session": parent, "prompt": 0, "text": "work"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let forked = bridge.dispatch(&request).unwrap();
+
+        let child = bridge
+            .open
+            .get(forked["session"].as_str().unwrap())
+            .unwrap();
+        let state = child.state.lock().unwrap();
+        assert_eq!(
+            state.handle.as_ref().and_then(|handle| handle.service()),
+            Some(bravebot_agent::BackendKind::Bedrock),
+            "the fork's record names no service"
+        );
     }
 
     /// SESSION-18, INSTR-14, INSTR-16: a desktop fork keeps the names of the files the parent's

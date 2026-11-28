@@ -492,6 +492,14 @@ other than the name it was given, and the record is an account of what happened.
 before either was kept reads as no model and an empty breakdown, which is not the same as a
 session that cost nothing: the total is still there.
 
+Beside the model the record keeps, under `service`, which backend answered the last turn that
+reached one, as one of the fixed words `aichat`, `bedrock`, `gateway`, `chatgpt` and `xai`. The
+program chooses the word from the backend it sent the request to, and nothing the service wrote
+decides it. A reader takes the word through the same fixed set, so a word that names none of them
+reads as no service. A record written before it was kept, and one whose turns never reached a
+server, has none. A resume keeps the word until a turn that reaches a backend replaces it, and a
+fork, in the terminal or the desktop app, starts with the word of the session it was cut from.
+
 The record also keeps how many of its tokens the model read and how many it wrote, as two running
 totals beside the total. Read is the total less what the model wrote, so a prompt the service
 answered out of its own cache is counted as read. A turn, a failed or stopped turn, a manifest run
@@ -505,11 +513,17 @@ The split also holds, under `cache`, how many of the tokens read the service ans
 cache (`read_tokens`) and how many it wrote into the cache (`written_tokens`). They are two more
 running totals that each charge adds to with the rest of its split, and they are undone, cleared,
 restored and carried by a resume with it. The session's cache hit rate is `read_tokens` over the
-tokens read. They are totals for the session and not for each turn. They are left out of the record
-while both are zero, which a service that states no cache figure reports as much as a charge that
-missed ([BACKEND-31](backends.md#BACKEND-31)), and a record written before they were kept has none.
-The status panel does not read them back. It reports the last turn run in this process, so a
-resumed session shows no cache until a turn has run in it
+tokens read. They are totals for the session and not for each turn. The record keeps them, zeros
+included, whenever a reply of the session stated a cache figure, so a session whose every request
+missed on a service that states the figures has a block of zeros, and they are left out of the
+record where no reply stated one. Whether a reply stated one is decided where its usage is parsed,
+from whether the numeric field is present, and a figure stated as `null` is not stated
+([BACKEND-31](backends.md#BACKEND-31)). A record without them is therefore a session whose service
+states no cache figure, one whose turns never reached a server, or a record written before they
+were kept. One of those that names a service ran on a service that states no cache figure, since
+the service is kept by the same builds that keep a block of zeros. A block read back is a block
+stated, so a resume writes it again. The status panel does not read them back. It reports the last
+turn run in this process, so a resumed session shows no cache until a turn has run in it
 ([PANEL-8](info-panel.md#PANEL-8)).
 
 The record also keeps the reasoning effort in force when the last turn it ran finished, as the word
@@ -549,6 +563,15 @@ than the one in force at the time.
 
 `verified-by: bravebot_tui::sessions::sessions_are_written_read_back_and_kept_per_directory`
 `verified-by: bravebot_tui::state::each_turn_records_what_it_cost_on_its_own`
+`verified-by: bravebot_session::sessions::the_service_is_kept_as_a_fixed_word_and_an_unknown_word_reads_as_none`
+`verified-by: bravebot_tui::app::tests::sessions_records::the_service_a_turn_was_answered_by_is_what_the_record_is_given`
+`verified-by: bravebot_ui_bridge::history::a_desktop_turn_records_the_service_that_answered_it`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_fork_keeps_the_service_that_answered_its_parent`
+`verified-by: bravebot_session::sessions::a_fork_keeps_the_service_that_answered_its_source`
+`verified-by: bravebot_ui_bridge::manifest::a_run_records_the_service_its_plan_was_asked_of`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_its_service_and_a_continued_one_writes_its_own`
+`verified-by: bravebot_cli::running::a_session_in_lines_records_the_service_that_answered_its_turn`
+`verified-by: bravebot_cli::running::a_stated_cache_miss_is_kept_and_counted_and_a_silent_service_is_counted_apart`
 `verified-by: bravebot_tui::state::an_aside_is_charged_to_the_turn_it_interrupted`
 `verified-by: bravebot_tui::state::an_aside_before_the_first_turn_is_charged_to_a_leading_entry`
 `verified-by: bravebot_tui::app::tests::commands_mid_turn::a_btw_answered_after_the_turn_ended_is_a_row_and_a_line_and_leaves_the_view`
@@ -586,7 +609,7 @@ than the one in force at the time.
 `verified-by: bravebot_ui_bridge::history::a_turn_records_its_split_and_a_resumed_one_adds_to_it`
 `verified-by: bravebot_ui_bridge::history::undoing_a_desktop_turn_takes_its_split_back_with_its_tokens`
 `verified-by: bravebot_cli::plain::a_failed_turn_is_charged_what_its_completed_requests_cost`
-`verified-by: bravebot_session::sessions::a_split_writes_its_cache_figures_only_when_it_has_some`
+`verified-by: bravebot_session::sessions::a_split_writes_its_cache_figures_whenever_the_service_stated_them`
 `verified-by: bravebot_session::sessions::a_record_from_before_the_cache_figures_reads_them_as_none_recorded`
 `verified-by: bravebot_session::sessions::a_cache_figure_stating_one_half_reads_the_other_as_zero`
 `verified-by: bravebot_session::sessions::adding_a_split_sums_its_cache_figures_and_saturates`
@@ -1998,9 +2021,10 @@ stay behind because they were given for work that the brief describes only in wo
   [backends.md](backends.md) carries out of a reply that states one. The record keeps it as a total
   for the session, in the split, and not for each turn, so the breakdown cannot say which turn missed
   the cache and none of the figures can be read as a bill. A service that states no cache figure
-  reads the same as one that missed. The status panel does not read the totals back, because a
-  resumed session would then report a cache it never used here; it shows the turn that just ran,
-  where the figures are a measurement rather than a history.
+  leaves no cache block in the record, and one that stated a miss leaves a block of zeros, so
+  `bravebot stats` tells the two apart ([CLI-37](cli.md#CLI-37)). The status panel does not read
+  the totals back, because a resumed session would then report a cache it never used here; it shows
+  the turn that just ran, where the figures are a measurement rather than a history.
 
 - **An imported session is read and not continued from.** Its words are drawn on a resume and are
   not in any request, so a prompt that refers back to the old session is answered by a model that

@@ -2708,6 +2708,8 @@ struct State<'s> {
     /// until a change is told to it (SANDBOX-22).
     told_sandbox: bravebot_sandbox::SandboxMode,
     turn_model: Option<String>,
+    /// The backend the latest request was sent to, which the outcome names beside the model.
+    answered_by: Option<crate::outcome::BackendKind>,
     effort: Option<Effort>,
     switched_by: Option<(String, String)>,
     notices: Vec<crate::skills::Notice>,
@@ -3817,6 +3819,7 @@ where
         },
         told_sandbox: sandbox_at_start,
         turn_model,
+        answered_by: None,
         effort,
         switched_by,
         notices,
@@ -3914,6 +3917,7 @@ where
         reply: completion.content,
         answer,
         model: completion.model,
+        backend: state.answered_by,
         steps: state.steps,
         trust,
         programs,
@@ -4112,6 +4116,7 @@ where
             if let Some(subscription) = state.subscription.as_mut() {
                 client = client.with_subscription(subscription);
             }
+            state.answered_by = Some(client.kind());
             client.complete_streaming(policy, &request, |progress| {
                 let phase = if progress.attempt > 1 && progress.output_tokens == 0 {
                     Phase::Reconnecting(progress.retry)
@@ -4400,7 +4405,11 @@ where
                     state.mcp.as_ref().map(|(offer, _)| offer),
                     &*conversation.quarantine(),
                     call,
-                    crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
+                    crate::repeated_call::refusal(
+                        &call.function.name,
+                        state.repeats.count(),
+                        plan.beside,
+                    ),
                 ))
             } else {
                 None
@@ -7426,6 +7435,7 @@ mod tests {
                                 completion_tokens: 30,
                                 cached: bravebot_aichat::protocol::Cached {
                                     read_tokens: 1100,
+                                    stated: true,
                                     ..Default::default()
                                 },
                             },

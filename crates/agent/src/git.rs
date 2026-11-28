@@ -159,6 +159,10 @@ pub struct Request<'a> {
     pub skip: usize,
     /// Whether a log prints each commit's whole message beneath its line.
     pub messages: bool,
+    /// The line of a file a show of `<revision>:<path>` starts at, counting from 1.
+    pub offset: Option<usize>,
+    /// The most lines of a file a show of `<revision>:<path>` prints, within [`MAX_LINES`].
+    pub limit: Option<usize>,
     /// What a search looks for, compiled before the repository was opened.
     pub pattern: Option<&'a crate::regex::Regex>,
     /// Seconds since the epoch; a commit older than this is not shown and not walked past.
@@ -177,6 +181,11 @@ pub struct Request<'a> {
 
 /// What a question produced.
 #[derive(Debug, Default, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about what the answer left out or stopped at, and a \
+              sentence of its own reads each one: any combination of them can hold at once"
+)]
 pub struct Answer {
     pub text: String,
     /// Repository-relative paths whose contents or names the text shows.
@@ -188,6 +197,14 @@ pub struct Answer {
     /// Where a log, a list of tags or a search stopped with more to list, the `skip` that lists
     /// the next of them.
     pub next: Option<usize>,
+    /// Where a show of a file stopped with more of its lines left, the `offset` that prints the
+    /// next of them.
+    pub next_line: Option<usize>,
+    /// Whether a line of the text was shortened at the width each line is held to.
+    pub shortened: bool,
+    /// What a show printed, so the sentence appended to a cut answer names only the arguments
+    /// that narrow it. `None` for any other question.
+    pub showed: Option<Showed>,
     pub timed_out: bool,
     /// Each run of a file's lines the text printed, so each is scanned as a read of that file.
     pub printed: Vec<Printed>,
@@ -196,6 +213,17 @@ pub struct Answer {
     pub around: String,
     /// What a status listed, as paths and not as text. `None` for any other question.
     pub listing: Option<Listing>,
+}
+
+/// What kind of object a show printed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Showed {
+    /// A commit, or the commit a tag points at.
+    Commit,
+    /// A directory as it stood at a revision.
+    Tree,
+    /// A file as it stood at a revision.
+    File,
 }
 
 /// The paths a status listed, with whether it listed them all (CHECKOUT-13).
@@ -317,6 +345,9 @@ impl Repository {
         if request.query == Query::Tags && request.path.is_some() {
             return Err(Declined::TagsTakeNoPath);
         }
+        if request.query != Query::Show && (request.offset.is_some() || request.limit.is_some()) {
+            return Err(Declined::LinesAreForShow(request.query));
+        }
         let mut out = Out {
             text: Text::default(),
             shown: Vec::new(),
@@ -329,6 +360,8 @@ impl Repository {
             listing_partial: false,
             every_untracked: request.every_untracked,
             beside: request.beside,
+            next_line: None,
+            showed: None,
         };
         let filter = match request.path {
             None => None,
@@ -365,8 +398,11 @@ impl Repository {
             text: out.text.body,
             shown,
             withheld: out.withheld_any,
-            cut: next.is_some() || out.text.cut,
+            cut: next.is_some() || out.next_line.is_some() || out.text.cut,
+            shortened: out.text.shortened,
             next,
+            next_line: out.next_line,
+            showed: out.showed,
             timed_out: out.timed_out,
             printed: out.printed,
             around: out.text.around,
@@ -510,6 +546,8 @@ mod tests {
             count: DEFAULT_COUNT,
             skip: 0,
             messages: false,
+            offset: None,
+            limit: None,
             pattern: None,
             since: None,
             until: None,
@@ -2132,6 +2170,87 @@ mod tests {
         );
     }
 
+    /// GIT-5. `offset` and `limit` choose lines of a file a show prints, so given to any other
+    /// question, or to a show of something that is not a file, each is refused by name. Dropped
+    /// without a word, a log asked for line 2001 would be read as an answer about line 2001. The
+    /// regressions it rejects are either argument dropped on any query, and a show of a commit, a
+    /// tag, a directory or a submodule that prints itself whole and ignores them. A show of a file
+    /// given them is answered.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn offset_and_limit_are_for_a_show_of_a_file_alone() {
+        let (h, _, _, _) = branchy("offset-and-limit");
+        let pinned = ObjectId::from_hex(b"1111111111111111111111111111111111111111").expect("id");
+        let with_module = h.repo.commit(
+            h.repo.tree(&[
+                ("100644", "README", h.changed),
+                ("160000", "vendor", pinned),
+            ]),
+            &[h.third],
+            T1 + 3 * DAY,
+            "pin",
+        );
+        h.repo.point("refs/heads/module", with_module);
+        let pattern = crate::regex::Regex::compile("hello").expect("compiled");
+        let repository = h.repo.opened().expect("opened");
+        let ask = |query, revision, offset, limit| {
+            let mut asked = request(query, revision, None);
+            asked.offset = offset;
+            asked.limit = limit;
+            if query == Query::Search {
+                asked.pattern = Some(&pattern);
+            }
+            repository.answer(&asked, &|_| false).map(|a| a.text)
+        };
+        for query in [
+            Query::Log,
+            Query::Diff,
+            Query::Status,
+            Query::Staged,
+            Query::Tags,
+            Query::Search,
+        ] {
+            let revision = (query == Query::Diff).then_some("HEAD~1 HEAD");
+            for (offset, limit) in [(Some(2), None), (None, Some(1)), (Some(1), Some(1))] {
+                assert_eq!(
+                    ask(query, revision, offset, limit),
+                    Err(Declined::LinesAreForShow(query)),
+                    "{query:?} {offset:?} {limit:?}"
+                );
+            }
+            assert!(
+                ask(query, revision, None, None).is_ok()
+                    || matches!(query, Query::Status | Query::Staged),
+                "{query:?} without them"
+            );
+        }
+        for (revision, is) in [
+            ("HEAD", "a commit"),
+            ("v1", "a tag"),
+            ("HEAD:src", "a directory"),
+            ("module:vendor", "a submodule"),
+        ] {
+            for (offset, limit) in [(Some(2), None), (None, Some(1))] {
+                assert_eq!(
+                    ask(Query::Show, Some(revision), offset, limit),
+                    Err(Declined::LinesAreForAFile {
+                        revision: revision.to_owned(),
+                        is
+                    }),
+                    "{revision} {offset:?} {limit:?}"
+                );
+            }
+            assert!(
+                ask(Query::Show, Some(revision), None, None).is_ok(),
+                "{revision}"
+            );
+        }
+        assert_eq!(
+            ask(Query::Show, Some("HEAD:README"), Some(2), Some(1)),
+            Ok("world\n".to_owned())
+        );
+    }
+
     /// Which release came last is the newest version, where 0.10 follows 0.9, so tags are listed
     /// as `git tag --sort=-v:refname` lists them rather than as their names sort. A tag is read
     /// wherever git reads one: loose, packed, or loose over a packed one of the same name.
@@ -2493,7 +2612,7 @@ mod tests {
             (
                 format!(
                     "src/lib.rs:3:let needle = 1;\n(zz.log is {size} bytes, more than read_git \
-                     searches; use read_file on the working copy, or run)\n"
+                     searches; use the search tool on the working copy, or run)\n"
                 ),
                 None
             )
@@ -2568,6 +2687,147 @@ mod tests {
         assert_eq!(answer.text, "");
     }
 
+    /// A show of a file at a revision prints the lines from `offset`, at most `limit` of them,
+    /// and records them with the line they start at, so a later part of a long file costs only
+    /// that part and a credential in it is reported at the line the file has. A show that stops
+    /// with lines left names the line that follows, and one that reached the file's end names
+    /// none.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_show_of_a_file_prints_the_lines_asked_for_with_their_own_numbers() {
+        let repo = Repo::new("ranged-show");
+        let lines: Vec<String> = (1..=3000).map(|n| format!("line {n}")).collect();
+        let big = repo.blob(&format!("{}\n", lines.join("\n")));
+        let commit = repo.commit(repo.tree(&[("100644", "big.rs", big)]), &[], T1, "big");
+        repo.point("refs/heads/main", commit);
+        let opened = repo.opened().expect("opened");
+        let ask = |offset: Option<usize>, limit: Option<usize>| {
+            let mut asked = request(Query::Show, Some("HEAD:big.rs"), None);
+            asked.offset = offset;
+            asked.limit = limit;
+            opened.answer(&asked, &|_| false).expect("answered")
+        };
+
+        let whole = ask(None, None);
+        assert_eq!(whole.text.lines().count(), MAX_LINES);
+        assert_eq!(whole.next_line, Some(MAX_LINES + 1));
+        assert!(whole.cut);
+        assert_eq!(whole.showed, Some(Showed::File));
+
+        let rest = ask(Some(2001), None);
+        assert_eq!(rest.text, format!("{}\n", lines[2000..].join("\n")));
+        assert_eq!(rest.next_line, None, "the end of the file is not a cut");
+        assert!(!rest.cut);
+        assert_eq!(
+            rest.printed,
+            [Printed {
+                path: "big.rs".to_owned(),
+                first_line: 2001,
+                text: rest.text.clone(),
+            }]
+        );
+
+        let one = ask(Some(2500), Some(1));
+        assert_eq!(one.text, "line 2500\n");
+        assert_eq!(one.printed[0].first_line, 2500);
+        assert_eq!((one.next_line, one.cut), (Some(2501), true));
+
+        let at_the_end = ask(Some(2999), Some(5));
+        assert_eq!(at_the_end.text, "line 2999\nline 3000\n");
+        assert_eq!(at_the_end.next_line, None);
+
+        for (offset, limit) in [(Some(0), Some(0)), (Some(usize::MAX), Some(usize::MAX))] {
+            let answer = ask(offset, limit);
+            assert!(
+                answer.text.lines().count() <= MAX_LINES,
+                "{offset:?} {limit:?}"
+            );
+        }
+        assert_eq!(ask(Some(0), Some(0)).text, "line 1\n");
+        let past = ask(Some(usize::MAX), None);
+        assert!(past.printed.is_empty());
+        assert_eq!(
+            past.text,
+            format!(
+                "(big.rs has 3000 lines, so offset {} is past its end)\n",
+                usize::MAX
+            )
+        );
+    }
+
+    /// `offset` and `limit` are the planner's numbers, so a show of a file is asked at every
+    /// bound of each: the first line, the last, one past it and the largest number there is, and
+    /// no limit, one line, the cap, one past it and the largest. Each answer is the file's lines
+    /// from `max(offset, 1)`, at most `clamp(limit, 1, 2000)` of them and never past the end,
+    /// with the offset of the next line where lines are left. The regressions it rejects are an
+    /// off-by-one at the first line or the last, an offset of 0 that underflows, a limit of 0
+    /// that prints nothing, and a limit past the cap that prints more than 2,000 lines.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_show_of_a_file_is_held_to_its_lines_at_every_bound_of_offset_and_limit() {
+        const LINES: usize = 3000;
+        let repo = Repo::new("ranged-show-bounds");
+        let lines: Vec<String> = (1..=LINES).map(|n| format!("line {n}")).collect();
+        let big = repo.blob(&format!("{}\n", lines.join("\n")));
+        let commit = repo.commit(repo.tree(&[("100644", "big.rs", big)]), &[], T1, "big");
+        repo.point("refs/heads/main", commit);
+        let opened = repo.opened().expect("opened");
+
+        for offset in [
+            None,
+            Some(0),
+            Some(1),
+            Some(LINES),
+            Some(LINES + 1),
+            Some(usize::MAX),
+        ] {
+            for limit in [
+                None,
+                Some(0),
+                Some(1),
+                Some(MAX_LINES),
+                Some(MAX_LINES + 1),
+                Some(usize::MAX),
+            ] {
+                let mut asked = request(Query::Show, Some("HEAD:big.rs"), None);
+                asked.offset = offset;
+                asked.limit = limit;
+                let answer = opened.answer(&asked, &|_| false).expect("answered");
+                let first = offset.unwrap_or(1).max(1);
+                let case = format!("offset {offset:?} limit {limit:?}");
+                if first > LINES {
+                    assert_eq!(
+                        answer.text,
+                        format!("(big.rs has {LINES} lines, so offset {first} is past its end)\n"),
+                        "{case}"
+                    );
+                    assert!(answer.printed.is_empty(), "{case}");
+                    assert_eq!((answer.next_line, answer.cut), (None, false), "{case}");
+                    continue;
+                }
+                let most = limit.unwrap_or(MAX_LINES).clamp(1, MAX_LINES);
+                let last = (first - 1 + most).min(LINES);
+                let expected = format!("{}\n", lines[first - 1..last].join("\n"));
+                assert_eq!(answer.text, expected, "{case}");
+                assert_eq!(
+                    answer.printed,
+                    [Printed {
+                        path: "big.rs".to_owned(),
+                        first_line: first,
+                        text: expected.clone(),
+                    }],
+                    "{case}"
+                );
+                let next = (last < LINES).then_some(last + 1);
+                assert_eq!(
+                    (answer.next_line, answer.cut),
+                    (next, next.is_some()),
+                    "{case}"
+                );
+            }
+        }
+    }
+
     /// One answer is held to a number of lines and each line to a width, a minified file
     /// being one line, and either cut is reported so the answer is not taken as whole.
     #[test]
@@ -2584,6 +2844,14 @@ mod tests {
         let mut wide = Text::default();
         wide.line(&"é".repeat(MAX_LINE_CHARS + 1));
         assert!(wide.cut);
+        assert!(
+            wide.shortened,
+            "a line past its width was not marked shortened"
+        );
+        assert!(
+            !text.shortened,
+            "an answer past its lines was marked shortened"
+        );
         assert_eq!(
             wide.body,
             format!("{} [line cut]\n", "é".repeat(MAX_LINE_CHARS))
@@ -2924,6 +3192,39 @@ mod tests {
         );
     }
 
+    /// GIT-9. A show given an `offset` or a `limit` of a file past the size cap prints no part of
+    /// it and describes it by its size, as a show given neither does, since printing any part
+    /// inflates the whole blob. The regression it rejects is a show that applies the range before
+    /// the size check and prints lines of the large file.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_show_given_offset_or_limit_prints_no_part_of_a_file_past_the_size_cap() {
+        let repo = Repo::new("large-ranged");
+        let size = usize::try_from(MAX_BLOB).expect("fits") + 1;
+        let bytes: Vec<u8> = (0..size)
+            .map(|i| if i % 100 == 99 { b'\n' } else { b'x' })
+            .collect();
+        let large = repo.object(Kind::Blob, &bytes);
+        let commit = repo.commit(repo.tree(&[("100644", "big", large)]), &[], T1, "big");
+        repo.point("refs/heads/main", commit);
+        let opened = repo.opened().expect("opened");
+        for (offset, limit) in [(Some(1), None), (None, Some(1)), (Some(2), Some(3))] {
+            let mut asked = request(Query::Show, Some("HEAD:big"), None);
+            asked.offset = offset;
+            asked.limit = limit;
+            let answer = opened.answer(&asked, &|_| false).expect("answered");
+            assert_eq!(
+                answer.text,
+                format!(
+                    "(big is {size} bytes, more than read_git shows; use read_file on the working copy, or run)\n"
+                ),
+                "{offset:?} {limit:?}"
+            );
+            assert!(answer.printed.is_empty(), "{offset:?} {limit:?}");
+            assert_eq!(answer.next_line, None, "{offset:?} {limit:?}");
+        }
+    }
+
     /// TOOL-6. The note for a file past the size cap points at `read_file` and `run` only where
     /// the turn's list holds them, and says only the size where it holds neither. The control is
     /// the full list, whose text is what was written before the list was consulted. The
@@ -3133,12 +3434,14 @@ mod tests {
         );
     }
 
-    /// TOOL-6. The note for a file past the size a diff reads and the one for a file past the size
-    /// a search reads point at `read_file` and `run` only where the turn's list holds them, as the
-    /// note of a show does. The regression they reject is a note that names both tools, or neither,
-    /// whatever the turn was offered. The blob is one byte past the diff's cap, the smallest that
-    /// still reaches the diff's note.
+    /// TOOL-6. The note for a file past the size a diff reads points at `read_file` and `run`, and
+    /// the one for a file past the size a search reads at the `search` tool and `run`, each only
+    /// where the turn's list holds it. The regressions they reject are a note that names a tool
+    /// whatever the turn was offered, and a search note that sends the planner to `read_file`,
+    /// which reads a range of lines and cannot find a pattern in a file. The blob is one byte past
+    /// the diff's cap, the smallest that still reaches the diff's note.
     #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn the_notes_for_a_file_past_the_diff_and_search_caps_name_only_the_tools_the_turn_holds() {
         let repo = Repo::new("large-diff-beside");
         let size = usize::try_from(MAX_DIFF_BLOB).expect("fits") + 1;
@@ -3193,8 +3496,37 @@ mod tests {
             assert!(diffed.ends_with(&note), "{beside:?}: {diffed}");
             let shown = answer(Query::Show, "HEAD");
             assert!(shown.ends_with(&note), "{beside:?}: {shown}");
+        }
+        // A search's note names what searches the file: the search tool on the working copy, which
+        // reads a file of any size, and run. read_file is not named, since it reads a range and
+        // finds nothing.
+        let search = crate::tools::Named::Search;
+        for (beside, said) in [
+            (
+                crate::tools::Beside::every(),
+                "; use the search tool on the working copy, or run",
+            ),
+            (
+                crate::tools::Beside::every().without(run),
+                "; use the search tool on the working copy",
+            ),
+            (crate::tools::Beside::every().without(search), "; use run"),
+            (
+                crate::tools::Beside::every().without(run).without(search),
+                "",
+            ),
+        ] {
+            let mut asked = request(Query::Search, Some("HEAD"), None);
+            asked.beside = beside;
+            asked.pattern = Some(&pattern);
+            let searched = repo
+                .opened()
+                .expect("opened")
+                .answer(&asked, &|_| false)
+                .expect("answered")
+                .text;
             assert_eq!(
-                answer(Query::Search, "HEAD"),
+                searched,
                 format!("(big is {size} bytes, more than read_git searches{said})\n"),
                 "{beside:?}"
             );

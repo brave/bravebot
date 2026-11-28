@@ -113,6 +113,7 @@ mod tests {
                     cached: bravebot_aichat::protocol::Cached {
                         read_tokens: cached,
                         written_tokens: 0,
+                        stated: true,
                     },
                     ..Default::default()
                 }),
@@ -140,6 +141,7 @@ mod tests {
                 cache: bravebot_aichat::protocol::Cached {
                     read_tokens: 30,
                     written_tokens: 0,
+                    stated: true,
                 },
             },
             "the split was not the latest report's"

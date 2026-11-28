@@ -16708,11 +16708,17 @@ fn search_time_note(searched: usize) -> String {
 /// What a read_git answer that ran out of time tells the planner can narrow it. A status takes
 /// only a path, so it is not told about a range or a count, and it is told the setting that sets
 /// the time and, where the turn holds `run`, that `git status` through it is not held to that time.
-fn read_git_time_note(query: crate::git::Query, run_held: bool) -> String {
+/// A show is told only the arguments that narrow what it printed ([`read_git_narrows`]).
+fn read_git_time_note(
+    query: crate::git::Query,
+    showed: Option<crate::git::Showed>,
+    run_held: bool,
+) -> String {
     if !matches!(query, crate::git::Query::Status) {
-        return "\n\n(read_git ran out of time and this answer is partial; narrow it with a \
-                path, a range or a smaller count)"
-            .to_owned();
+        return format!(
+            "\n\n(read_git ran out of time and this answer is partial; {})",
+            read_git_narrows(query, showed)
+        );
     }
     let instead = if run_held {
         ", or use run with git status"
@@ -16723,6 +16729,85 @@ fn read_git_time_note(query: crate::git::Query, run_held: bool) -> String {
         "\n\n(read_git ran out of time and this status is partial; narrow it with a path, or \
          raise search.maxSeconds in the settings{instead})"
     )
+}
+
+/// The arguments that narrow a cut or late answer, named only where the question takes them
+/// (GIT-9). A log takes a path, a range and a count, a search a path and a count, a diff a path
+/// and a range, a list of tags a count, and a status a path. A show of a commit takes a path, a
+/// directory at a revision is narrowed by naming one inside it in the revision, and a file at a
+/// revision takes `offset` and `limit`. Fixed words chosen from the query and the kind of object
+/// the show resolved, never from a byte of the answer.
+fn read_git_narrows(query: crate::git::Query, showed: Option<crate::git::Showed>) -> &'static str {
+    use crate::git::{Query, Showed};
+    match (query, showed) {
+        (Query::Show, Some(Showed::File)) => {
+            "ask for fewer of the file's lines with offset and limit"
+        }
+        (Query::Show, Some(Showed::Tree)) => {
+            "narrow it by naming a directory inside it, as <revision>:<path>"
+        }
+        (Query::Show | Query::Status | Query::Staged, _) => "narrow it with a path",
+        (Query::Log, _) => "narrow it with a path, a range or a smaller count",
+        (Query::Search, _) => "narrow it with a path or a smaller count",
+        (Query::Diff, _) => "narrow it with a path or a range",
+        (Query::Tags, _) => "narrow it with a smaller count",
+    }
+}
+
+/// What a show of a file says of a line it shortened at the width each line is held to (GIT-9).
+/// `read_file` holds a line to the same width and `offset` and `limit` choose lines, not a part of
+/// one, so only `run` prints the line whole, and it is named only where the turn holds it (TOOL-6).
+fn read_git_shortened(run_held: bool) -> &'static str {
+    if run_held {
+        "a line longer than 2,000 characters was shortened where it says [line cut]; run with git \
+         show prints it whole"
+    } else {
+        "a line longer than 2,000 characters was shortened where it says [line cut]"
+    }
+}
+
+/// What an answer that stopped short tells the planner, written inside the body: out of time, a
+/// page with more to list, a show of a file with more lines, or a cap. Empty for a whole answer.
+fn read_git_stopped_note(
+    query: crate::git::Query,
+    answer: &crate::git::Answer,
+    run_held: bool,
+) -> String {
+    if answer.timed_out {
+        return read_git_time_note(query, answer.showed, run_held);
+    }
+    if let Some(next) = answer.next {
+        let (what, more) = match query {
+            crate::git::Query::Tags => ("list of tags", "tags"),
+            crate::git::Query::Search => ("search", "matching lines"),
+            _ => ("log", "commits"),
+        };
+        return format!(
+            "\n\n(this {what} stopped with more {more} to list; ask again with skip {next} for \
+             the next of them)"
+        );
+    }
+    if let Some(line) = answer.next_line {
+        let shortened = if answer.shortened {
+            format!("; {}", read_git_shortened(run_held))
+        } else {
+            String::new()
+        };
+        return format!(
+            "\n\n(this show stopped with more lines of the file to print; ask again with offset \
+             {line} for the next of them{shortened})"
+        );
+    }
+    if answer.cut {
+        if answer.shortened && answer.showed == Some(crate::git::Showed::File) {
+            return format!("\n\n({})", read_git_shortened(run_held));
+        }
+        return format!(
+            "\n\n(this answer stopped at read_git's cap and is incomplete; {})",
+            read_git_narrows(query, answer.showed)
+        );
+    }
+    String::new()
 }
 
 fn read_git<S: Sink, C: Confirmer>(
@@ -16819,6 +16904,16 @@ fn read_git<S: Sink, C: Confirmer>(
         .get("messages")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // Literals as read_file's are: the line a show of a file starts at, from 1, and how many
+    // lines it prints. Out of range values are brought into range where they are used.
+    let offset = arguments
+        .get("offset")
+        .and_then(Value::as_u64)
+        .map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+    let limit = arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|n| usize::try_from(n).unwrap_or(usize::MAX));
 
     // A deny rule over the file a question names covers asking about its history too, and is said
     // the way every other read says it, before anything under `.git` is opened.
@@ -16854,6 +16949,8 @@ fn read_git<S: Sink, C: Confirmer>(
         count,
         skip,
         messages,
+        offset,
+        limit,
         since,
         until,
         beside: tools.beside,
@@ -16946,24 +17043,11 @@ fn read_git<S: Sink, C: Confirmer>(
                  this answer)",
             );
         }
-        if a.timed_out {
-            body.push_str(&read_git_time_note(query, tools.beside.holds(Named::Run)));
-        } else if let Some(next) = a.next {
-            let (answer, more) = match query {
-                crate::git::Query::Tags => ("list of tags", "tags"),
-                crate::git::Query::Search => ("search", "matching lines"),
-                _ => ("log", "commits"),
-            };
-            body.push_str(&format!(
-                "\n\n(this {answer} stopped with more {more} to list; ask again with skip {next} \
-                 for the next of them)"
-            ));
-        } else if a.cut {
-            body.push_str(
-                "\n\n(this answer stopped at read_git's cap and is incomplete; narrow it with a \
-                 path, a range or a smaller count)",
-            );
-        }
+        body.push_str(&read_git_stopped_note(
+            query,
+            &a,
+            tools.beside.holds(Named::Run),
+        ));
         body
     });
     // Without the notices appended above, which are the driver's words (VIEW-24).

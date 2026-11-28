@@ -102,7 +102,7 @@ impl Repository {
                 Place::Passed => None,
                 Place::Next(next) => Some(next),
                 Place::Here => {
-                    let instead = out.instead();
+                    let instead = out.search_instead();
                     out.text.line(&format!(
                         "({path} is {size} bytes, more than read_git searches{instead})"
                     ));

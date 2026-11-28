@@ -97,10 +97,11 @@ with `Regex::matches`, and no pinned symbol counts that, so a second comparison 
 elsewhere is found by reading the diff. What the comparison decides reaches the planner through
 the `search` function in `crates/agent/src/tools.rs`, whose releases are counted gates. The sixth
 is the same shape in `crates/agent/src/git/`: `Repository::search_blob` and `Repository::patch`
-compare a blob's bytes, and `Workspace::read_git` labels the answer from the paths shown, each asked
+compare a blob's bytes, `Repository::show_blob` counts a blob's lines to decide where a show of a
+file stops and whether its `offset` is past the end, and `Workspace::read_git` labels the answer from the paths shown, each asked
 under every name its file has ([TRUST-4](../specs/trust-map.md#TRUST-4)). The shown path names choose
 which files are looked up and no blob byte does, and a lookup only adds a name, which can only lower
-the label. A comparison added to a third file there is found by reading the diff as well.
+the label. A comparison added to a fourth file there is found by reading the diff as well.
 The seventh is the same shape: `bravebot_filetype::looks_binary` and `decode_text` hold no
 `declassify`, so a second sniff or decoding of untrusted bytes elsewhere is found by reading the
 diff. The eighth is the same shape in `bravebot-mcp`, which is not the driver: it holds no

@@ -311,6 +311,7 @@ impl From<WireUsage> for Usage {
             cached: Cached {
                 read_tokens: details.cached_tokens.unwrap_or(0),
                 written_tokens: details.cache_write_tokens.unwrap_or(0),
+                stated: details.cached_tokens.is_some() || details.cache_write_tokens.is_some(),
             },
         }
     }
@@ -1077,6 +1078,36 @@ mod tests {
             }),
             "a final event with no usage is a reply whose cost was not stated"
         );
+    }
+
+    /// BACKEND-31: a cache figure stated as zero is a round that missed, and a details object that
+    /// leaves both out, or states them as `null`, is a service that said nothing. A session record
+    /// keeps a block for the first and none for the second, so the reader has to tell them apart.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_stated_zero_is_a_cache_figure_and_an_absent_or_null_one_is_not() {
+        for (details, stated) in [
+            (json!({"cached_tokens": 0}), true),
+            (json!({"cache_write_tokens": 0}), true),
+            (json!({}), false),
+            (
+                json!({"cached_tokens": null, "cache_write_tokens": null}),
+                false,
+            ),
+            (Value::Null, false),
+        ] {
+            let wire: WireUsage = serde_json::from_value(
+                json!({"input_tokens": 9, "output_tokens": 1, "input_tokens_details": details}),
+            )
+            .expect("a usage object");
+            let cached = Usage::from(wire).cached;
+            assert_eq!(cached.stated, stated, "{details}");
+            assert_eq!(
+                (cached.read_tokens, cached.written_tokens),
+                (0, 0),
+                "{details}"
+            );
+        }
     }
 
     /// BACKEND-61: a failure is one of a closed set and never named by what the service wrote, so a

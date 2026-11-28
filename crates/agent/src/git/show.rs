@@ -8,7 +8,9 @@ use super::dates::{stamp, when};
 use super::diff::mode;
 use super::out::{Out, entry_word, escaped, is_binary, join, kind_word, message, one_line};
 use super::revision::single;
-use super::{ABBREV, Declined, MAX_BLOB, Printed, Query, Repository, Request, SHORT};
+use super::{
+    ABBREV, Declined, MAX_BLOB, MAX_LINES, Printed, Query, Repository, Request, SHORT, Showed,
+};
 
 impl Repository {
     pub(super) fn show(
@@ -20,6 +22,22 @@ impl Repository {
         let text = request.revision.unwrap_or("HEAD");
         let one = single(Query::Show, text)?;
         let resolved = self.resolve(one, out.deadline, out.withheld)?;
+        // Read from the tree entry's mode or the object's header in `.git`, never from a blob.
+        let is = match resolved.kind {
+            _ if resolved.gitlink => Some("a submodule"),
+            Kind::Commit => Some("a commit"),
+            Kind::Tag => Some("a tag"),
+            Kind::Tree => Some("a directory"),
+            Kind::Blob => None,
+        };
+        if let Some(is) = is
+            && (request.offset.is_some() || request.limit.is_some())
+        {
+            return Err(Declined::LinesAreForAFile {
+                revision: text.to_owned(),
+                is,
+            });
+        }
         if resolved.gitlink {
             let path = resolved.path.unwrap_or_default();
             out.shown.push(path.clone());
@@ -30,6 +48,11 @@ impl Repository {
             ));
             return Ok(());
         }
+        out.showed = Some(match resolved.kind {
+            Kind::Commit | Kind::Tag => Showed::Commit,
+            Kind::Tree => Showed::Tree,
+            Kind::Blob => Showed::File,
+        });
         match resolved.kind {
             Kind::Commit => self.show_commit(out, resolved.id, filter),
             Kind::Tag => self.show_tag(out, resolved.id, filter),
@@ -38,7 +61,7 @@ impl Repository {
                 None => Err(Declined::ShowNeedsPath(one.to_owned())),
             },
             Kind::Blob => match resolved.path {
-                Some(path) => self.show_blob(out, resolved.id, &path),
+                Some(path) => self.show_blob(out, request, resolved.id, &path),
                 None => Err(Declined::ShowNeedsPath(one.to_owned())),
             },
         }
@@ -157,7 +180,16 @@ impl Repository {
         Ok(())
     }
 
-    fn show_blob(&self, out: &mut Out<'_>, id: ObjectId, path: &str) -> Result<(), Declined> {
+    /// Print the file's lines from `request.offset` (1 where none was given), at most
+    /// `request.limit` of them and never more than [`MAX_LINES`]. Where lines are left after the
+    /// last one printed, [`Out::next_line`] is the line that follows it.
+    fn show_blob(
+        &self,
+        out: &mut Out<'_>,
+        request: &Request<'_>,
+        id: ObjectId,
+        path: &str,
+    ) -> Result<(), Declined> {
         out.shown.push(path.to_owned());
         let (_, size) = self.objects.header(&id)?.ok_or(Declined::Unreadable)?;
         if size > MAX_BLOB {
@@ -173,20 +205,39 @@ impl Repository {
                 .line(&format!("({path} is binary, {} bytes)", data.len()));
             return Ok(());
         }
+        // Both are the planner's numbers, so neither is trusted to be in range: the first line is
+        // at least 1, and `skip` and the count of lines taken stop at the end of the file.
+        let first = request.offset.unwrap_or(1).max(1);
+        let most = request.limit.unwrap_or(MAX_LINES).clamp(1, MAX_LINES);
+        let text = escaped(&data);
+        let mut lines = text.lines().enumerate().skip(first - 1).peekable();
         let mut printed = String::new();
-        for line in escaped(&data).lines() {
+        let mut taken = 0;
+        while let Some(&(index, line)) = lines.peek() {
+            if taken == most {
+                out.next_line = Some(index.saturating_add(1));
+                break;
+            }
             let Some(end) = out.text.add(line, true) else {
+                out.next_line = Some(index.saturating_add(1));
                 break;
             };
             printed.push_str(&line[..end]);
             printed.push('\n');
+            taken += 1;
+            lines.next();
         }
         if !printed.is_empty() {
             out.printed.push(Printed {
                 path: path.to_owned(),
-                first_line: 1,
+                first_line: first,
                 text: printed,
             });
+        } else if first > 1 {
+            let count = text.lines().count();
+            out.text.line(&format!(
+                "({path} has {count} lines, so offset {first} is past its end)"
+            ));
         }
         Ok(())
     }

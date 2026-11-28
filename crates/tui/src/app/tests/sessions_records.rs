@@ -36,6 +36,88 @@ fn the_effort_a_turn_was_sent_with_is_what_the_record_is_given() {
     assert_eq!(stored.effort(), None);
 }
 
+/// SESSION-11. The record a turn writes names the backend that answered it, and a turn that failed
+/// leaves the one before it in place. The regressions it rejects are a turn that keeps no service,
+/// so the record names none and `bravebot stats` counts it under `unknown`, and a failed turn that
+/// clears the service the record held. The turn is a real one against a loopback Brave endpoint,
+/// whose word is `aichat`. The call from `run_turn_animated`, which needs a terminal, is reasoned
+/// only.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_service_a_turn_was_answered_by_is_what_the_record_is_given() {
+    use bravebot_agent::BackendKind;
+    if !crate::test_profile::in_isolated_profile() {
+        return;
+    }
+    let root = crate::test_profile::project("bravebot-app-turn-service");
+    std::fs::create_dir_all(&root).expect("create");
+    let mut stored = bravebot_session::sessions::Handle::begin(
+        &root,
+        bravebot_session::sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    stored.set_service(BackendKind::Bedrock);
+
+    let failed = FinishedTurn {
+        decisions: None,
+        work: Default::default(),
+        outcome: Err(turn::TurnError::Precommit("the request failed".to_string())),
+        conversation: Conversation::new(),
+        sink: Trail::new(),
+        servers: None,
+    };
+    keep_the_service_of(&failed, &mut stored);
+    assert_eq!(
+        stored.service(),
+        Some(BackendKind::Bedrock),
+        "a failed turn cleared the service the record held"
+    );
+
+    let endpoint = super::loops_and_goals::a_model_answering_every_request("done");
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        _ => None,
+    })
+    .expect("config");
+    let workspace = bravebot_agent::Workspace::new(&root).expect("workspace");
+    let mut conversation = Conversation::new();
+    let completed = bravebot_agent::turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &bravebot_agent::Task::new("say done"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::IgnoreReports,
+        &mut bravebot_core::event::RecordingSink::new(),
+        TrustStore::new(&root),
+        TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    let answered = FinishedTurn {
+        decisions: Some(completed.decisions),
+        work: completed.work,
+        outcome: completed.outcome,
+        conversation,
+        sink: Trail::new(),
+        servers: None,
+    };
+    assert!(
+        answered.outcome.is_ok(),
+        "the turn against the loopback endpoint failed"
+    );
+    keep_the_service_of(&answered, &mut stored);
+    assert_eq!(
+        stored.service(),
+        Some(BackendKind::Aichat),
+        "the record was not given the backend that answered the turn"
+    );
+}
+
 /// The step a turn takes on every frame for a model picker opened under it takes the rows when
 /// they arrive, and records what it says as said while working. The regressions it rejects are
 /// a step that does nothing, which leaves the picker on "loading" for the rest of the turn, and
@@ -1144,6 +1226,7 @@ fn every_request_beside_the_work_is_charged_with_what_it_read_and_wrote() {
         cached: bravebot_aichat::protocol::Cached {
             read_tokens: 50,
             written_tokens: 10,
+            stated: true,
         },
     };
     let charged = |session: &Session| (session.tokens, session.split());
@@ -1155,6 +1238,7 @@ fn every_request_beside_the_work_is_charged_with_what_it_read_and_wrote() {
             cache: bravebot_aichat::protocol::Cached {
                 read_tokens: 50,
                 written_tokens: 10,
+                stated: true,
             },
         },
     );
@@ -1239,6 +1323,7 @@ fn a_finished_turn_is_charged_with_what_it_read_and_wrote() {
             bravebot_aichat::protocol::Cached {
                 read_tokens: cached.0,
                 written_tokens: cached.1,
+                stated: true,
             },
             None,
         );
@@ -1253,6 +1338,7 @@ fn a_finished_turn_is_charged_with_what_it_read_and_wrote() {
             cache: bravebot_aichat::protocol::Cached {
                 read_tokens: 160,
                 written_tokens: 10,
+                stated: true,
             },
         },
         "a finished turn was not charged with how its tokens divide"
@@ -1272,6 +1358,7 @@ fn a_record_built_from_the_session_holds_the_split_it_has_counted() {
         cached: bravebot_aichat::protocol::Cached {
             read_tokens: 50,
             written_tokens: 10,
+            stated: true,
         },
     });
 
@@ -1294,6 +1381,7 @@ fn a_record_built_from_the_session_holds_the_split_it_has_counted() {
                 cache: bravebot_aichat::protocol::Cached {
                     read_tokens: 50,
                     written_tokens: 10,
+                    stated: true,
                 },
             }
         )
@@ -1521,6 +1609,7 @@ fn the_cancellation_path_charges_progress_before_restoring_or_quitting() {
             output_tokens: 12,
             cached: bravebot_aichat::protocol::Cached {
                 read_tokens: 5,
+                stated: true,
                 ..Default::default()
             },
             timing: bravebot_agent::timing::Timing {
@@ -1550,6 +1639,7 @@ fn the_cancellation_path_charges_progress_before_restoring_or_quitting() {
                 cache: bravebot_aichat::protocol::Cached {
                     read_tokens: 5,
                     written_tokens: 0,
+                    stated: true,
                 },
             },
             "the split was charged more than once, or not at all"
@@ -1649,6 +1739,7 @@ fn a_failed_outcome_charges_only_the_latest_progress() {
             output_tokens: tokens / 4,
             cached: bravebot_aichat::protocol::Cached {
                 read_tokens: 7,
+                stated: true,
                 ..Default::default()
             },
             timing: bravebot_agent::timing::Timing {
@@ -1696,6 +1787,7 @@ fn a_failed_outcome_charges_only_the_latest_progress() {
             cache: bravebot_aichat::protocol::Cached {
                 read_tokens: 7,
                 written_tokens: 0,
+                stated: true,
             },
         },
         "a failed turn's split was not the latest report's"

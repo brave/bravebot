@@ -305,11 +305,12 @@ pub struct BedrockUsage {
     pub output_tokens: u64,
     /// Tokens served out of the cache, which this API reports apart from `inputTokens` rather
     /// than inside it. Counted here so a cached round does not read as a shrinking conversation.
+    /// `None` where the reply did not state it.
     #[serde(default)]
-    pub cache_read_input_tokens: u64,
+    pub cache_read_input_tokens: Option<u64>,
     /// Tokens written into the cache on the way past, reported apart for the same reason.
     #[serde(default)]
-    pub cache_write_input_tokens: u64,
+    pub cache_write_input_tokens: Option<u64>,
 }
 
 /// One frame of a streamed reply.
@@ -734,21 +735,23 @@ pub fn parts_of(blocks: &[ReplyBlock]) -> (String, Vec<bravebot_aichat::protocol
 
 impl From<BedrockUsage> for bravebot_aichat::protocol::Usage {
     fn from(usage: BedrockUsage) -> Self {
+        let read = usage.cache_read_input_tokens.unwrap_or(0);
+        let written = usage.cache_write_input_tokens.unwrap_or(0);
         Self {
             // Everything the request carried, whoever read it. This API states `inputTokens`
             // net of the cache, so a round that hit it reports a fraction of the prompt it
             // actually sent, and a context gauge fed that figure would show a conversation
             // shrinking as it grew. What the three add up to is the prompt.
-            prompt_tokens: usage.input_tokens
-                + usage.cache_read_input_tokens
-                + usage.cache_write_input_tokens,
+            prompt_tokens: usage.input_tokens + read + written,
             completion_tokens: usage.output_tokens,
             // Carried as well as added in. Summed alone they say what the round sent and nothing
             // about what it cost, and those differ by roughly ten times: a session where every
             // breakpoint missed reports the same figures as one where every one of them hit.
             cached: Cached {
-                read_tokens: usage.cache_read_input_tokens,
-                written_tokens: usage.cache_write_input_tokens,
+                read_tokens: read,
+                written_tokens: written,
+                stated: usage.cache_read_input_tokens.is_some()
+                    || usage.cache_write_input_tokens.is_some(),
             },
         }
     }
@@ -1212,8 +1215,8 @@ mod tests {
         let usage: bravebot_aichat::protocol::Usage = BedrockUsage {
             input_tokens: 12,
             output_tokens: 40,
-            cache_read_input_tokens: 900,
-            cache_write_input_tokens: 88,
+            cache_read_input_tokens: Some(900),
+            cache_write_input_tokens: Some(88),
         }
         .into();
         assert_eq!(
@@ -1225,20 +1228,21 @@ mod tests {
 
     /// A round served out of the cache and one that read the whole prompt cost about ten times
     /// different, so a figure that cannot tell them apart cannot say whether caching is working.
+    /// A round that states zeros missed, and one that states no figure said nothing.
     #[test]
     fn a_cached_round_is_told_apart_from_one_that_read_the_whole_prompt() {
         let cached: bravebot_aichat::protocol::Usage = BedrockUsage {
             input_tokens: 12,
             output_tokens: 40,
-            cache_read_input_tokens: 900,
-            cache_write_input_tokens: 88,
+            cache_read_input_tokens: Some(900),
+            cache_write_input_tokens: Some(88),
         }
         .into();
         let fresh: bravebot_aichat::protocol::Usage = BedrockUsage {
             input_tokens: 1000,
             output_tokens: 40,
-            cache_read_input_tokens: 0,
-            cache_write_input_tokens: 0,
+            cache_read_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
         }
         .into();
 
@@ -1259,6 +1263,20 @@ mod tests {
             (fresh.cached.read_tokens, fresh.cached.written_tokens),
             (0, 0),
             "an uncached round reported cache figures"
+        );
+        assert!(
+            fresh.cached.stated,
+            "a round that stated zeros read as silent"
+        );
+        let silent: bravebot_aichat::protocol::Usage = BedrockUsage {
+            input_tokens: 1000,
+            output_tokens: 40,
+            ..BedrockUsage::default()
+        }
+        .into();
+        assert!(
+            !silent.cached.stated,
+            "a round that stated no cache figure read as a miss"
         );
     }
 
@@ -1635,8 +1653,8 @@ mod tests {
         let usage: bravebot_aichat::protocol::Usage = BedrockUsage {
             input_tokens: 100,
             output_tokens: 20,
-            cache_read_input_tokens: 0,
-            cache_write_input_tokens: 0,
+            cache_read_input_tokens: Some(0),
+            cache_write_input_tokens: Some(0),
         }
         .into();
         assert_eq!(usage.prompt_tokens, 100);

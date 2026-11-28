@@ -1,8 +1,9 @@
 //! What the recorded sessions spent, totalled across the store (CLI-37).
 //!
-//! Reads the records under the sessions directory and adds up four numbers from each: how many
-//! turns it had, how many tokens it spent, how many of those the model read and how many it wrote,
-//! and which model answered last. Nothing is written, and
+//! Reads the records under the sessions directory and adds up what each says: how many turns it
+//! had, how many tokens it spent, how many of those the model read and how many it wrote, what the
+//! service's cache read and wrote, and which model and which service answered last. Nothing is
+//! written, and
 //! nothing in a record is read for what it says: the figures are the ones the program itself wrote
 //! down, and the model name is the one the server reported.
 //!
@@ -13,15 +14,27 @@
 //! The split into read and written covers what the record kept it for. A record written before the
 //! split was kept has none, and a session that went on after one has it for the later turns only,
 //! so the two figures can total less than the tokens, and [`Spent::unsplit`] is the difference.
+//!
+//! The cache figures are added over the records that carry them, and the hit rate is taken over the
+//! tokens those records read and no others. A record keeps the figures, zeros included, for every
+//! session whose service stated them, so a record without them is counted apart: one that names the
+//! service that answered ran on a service that states no cache figure, and one that does not may be
+//! older than the figures.
 
 use crate::search;
 use crate::sessions;
+use bravebot_agent::BackendKind;
+use bravebot_i18n::t;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The longest model name a row shows, in characters.
 pub const LONGEST_MODEL: usize = 60;
+
+/// A row's model, as the record named it, and the service that answered it, `None` where the
+/// record names none.
+pub type ModelAndService = (Option<String>, Option<BackendKind>);
 
 /// What a total covers.
 #[derive(Debug, Clone, Copy, Default)]
@@ -43,22 +56,95 @@ pub struct Spent {
     pub turns: u64,
     pub tokens: u64,
     /// Of `tokens`, those the model read and those it wrote, for the sessions that recorded the
-    /// split.
+    /// split, and the cache figures of the sessions that recorded those.
     pub split: sessions::Split,
+    /// How many of `sessions` carry cache figures in their record.
+    pub cache_sessions: u64,
+    /// The tokens read by the sessions counted in `cache_sessions`, which the hit rate is taken over.
+    pub cache_sessions_read: u64,
+    /// How many of the sessions that carry no cache figures name no service either, so their record
+    /// may have been written before the cache figures were kept.
+    pub older_without_cache: u64,
 }
 
 impl Spent {
     /// What one record contributes.
     fn of(counted: &Counted) -> Self {
+        // A record somebody edited by hand can name a split past its own total, which would make
+        // `unsplit` wrap; the split is cut to the total so a session never reads as more than it
+        // spent.
+        let mut split = counted.split.of().within(counted.tokens);
+        // The same record can state more served from the cache than it read, which would raise the
+        // hit rate of its row past what the row read; the cache read is cut to the read.
+        split.cache.read_tokens = split.cache.read_tokens.min(split.read);
+        let carries_cache = counted.split.cache.is_some();
         Self {
             sessions: 1,
             turns: counted.turns,
             tokens: counted.tokens,
-            // A record somebody edited by hand can name a split past its own total, which would make
-            // `unsplit` wrap; the split is cut to the total so a session never reads as more than it
-            // spent.
-            split: counted.split.within(counted.tokens),
+            split,
+            cache_sessions: u64::from(carries_cache),
+            cache_sessions_read: if carries_cache { split.read } else { 0 },
+            older_without_cache: u64::from(!carries_cache && counted.service.is_none()),
         }
+    }
+
+    /// How many sessions carry no cache figures in their record.
+    pub fn without_cache(&self) -> u64 {
+        self.sessions.saturating_sub(self.cache_sessions)
+    }
+
+    /// How many of the sessions that carry no cache figures name the service that answered, which
+    /// therefore stated no cache figure: a record keeps the figures, zeros included, for every
+    /// session whose service stated them.
+    pub fn silent_without_cache(&self) -> u64 {
+        self.without_cache()
+            .saturating_sub(self.older_without_cache)
+    }
+
+    /// The share of the tokens read by the sessions that carry cache figures that the service
+    /// answered out of its cache, in tenths of a percent, or `None` where those sessions read
+    /// nothing.
+    ///
+    /// Cut to the whole where a record edited by hand states more served from the cache than read.
+    pub fn hit_rate_permille(&self) -> Option<u64> {
+        (self.cache_sessions_read > 0).then(|| {
+            let served = u128::from(self.split.cache.read_tokens.min(self.cache_sessions_read));
+            let rate = served * 1000 / u128::from(self.cache_sessions_read);
+            u64::try_from(rate).unwrap_or(1000)
+        })
+    }
+
+    /// The hit rate as a row shows it: to a tenth of a percent with the catalog's decimal separator
+    /// and percent form, or `-` where the sessions that carry cache figures read nothing. The
+    /// terminal prints it and the desktop bridge sends it (CLI-37).
+    pub fn shown_hit_rate(&self) -> String {
+        match self.hit_rate_permille() {
+            Some(permille) => t!(
+                stats_hit_rate,
+                rate = format!(
+                    "{}{}{}",
+                    permille / 10,
+                    t!(number_decimal_separator),
+                    permille % 10
+                )
+            ),
+            None => "-".to_string(),
+        }
+    }
+
+    /// The note on the sessions the hit rate leaves out, how many of them ran on a service that
+    /// states no cache figure and how many name no service, or `None` where every session carries
+    /// cache figures. The terminal prints it on stderr and the desktop bridge sends it (CLI-37).
+    pub fn without_cache_note(&self) -> Option<String> {
+        (self.without_cache() > 0).then(|| {
+            t!(
+                stats_without_cache,
+                count = self.without_cache(),
+                silent = self.silent_without_cache(),
+                older = self.older_without_cache
+            )
+        })
     }
 
     /// The tokens no split was recorded for: what the total holds beyond the two figures.
@@ -77,6 +163,13 @@ impl Spent {
         self.turns = self.turns.saturating_add(other.turns);
         self.tokens = self.tokens.saturating_add(other.tokens);
         self.split.add(other.split);
+        self.cache_sessions = self.cache_sessions.saturating_add(other.cache_sessions);
+        self.cache_sessions_read = self
+            .cache_sessions_read
+            .saturating_add(other.cache_sessions_read);
+        self.older_without_cache = self
+            .older_without_cache
+            .saturating_add(other.older_without_cache);
     }
 }
 
@@ -85,10 +178,12 @@ impl Spent {
 pub struct Totals {
     /// Every session in the scope.
     pub all: Spent,
-    /// The same, split by the model each session last used, as the record named it. `None` is a
-    /// session whose record names none: one written before the model was kept, one whose turns
-    /// never reached a server, and one copied in from another program.
-    pub by_model: BTreeMap<Option<String>, Spent>,
+    /// The same, split by the model each session last used and by the service that answered it, as
+    /// the record named them. `None` for the model is a session whose record names none: one
+    /// written before the model was kept, one whose turns never reached a server, and one copied in
+    /// from another program. `None` for the service is a record that names none, or names a word
+    /// that is no service.
+    pub by_model_and_service: BTreeMap<ModelAndService, Spent>,
     /// How many entries under the sessions directory could not be read as a record: a `.json` file
     /// that does not parse as one, and a directory or an entry that could not be listed. They are
     /// counted and not named, and add to no figure above.
@@ -121,10 +216,35 @@ struct Counted {
     tokens: u64,
     /// Absent from a record written before the split was kept, which reads as none recorded.
     #[serde(default)]
-    split: sessions::Split,
+    split: CountedSplit,
     /// Absent from a record written before the model was kept.
     #[serde(default)]
     model: Option<String>,
+    /// The word for the service that answered, absent from a record written before it was kept.
+    #[serde(default)]
+    service: Option<String>,
+}
+
+/// The split as a record holds it, with whether it carries the cache figures at all, which
+/// [`sessions::Split`] reads as zero when they are absent.
+#[derive(Deserialize, Default)]
+struct CountedSplit {
+    #[serde(default)]
+    read: u64,
+    #[serde(default)]
+    written: u64,
+    #[serde(default)]
+    cache: Option<bravebot_aichat::protocol::Cached>,
+}
+
+impl CountedSplit {
+    fn of(&self) -> sessions::Split {
+        sessions::Split {
+            read: self.read,
+            written: self.written,
+            cache: self.cache.unwrap_or_default(),
+        }
+    }
 }
 
 impl Counted {
@@ -137,44 +257,45 @@ impl Counted {
 }
 
 impl Totals {
-    /// A row for each model as a person is shown it, the one that spent most first.
+    /// A row for each model as a person is shown it and each service that answered it, the one that
+    /// spent most first.
     ///
     /// The name the server reported is cleaned of anything a terminal would act on and cut to
     /// [`LONGEST_MODEL`] characters (VIEW-4). Rows are grouped on the cleaned name, so two names
     /// that differ only in what cleaning removes are one row rather than two that read alike. A
-    /// record that names no model, and a name with nothing left after cleaning, are the `None` row.
+    /// record that names no model, and a name with nothing left after cleaning, are the row for no
+    /// name.
     ///
-    /// Ordered by tokens, then sessions, most first, then by name, with the `None` row after every
-    /// named row of the same figures.
-    pub fn by_shown_model(&self) -> Vec<(Option<String>, Spent)> {
-        let mut shown: BTreeMap<Option<String>, Spent> = BTreeMap::new();
-        for (model, spent) in &self.by_model {
-            let name = model
-                .as_deref()
-                .map(|name| search::clean(name, LONGEST_MODEL))
-                .filter(|name| !name.is_empty());
-            shown.entry(name).or_default().merge(*spent);
+    /// Ordered by tokens, then sessions, most first, then by name, with the row for no name after
+    /// every named row of the same figures, then by service, with the row for no service after the
+    /// named ones.
+    pub fn by_shown_model_and_service(&self) -> Vec<(ModelAndService, Spent)> {
+        let mut shown: BTreeMap<ModelAndService, Spent> = BTreeMap::new();
+        for ((model, service), spent) in &self.by_model_and_service {
+            shown
+                .entry((shown_model(model), *service))
+                .or_default()
+                .merge(*spent);
         }
-        let mut rows: Vec<(Option<String>, Spent)> = shown.into_iter().collect();
-        rows.sort_by(|(left_name, left), (right_name, right)| {
-            right
-                .tokens
-                .cmp(&left.tokens)
-                .then(right.sessions.cmp(&left.sessions))
-                .then_with(|| match (left_name, right_name) {
-                    (Some(left), Some(right)) => left.cmp(right),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                })
-        });
+        let mut rows: Vec<_> = shown.into_iter().collect();
+        rows.sort_by(
+            |((left_name, left_service), left), ((right_name, right_service), right)| {
+                most_spent_first(left, right)
+                    .then_with(|| named_first(left_name, right_name))
+                    .then_with(|| named_first(left_service, right_service))
+            },
+        );
         rows
     }
 
     fn take(&mut self, counted: Counted) {
         let spent = Spent::of(&counted);
         self.all.merge(spent);
-        self.by_model.entry(counted.model).or_default().merge(spent);
+        let service = counted.service.as_deref().and_then(BackendKind::named);
+        self.by_model_and_service
+            .entry((counted.model, service))
+            .or_default()
+            .merge(spent);
     }
 
     /// What is in `directory`, or nothing where there is no such directory, which is the ordinary
@@ -198,6 +319,47 @@ impl Totals {
                 Vec::new()
             }
         }
+    }
+}
+
+/// A model's name as a row shows it: cleaned of anything a terminal would act on and cut to
+/// [`LONGEST_MODEL`] characters (VIEW-4), with a name that has nothing left being no name.
+fn shown_model(model: &Option<String>) -> Option<String> {
+    model
+        .as_deref()
+        .map(|name| search::clean(name, LONGEST_MODEL))
+        .filter(|name| !name.is_empty())
+}
+
+/// The word a row names its service by, one fixed word for each kind of backend and `unknown` for
+/// none. Chosen from the closed set of backends, never from the record. The terminal prints it and
+/// the desktop bridge sends it (CLI-37).
+pub fn service_word(service: Option<BackendKind>) -> &'static str {
+    match service {
+        Some(BackendKind::Aichat) => t!(stats_service_aichat),
+        Some(BackendKind::Bedrock) => t!(stats_service_bedrock),
+        Some(BackendKind::Gateway) => t!(stats_service_gateway),
+        Some(BackendKind::Chatgpt) => t!(stats_service_chatgpt),
+        Some(BackendKind::Xai) => t!(stats_service_xai),
+        None => t!(stats_service_unknown),
+    }
+}
+
+/// More tokens first, then more sessions.
+fn most_spent_first(left: &Spent, right: &Spent) -> std::cmp::Ordering {
+    right
+        .tokens
+        .cmp(&left.tokens)
+        .then(right.sessions.cmp(&left.sessions))
+}
+
+/// Named values in their own order, then the `None` row.
+fn named_first<T: Ord>(left: &Option<T>, right: &Option<T>) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left.cmp(right),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
     }
 }
 
@@ -357,12 +519,17 @@ mod tests {
     const NOW: u64 = 1_700_000_000;
     const DAY: u64 = 86_400;
 
+    /// What `sessions` records spent, where none of them carries cache figures or names a service,
+    /// as every record [`Store::session`] writes.
     fn spent(sessions: u64, turns: u64, tokens: u64) -> Spent {
         Spent {
             sessions,
             turns,
             tokens,
             split: sessions::Split::default(),
+            cache_sessions: 0,
+            cache_sessions_read: 0,
+            older_without_cache: sessions,
         }
     }
 
@@ -478,12 +645,18 @@ mod tests {
 
         let totals = totals_under(&store.root, Scope::default());
 
-        assert_eq!(totals.by_model[&Some("big".to_string())], spent(2, 3, 30));
         assert_eq!(
-            totals.by_model[&Some("small".to_string())],
+            totals.by_model_and_service[&(Some("big".to_string()), None)],
+            spent(2, 3, 30)
+        );
+        assert_eq!(
+            totals.by_model_and_service[&(Some("small".to_string()), None)],
             spent(1, 4, 400)
         );
-        assert_eq!(totals.by_model[&None], spent(1, 8, 8_000));
+        assert_eq!(
+            totals.by_model_and_service[&(None, None)],
+            spent(1, 8, 8_000)
+        );
         assert_eq!(totals.all, spent(4, 15, 8_430));
     }
 
@@ -561,7 +734,7 @@ mod tests {
         let totals = totals_under(&store.root, Scope::default());
 
         assert_eq!(totals.all, spent(1, 0, 0));
-        assert_eq!(totals.by_model[&None], spent(1, 0, 0));
+        assert_eq!(totals.by_model_and_service[&(None, None)], spent(1, 0, 0));
         assert_eq!(totals.unreadable, 0);
     }
 
@@ -603,6 +776,7 @@ mod tests {
                     written: 340,
                     ..Default::default()
                 },
+                ..spent(3, 9, 1_500)
             }
         );
         assert_eq!(totals.all.unsplit(), 400);
@@ -793,19 +967,247 @@ mod tests {
 
         assert_eq!(totals.all, spent_split(1, 3, 1_000, 234));
         assert_eq!(
-            totals.by_model[&Some("a-model".to_string())],
+            totals.by_model_and_service[&(Some("a-model".to_string()), None)],
             spent_split(1, 3, 1_000, 234)
         );
         assert_eq!(totals.unreadable, 0);
     }
 
+    /// A record as a build that keeps the cache figures and the service writes it: a split with or
+    /// without a cache block, and a service word or none. A block of zeros is a service that stated a
+    /// miss.
+    fn a_record_with(
+        id: &str,
+        model: &str,
+        (read, written): (u64, u64),
+        cache: Option<(u64, u64)>,
+        service: Option<&str>,
+    ) -> String {
+        let mut record = serde_json::json!({
+            "id": id,
+            "title": "t",
+            "directory": "/w/one",
+            "updated": NOW,
+            "turns": 1,
+            "tokens": read + written,
+            "model": model,
+            "split": { "read": read, "written": written },
+        });
+        if let Some((read_tokens, written_tokens)) = cache {
+            record["split"]["cache"] =
+                serde_json::json!({ "read_tokens": read_tokens, "written_tokens": written_tokens });
+        }
+        if let Some(service) = service {
+            record["service"] = serde_json::json!(service);
+        }
+        record.to_string()
+    }
+
+    /// The cache figures and the tokens they are a share of are added over the records that carry
+    /// a cache block, and the rest are counted apart. A hit rate over every token read would be
+    /// 600 of 1,500, 40.0%, counting the two sessions that carry none, where the sessions that
+    /// carry figures read 600 and the cache served 540 of them, 90.0%.
+    #[test]
+    fn the_hit_rate_is_taken_over_the_sessions_that_carry_cache_figures_only() {
+        let store = Store::new("stats-cache-hit-rate");
+        let here = Path::new("/w/one");
+        store.write(
+            here,
+            "cached",
+            &a_record_with("cached", "m", (600, 100), Some((540, 30)), Some("gateway")),
+        );
+        store.write(
+            here,
+            "silent",
+            &a_record_with("silent", "m", (400, 50), None, Some("gateway")),
+        );
+        store.write(
+            here,
+            "older",
+            &a_record_with("older", "m", (500, 50), None, None),
+        );
+
+        let totals = totals_under(&store.root, Scope::default());
+
+        assert_eq!(totals.all.split.cache.read_tokens, 540);
+        assert_eq!(totals.all.split.cache.written_tokens, 30);
+        assert_eq!(totals.all.cache_sessions, 1);
+        assert_eq!(totals.all.cache_sessions_read, 600);
+        assert_eq!(totals.all.hit_rate_permille(), Some(900));
+        assert_eq!(totals.all.without_cache(), 2);
+        assert_eq!(totals.unreadable, 0);
+    }
+
+    /// A record that names no service is told apart from one that names a service and carries no
+    /// cache figures: the first may be older than the cache figures, and the second ran on a service
+    /// that states none. Reading the two alike is how an older store makes a hit rate low.
+    #[test]
+    fn a_record_without_cache_figures_is_older_only_where_it_names_no_service() {
+        let store = Store::new("stats-cache-older");
+        let here = Path::new("/w/one");
+        store.write(
+            here,
+            "missed",
+            &a_record_with("missed", "m", (100, 10), None, Some("bedrock")),
+        );
+        store.write(
+            here,
+            "older",
+            &a_record_with("older", "m", (100, 10), None, None),
+        );
+        store.write(
+            here,
+            "older-too",
+            &a_record_with("older-too", "m", (100, 10), None, None),
+        );
+
+        let totals = totals_under(&store.root, Scope::default());
+
+        assert_eq!(totals.all.without_cache(), 3);
+        assert_eq!(totals.all.older_without_cache, 2);
+        assert_eq!(totals.all.silent_without_cache(), 1);
+        assert_eq!(totals.all.hit_rate_permille(), None);
+    }
+
+    /// A record keeps a cache block of zeros for a session whose service stated a miss, so that
+    /// session is in the hit rate: 540 served of the 1,000 the two stating sessions read, 54.0%. A
+    /// reader that took a block of zeros for no block would leave the miss out and report 90.0%,
+    /// and would count the miss as a service that states nothing. The silent service and the record
+    /// that names no service are each counted apart.
+    #[test]
+    fn a_stated_miss_is_in_the_hit_rate_and_a_silent_service_is_counted_apart() {
+        let store = Store::new("stats-cache-miss");
+        let here = Path::new("/w/one");
+        store.write(
+            here,
+            "hit",
+            &a_record_with("hit", "m", (600, 100), Some((540, 30)), Some("bedrock")),
+        );
+        store.write(
+            here,
+            "missed",
+            &a_record_with("missed", "m", (400, 50), Some((0, 0)), Some("gateway")),
+        );
+        store.write(
+            here,
+            "silent",
+            &a_record_with("silent", "m", (300, 30), None, Some("gateway")),
+        );
+        store.write(
+            here,
+            "older",
+            &a_record_with("older", "m", (200, 20), None, None),
+        );
+
+        let totals = totals_under(&store.root, Scope::default());
+
+        assert_eq!(totals.all.cache_sessions, 2);
+        assert_eq!(totals.all.cache_sessions_read, 1_000);
+        assert_eq!(totals.all.hit_rate_permille(), Some(540));
+        assert_eq!(totals.all.without_cache(), 2);
+        assert_eq!(totals.all.silent_without_cache(), 1);
+        assert_eq!(totals.all.older_without_cache, 1);
+    }
+
+    /// A record edited by hand can state more served from the cache than it read. Its cache read
+    /// is cut to its read before it is added, so the row it shares with a record that missed reads
+    /// 100 served of 1,000, 10.0%. Added uncut, the row would read 500 of 1,000, 50.0%, which the
+    /// cap on the group's total does not catch because the row read more than one record's figure.
+    #[test]
+    fn a_cache_read_past_the_read_is_cut_to_it_in_its_own_row() {
+        let store = Store::new("stats-cache-past-read");
+        let here = Path::new("/w/one");
+        store.write(
+            here,
+            "edited",
+            &a_record_with("edited", "m", (100, 10), Some((500, 0)), Some("bedrock")),
+        );
+        store.write(
+            here,
+            "missed",
+            &a_record_with("missed", "m", (900, 10), Some((0, 0)), Some("bedrock")),
+        );
+
+        let totals = totals_under(&store.root, Scope::default());
+
+        let rows = totals.by_shown_model_and_service();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let row = rows[0].1;
+        assert_eq!(row.split.cache.read_tokens, 100);
+        assert_eq!(row.cache_sessions_read, 1_000);
+        assert_eq!(row.hit_rate_permille(), Some(100));
+        assert_eq!(totals.all.hit_rate_permille(), Some(100));
+    }
+
+    /// One model served by Bedrock and by a gateway is two rows, keyed on the word the program
+    /// wrote. A word that is no service, as in a record edited by hand, is the row for no service
+    /// with the records that name none, so no word from the file becomes a row's name.
+    #[test]
+    fn a_model_is_a_row_for_each_service_and_a_word_that_is_no_service_is_none() {
+        let store = Store::new("stats-by-service");
+        let here = Path::new("/w/one");
+        store.write(
+            here,
+            "a",
+            &a_record_with("a", "claude", (100, 10), None, Some("bedrock")),
+        );
+        store.write(
+            here,
+            "b",
+            &a_record_with("b", "claude", (200, 20), None, Some("gateway")),
+        );
+        store.write(
+            here,
+            "c",
+            &a_record_with("c", "claude", (300, 30), None, Some("evil\u{1b}[2J")),
+        );
+        store.write(
+            here,
+            "d",
+            &a_record_with("d", "claude", (400, 40), None, None),
+        );
+
+        let rows: Vec<(Option<BackendKind>, u64)> = totals_under(&store.root, Scope::default())
+            .by_shown_model_and_service()
+            .into_iter()
+            .map(|((model, service), spent)| {
+                assert_eq!(model.as_deref(), Some("claude"));
+                (service, spent.tokens)
+            })
+            .collect();
+
+        assert_eq!(
+            rows,
+            vec![
+                (None, 770),
+                (Some(BackendKind::Gateway), 220),
+                (Some(BackendKind::Bedrock), 110),
+            ]
+        );
+    }
+
+    /// Totals holding one entry for each model, none of which names a service.
     fn by(models: &[(Option<&str>, Spent)]) -> Totals {
         let mut totals = Totals::default();
         for (model, spent) in models {
             totals.all.merge(*spent);
-            totals.by_model.insert(model.map(str::to_string), *spent);
+            totals
+                .by_model_and_service
+                .insert((model.map(str::to_string), None), *spent);
         }
         totals
+    }
+
+    /// The model of each row, with what it spent, where no row names a service.
+    fn shown(totals: &Totals) -> Vec<(Option<String>, Spent)> {
+        totals
+            .by_shown_model_and_service()
+            .into_iter()
+            .map(|((model, service), spent)| {
+                assert_eq!(service, None);
+                (model, spent)
+            })
+            .collect()
     }
 
     /// A model name is the server's, so a row that kept an escape in it would hand a terminal a
@@ -818,7 +1220,7 @@ mod tests {
             (Some(long.as_str()), spent(1, 1, 5)),
         ]);
 
-        let rows = totals.by_shown_model();
+        let rows = shown(&totals);
 
         assert_eq!(rows.len(), 2);
         let first = rows[0].0.as_deref().expect("a named row");
@@ -840,7 +1242,7 @@ mod tests {
             (Some("mo\u{200B}del"), spent(2, 3, 20)),
         ]);
 
-        let rows = totals.by_shown_model();
+        let rows = shown(&totals);
 
         assert_eq!(rows, vec![(Some("model".to_string()), spent(3, 5, 30))]);
     }
@@ -856,7 +1258,7 @@ mod tests {
             (Some("m"), spent(1, 1, 100)),
         ]);
 
-        let rows = totals.by_shown_model();
+        let rows = shown(&totals);
 
         assert_eq!(
             rows,
@@ -880,11 +1282,7 @@ mod tests {
             (Some("e"), spent(9, 9, 5)),
         ]);
 
-        let names: Vec<Option<String>> = totals
-            .by_shown_model()
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
+        let names: Vec<Option<String>> = shown(&totals).into_iter().map(|(name, _)| name).collect();
 
         let some = |name: &str| Some(name.to_string());
         assert_eq!(

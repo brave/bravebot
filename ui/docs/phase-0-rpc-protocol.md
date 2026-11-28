@@ -545,13 +545,18 @@ plain text.
 { "id": 11, "ok": {
   "directory": "/Users/me/repos/thing", "days": 7,
   "total": { "sessions": 3, "turns": 12, "tokens": 90000,
-             "read": 70000, "written": 8000, "unsplit": 12000 },
+             "read": 70000, "written": 8000, "unsplit": 12000,
+             "cacheRead": 52000, "cacheWritten": 6000, "hitRatePermille": 742, "hitRate": "74.2%" },
   "models": [
-    { "model": "claude-opus-5-5", "sessions": 2, "turns": 10, "tokens": 88000,
-      "read": 70000, "written": 8000, "unsplit": 10000 },
-    { "model": null, "sessions": 1, "turns": 2, "tokens": 2000,
-      "read": 0, "written": 0, "unsplit": 2000 } ],
-  "unreadable": 0 } }
+    { "model": "claude-opus-5-5", "service": "bedrock", "serviceWord": "bedrock",
+      "sessions": 2, "turns": 10, "tokens": 88000, "read": 70000, "written": 8000, "unsplit": 10000,
+      "cacheRead": 52000, "cacheWritten": 6000, "hitRatePermille": 742, "hitRate": "74.2%" },
+    { "model": null, "service": null, "serviceWord": "unknown", "sessions": 1, "turns": 2, "tokens": 2000,
+      "read": 0, "written": 0, "unsplit": 2000,
+      "cacheRead": 0, "cacheWritten": 0, "hitRatePermille": null, "hitRate": "-" } ],
+  "unreadable": 0,
+  "withoutCache": { "sessions": 1, "silent": 0, "older": 1,
+    "note": "1 session carries no cache figures and is left out of the hit rate. On a service that states none: 0. Naming no service, so possibly older than the cache figures: 1." } } }
 ```
 
 Totals what the recorded sessions spent, as `bravebot stats --models` does (CLI-37), by calling
@@ -563,12 +568,24 @@ would act on, and `null` when not given.
 
 `total` and each row of `models` carry `sessions`, `turns`, `tokens`, `read`, `written` and
 `unsplit`, which is the tokens of sessions that kept no split, so `read + written + unsplit` is
-`tokens`. `models` comes from `Totals::by_shown_model`, the grouping the terminal uses: names are
-cleaned and cut to 60 characters, names that read alike are one row, and rows are ordered by
-tokens, then sessions, then name. `model` is `null` for the sessions whose record names no model,
-or a name with nothing left after cleaning; the client labels it `unknown`. `unreadable` counts the
-entries under the sessions directory that could not be read as a record; they add to no figure and
-are never named. No figure is in money.
+`tokens`. They also carry `cacheRead` and `cacheWritten`, added over the sessions whose record
+carries cache figures, and `hitRatePermille`, cache read over the tokens those sessions read in
+tenths of a percent, `null` where they read nothing. `hitRate` is the same figure as `bravebot
+stats` prints it, `-` where it is `null`. `models` comes from
+`Totals::by_shown_model_and_service`, the grouping the terminal uses: a row is a model and the
+service that answered it, names are cleaned and cut to 60 characters, names that read alike are one
+row, and rows are ordered by tokens, then sessions, then name, then service. `model` is `null` for
+the sessions whose record names no model, or a name with nothing left after cleaning; the client
+labels it `unknown`. `service` is one of the record's fixed words `aichat`, `bedrock`, `gateway`,
+`chatgpt` and `xai`, or `null` for a record that names none or names another word, and
+`serviceWord` is the word the terminal shows for it, `unknown` for `null`. `unreadable` counts the entries under the
+sessions directory that could not be read as a record; they add to no figure and are never named.
+`withoutCache` counts the sessions that carry no cache figures, of those the ones that name a
+service (`silent`) and the ones that name none (`older`), and `note` is the terminal's note on
+them, `null` where there are none. The bridge words `hitRate`, `serviceWord` and `note` with the
+same functions the command does, in the `en-US` catalog `bravebot-rpc` chose (LOCALE-7), and the
+client lays them out without wording any of them again. No figure is
+in money.
 
 The method writes nothing, needs no open session, and answers the same under incognito, where no
 session adds a record.

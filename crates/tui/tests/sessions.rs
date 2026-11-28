@@ -2636,6 +2636,7 @@ fn a_rewind_point_keeps_no_cache_figure_in_the_record() {
     snapshot.cached = Some(bravebot_aichat::protocol::Cached {
         read_tokens: 800,
         written_tokens: 100,
+        stated: true,
     });
     let point = bravebot_session::sessions::RewindPoint {
         coverage: Default::default(),

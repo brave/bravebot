@@ -4500,6 +4500,7 @@ mod tests {
         hit.cached = Some(bravebot_aichat::protocol::Cached {
             read_tokens: 41_200,
             written_tokens: 1_800,
+            stated: true,
         });
 
         let shown = rendered(&report(&hit));
@@ -4568,6 +4569,7 @@ mod tests {
             turn.cached = Some(bravebot_aichat::protocol::Cached {
                 read_tokens: 0,
                 written_tokens: 2_400,
+                stated: true,
             });
 
             let shown = rendered(&report(&turn));
@@ -4608,6 +4610,7 @@ mod tests {
         first.cached = Some(bravebot_aichat::protocol::Cached {
             read_tokens: 0,
             written_tokens: 2_400,
+            stated: true,
         });
 
         let shown = rendered(&report(&first));

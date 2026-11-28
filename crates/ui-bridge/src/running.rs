@@ -114,6 +114,10 @@ pub struct State {
     /// What answered rather than what was asked for: an endpoint may serve something other than
     /// the name it was given. `None` until a turn has reached a server.
     pub model: Option<String>,
+    /// The backend that answered the last turn that reached one, for the record to name beside the
+    /// model. `None` until a turn here has reached one; a resumed record's word is kept by its
+    /// handle.
+    pub service: Option<bravebot_agent::BackendKind>,
     pub todos: BTreeMap<usize, Vec<Row>>,
     /// What every turn of the session did, summed: the writes and commands an open loop is worked
     /// out from (OPEN-1). Seeded from the record on resume, carried into a fork from the parent,
@@ -305,6 +309,7 @@ impl State {
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
             model: None,
+            service: None,
             todos: BTreeMap::new(),
             work: Default::default(),
             written: Vec::new(),

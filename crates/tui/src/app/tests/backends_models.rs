@@ -1964,10 +1964,12 @@ fn a_resumed_rewind_reports_no_cache_figure_while_a_live_one_puts_it_back() {
         Cached {
             read_tokens: 400,
             written_tokens: 50,
+            stated: true,
         },
         Cached {
             read_tokens: 900,
             written_tokens: 100,
+            stated: true,
         },
     ];
     for (index, cached) in figures.into_iter().enumerate() {

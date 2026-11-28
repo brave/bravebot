@@ -6043,6 +6043,32 @@ stats-column-written = Written
 # Tokens a record holds that its split into read and written does not cover: every token of a
 # session written before the split was kept.
 stats-column-unsplit = Unsplit
+# Tokens the service answered out of its own cache, and tokens it wrote into the cache, added over
+# the sessions whose record carries those figures.
+stats-column-cache-read = Cache read
+stats-column-cache-written = Cache written
+# Cache read over the tokens read by the sessions whose record carries cache figures, as a
+# percentage, or a dash where those sessions read nothing.
+stats-column-hit-rate = Hit rate
+# A hit rate under that heading. $rate is the figure to a tenth, with the catalog's decimal
+# separator.
+stats-hit-rate = { $rate }%
+# The service that answered the sessions of a row, one fixed word for each kind of backend.
+stats-column-service = Service
+stats-service-aichat = brave
+stats-service-bedrock = bedrock
+stats-service-gateway = gateway
+stats-service-chatgpt = chatgpt
+stats-service-xai = xai
+# A session whose record names no service: one written before the service was kept.
+stats-service-unknown = unknown
+# How many sessions carry no cache figures, so the hit rate leaves them out; how many of those ran
+# on a service that states no cache figure; and how many name no service, whose records may be older
+# than the cache figures.
+stats-without-cache = { $count ->
+    [one] 1 session carries no cache figures and is left out of the hit rate. On a service that states none: { $silent }. Naming no service, so possibly older than the cache figures: { $older }.
+   *[other] { $count } sessions carry no cache figures and are left out of the hit rate. On a service that states none: { $silent }. Naming no service, so possibly older than the cache figures: { $older }.
+    }
 stats-row-total = Total
 # A session whose record names no model: one written before the model was kept, one whose turns
 # never reached a server, and one copied in from another program.

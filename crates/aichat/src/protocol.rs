@@ -732,7 +732,8 @@ pub struct Usage {
 /// money and in latency.
 ///
 /// Both zero means a service that said nothing about a cache as much as it means a round that
-/// missed, and nothing here distinguishes the two.
+/// missed. [`Cached::stated`] tells the two apart: it is set where the reply held a cache figure,
+/// zero or not.
 ///
 /// A session record keeps the sum of these figures over the session, in its token split, for a
 /// reader of the file. The status panel does not read them back: a resumed session reports nothing
@@ -745,15 +746,25 @@ pub struct Cached {
     pub read_tokens: u64,
     /// Written into the cache on the way past, for the next request to read back.
     pub written_tokens: u64,
+    /// Whether the reply held either figure as a number, so that a round whose cache missed is
+    /// told from a service that states no cache figure. Set by the reader of each protocol from the
+    /// presence of the numeric fields it parses, and never from any other text of the reply.
+    ///
+    /// Not written with the figures: a session record says it by keeping the figures at all
+    /// ([SESSION-11](../../../docs/specs/sessions.md#SESSION-11)).
+    #[serde(skip)]
+    pub stated: bool,
 }
 
 impl Cached {
     /// Add another request's figures, for a total over a turn or a session.
     ///
     /// Saturates at `u64::MAX`, since a gateway can state the largest number for either figure.
+    /// The total is stated where either part was.
     pub fn add(&mut self, other: Cached) {
         self.read_tokens = self.read_tokens.saturating_add(other.read_tokens);
         self.written_tokens = self.written_tokens.saturating_add(other.written_tokens);
+        self.stated |= other.stated;
     }
 
     /// Whether either figure has anything in it.
@@ -790,15 +801,14 @@ where
         cache_write_tokens: Option<serde_json::Value>,
     }
     let details = Option::<Details>::deserialize(deserializer)?;
+    let read = details.as_ref().and_then(|details| details.cached_tokens);
+    let written = details
+        .and_then(|details| details.cache_write_tokens)
+        .and_then(|figure| figure.as_u64());
     Ok(Cached {
-        read_tokens: details
-            .as_ref()
-            .and_then(|details| details.cached_tokens)
-            .unwrap_or_default(),
-        written_tokens: details
-            .and_then(|details| details.cache_write_tokens)
-            .and_then(|figure| figure.as_u64())
-            .unwrap_or_default(),
+        read_tokens: read.unwrap_or_default(),
+        written_tokens: written.unwrap_or_default(),
+        stated: read.is_some() || written.is_some(),
     })
 }
 
@@ -1480,7 +1490,8 @@ mod tests {
                 usage.cached,
                 Cached {
                     read_tokens: 1100,
-                    written_tokens: 90
+                    written_tokens: 90,
+                    stated: true
                 }
             );
         }
@@ -1529,7 +1540,8 @@ mod tests {
                     usage.cached,
                     Cached {
                         read_tokens: shape.read_tokens,
-                        written_tokens: shape.written_tokens
+                        written_tokens: shape.written_tokens,
+                        stated: true
                     },
                     "{}",
                     shape.what
@@ -2254,7 +2266,8 @@ mod tests {
             parsed.usage().cached,
             Cached {
                 read_tokens: 1100,
-                written_tokens: 90
+                written_tokens: 90,
+                stated: true
             }
         );
         assert_eq!(parsed.usage().prompt_tokens, 1200);
@@ -2279,7 +2292,8 @@ mod tests {
                 parsed.usage().cached,
                 Cached {
                     read_tokens: shape.read_tokens,
-                    written_tokens: shape.written_tokens
+                    written_tokens: shape.written_tokens,
+                    stated: true
                 },
                 "{}",
                 shape.what
@@ -2324,7 +2338,8 @@ mod tests {
                 parsed.usage().cached,
                 Cached {
                     read_tokens: 0,
-                    written_tokens: 90
+                    written_tokens: 90,
+                    stated: true
                 },
                 "{details}"
             );
@@ -2364,7 +2379,8 @@ mod tests {
                 parsed.usage().cached,
                 Cached {
                     read_tokens: 1100,
-                    written_tokens: 0
+                    written_tokens: 0,
+                    stated: true
                 },
                 "{write}"
             );
@@ -2384,6 +2400,29 @@ mod tests {
         assert!(!parsed.usage().cached.any());
     }
 
+    /// A reply that states a cache read of zero is a round that missed, and one whose details hold
+    /// no cache figure, or a `null` one, is a service that said nothing. A session record keeps a
+    /// block for the first and none for the second, so the reader has to tell them apart.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_stated_zero_is_a_cache_figure_and_an_absent_or_null_one_is_not() {
+        for (details, stated) in [
+            (r#"{"cached_tokens":0}"#, true),
+            (r#"{"cache_write_tokens":0}"#, true),
+            (r#"{"audio_tokens":0}"#, false),
+            (r#"{"cached_tokens":null}"#, false),
+            (r#"{"cached_tokens":null,"cache_write_tokens":"90"}"#, false),
+            ("null", false),
+        ] {
+            let raw = format!(
+                r#"{{"model":"m","usage":{{"prompt_tokens":9,"prompt_tokens_details":{details}}},
+                "choices":[{{"message":{{"content":"hi"}}}}]}}"#
+            );
+            let parsed: ChatResponse = serde_json::from_str(&raw).expect("a reply");
+            assert_eq!(parsed.usage().cached.stated, stated, "{details}");
+        }
+    }
+
     /// A gateway states both cache figures and may state the largest number. Both figures
     /// saturate when summed, whether `Cached` or the `Usage` that carries it is added. The prompt
     /// and completion counts of `Usage` are summed as before, which this test does not reach.
@@ -2397,6 +2436,7 @@ mod tests {
         let largest = Cached {
             read_tokens: u64::MAX,
             written_tokens: u64::MAX,
+            stated: true,
         };
         assert_eq!(stated.usage().cached, largest);
 
@@ -2404,6 +2444,7 @@ mod tests {
         cached.add(Cached {
             read_tokens: 1,
             written_tokens: 1,
+            stated: true,
         });
         assert_eq!(cached, largest);
 

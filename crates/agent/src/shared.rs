@@ -1564,6 +1564,7 @@ mod tests {
                 cached: Cached {
                     read_tokens: 50,
                     written_tokens: 5,
+                    stated: true,
                 },
                 ..Default::default()
             });
@@ -1574,6 +1575,7 @@ mod tests {
                 cached: Cached {
                     read_tokens: 20,
                     written_tokens: 2,
+                    stated: true,
                 },
                 ..Default::default()
             });
@@ -1587,6 +1589,7 @@ mod tests {
                 cached: Cached {
                     read_tokens: 70,
                     written_tokens: 7,
+                    stated: true,
                 },
                 // The counts beside the clock are made again from the sum, so they hold the
                 // delegate's tokens as well as the turn's.

@@ -179,6 +179,9 @@ pub fn keep(
             handle.set_agent(turn.agent.map(str::to_string));
             handle.set_injected_facts(turn.injected_facts.clone());
             handle.set_touched(turn.touched.clone());
+            if let Some(service) = turn.outcome.backend {
+                handle.set_service(service);
+            }
             let written = handle.save_continuation(
                 record,
                 Continuation {
@@ -206,6 +209,9 @@ pub fn keep(
                 Handle::begin(root, Front::Terminal, bravebot_stamp::BUILD).began_at(turn.started);
             handle.set_agent(turn.agent.map(str::to_string));
             handle.set_injected_facts(turn.injected_facts.clone());
+            if let Some(service) = turn.outcome.backend {
+                handle.set_service(service);
+            }
             let history = [bravebot_session::sessions::StoredTurn::completed(
                 1,
                 turn.prompt,

@@ -9,12 +9,13 @@ import { Skeleton } from './Skeleton'
 /** The "last n days" choices. `null` is no limit, as `bravebot stats` without `--days`. */
 const DAYS: readonly (number | null)[] = [null, 1, 7, 30]
 
-const COLUMNS = ['Sessions', 'Turns', 'Tokens', 'Read', 'Written', 'Unsplit'] as const
+const COLUMNS = ['Sessions', 'Turns', 'Tokens', 'Read', 'Written', 'Unsplit', 'Cache read', 'Cache written', 'Hit rate'] as const
 
 /**
  * Token Spend Across Chats…, the desktop form of `bravebot stats` (CLI-37): what the recorded
  * sessions spent, overall or in one project, optionally for the last n days, with a row for each
- * model when asked.
+ * model and the service that answered it when asked, so one model name served by two services is
+ * two rows that say which is which.
  *
  * Tokens only. No model listing carries a price, so nothing is shown in money (CLI-37 Known
  * costs). The bridge reads every record whole on each call, so only a new days choice asks it
@@ -44,10 +45,11 @@ export function SpendReport({ directory, onClose }: {
 
   const rows = report ? statsRows(byModel ? report : { ...report, models: [] }) : []
   const unreadable = report?.unreadable ?? 0
+  const withoutCache = report?.withoutCache.note ?? null
 
   return (
     <Modal title="Token spend across chats" subtitle={statsScope(days, report?.directory ?? directory)}
-      size="lg" className="spend-report" onClose={onClose}
+      size="xl" className="spend-report" onClose={onClose}
       actions={<Button kind="filled" onClick={onClose} data-test="spend-report-done">Done</Button>}>
       <div className="spend-report-controls">
         <SegmentedControl size="small" value={days === null ? 'all' : String(days)} aria-label="Sessions last written"
@@ -68,45 +70,57 @@ export function SpendReport({ directory, onClose }: {
           <span aria-hidden="true" onClick={() => setByModel((on) => !on)}>By model</span>
         </div>
       </div>
-      {problem ? (
-        <Alert type="error" size="small" role="alert" data-test="spend-report-error">{problem}</Alert>
-      ) : report === null ? (
-        <Skeleton label="Totalling the chats…" count={2} delayed={!showLoading} data-test="spend-report-loading" />
-      ) : (
-        <>
-          <table className="spend-report-table" data-test="spend-report-table">
-            <thead>
-              <tr>
-                <th scope="col">{byModel ? 'Model' : <span className="visually-hidden">Row</span>}</th>
-                {COLUMNS.map((column) => <th scope="col" key={column}>{column}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => (
-                <tr key={index} className={row.total ? 'spend-report-total' : undefined} data-test="spend-report-row">
-                  <th scope="row" className="spend-report-label" data-tooltip={row.total ? undefined : row.label}>{row.label}</th>
-                  <td>{row.sessions}</td>
-                  <td>{row.turns}</td>
-                  <td>{row.tokens}</td>
-                  <td>{row.read}</td>
-                  <td>{row.written}</td>
-                  <td>{row.unsplit}</td>
+      <div className="spend-report-scroll" data-test="spend-report-scroll">
+        {problem ? (
+          <Alert type="error" size="small" role="alert" data-test="spend-report-error">{problem}</Alert>
+        ) : report === null ? (
+          <Skeleton label="Totalling the chats…" count={2} delayed={!showLoading} data-test="spend-report-loading" />
+        ) : (
+          <>
+            <table className="spend-report-table" data-test="spend-report-table">
+              <thead>
+                <tr>
+                  <th scope="col">{byModel ? 'Model' : <span className="visually-hidden">Row</span>}</th>
+                  {byModel && <th scope="col" className="spend-report-service">Service</th>}
+                  {COLUMNS.map((column) => <th scope="col" key={column}>{column}</th>)}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {unreadable > 0 && (
-            <p className="spend-report-note" data-test="spend-report-unreadable">
-              {unreadable === 1
-                ? '1 entry in the sessions directory could not be read as a record and is not counted.'
-                : `${unreadable} entries in the sessions directory could not be read as records and are not counted.`}
-            </p>
-          )}
-        </>
-      )}
-      <p className="spend-report-note" data-test="spend-report-incognito">
-        An incognito session leaves no record, so none is counted.
-      </p>
+              </thead>
+              <tbody>
+                {rows.map((row, index) => (
+                  <tr key={index} className={row.total ? 'spend-report-total' : undefined} data-test="spend-report-row">
+                    <th scope="row" className="spend-report-label" data-tooltip={row.total ? undefined : row.label}>
+                      <span className="spend-report-name">{row.label}</span>
+                    </th>
+                    {byModel && <td className="spend-report-service">{row.service}</td>}
+                    <td>{row.sessions}</td>
+                    <td>{row.turns}</td>
+                    <td>{row.tokens}</td>
+                    <td>{row.read}</td>
+                    <td>{row.written}</td>
+                    <td>{row.unsplit}</td>
+                    <td>{row.cacheRead}</td>
+                    <td>{row.cacheWritten}</td>
+                    <td>{row.hitRate}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {unreadable > 0 && (
+              <p className="spend-report-note" data-test="spend-report-unreadable">
+                {unreadable === 1
+                  ? '1 entry in the sessions directory could not be read as a record and is not counted.'
+                  : `${unreadable} entries in the sessions directory could not be read as records and are not counted.`}
+              </p>
+            )}
+            {withoutCache !== null && (
+              <p className="spend-report-note" data-test="spend-report-without-cache">{withoutCache}</p>
+            )}
+          </>
+        )}
+        <p className="spend-report-note" data-test="spend-report-incognito">
+          An incognito session leaves no record, so none is counted.
+        </p>
+      </div>
     </Modal>
   )
 }

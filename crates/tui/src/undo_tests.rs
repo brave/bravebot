@@ -446,6 +446,10 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
 /// them were read and written goes back with them, in the session that took the turn and in one
 /// resumed from its record. A split left as the later turns made it would hold more than the total
 /// it divides.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one undo and one resume, each checked against the split it should leave"
+)]
 #[test]
 fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
     if !in_isolated_profile() {
@@ -470,6 +474,7 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
                 bravebot_aichat::protocol::Cached {
                     read_tokens: 6,
                     written_tokens: 1,
+                    stated: true,
                 },
             ),
             (
@@ -478,6 +483,7 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
                 bravebot_aichat::protocol::Cached {
                     read_tokens: 8,
                     written_tokens: 2,
+                    stated: true,
                 },
             ),
         ];
@@ -519,6 +525,7 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
                 cache: bravebot_aichat::protocol::Cached {
                     read_tokens: 14,
                     written_tokens: 3,
+                    stated: true,
                 },
             },
             "resumed: {resumed}, the split did not come back from the record with the tokens"
@@ -542,6 +549,7 @@ fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
             sessions::Split::of(11, 4).with_cache(bravebot_aichat::protocol::Cached {
                 read_tokens: 6,
                 written_tokens: 1,
+                stated: true,
             }),
             "resumed: {resumed}, the undone turn's split stayed in the session"
         );

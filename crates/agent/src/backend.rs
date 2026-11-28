@@ -1560,8 +1560,9 @@ impl<'a> Backend<'a> {
     }
 
     /// Which backend this is, as the closed word a failure line names it
-    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
-    fn kind(&self) -> BackendKind {
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)), and the service a session record
+    /// names ([SESSION-11](../../../docs/specs/sessions.md#SESSION-11)).
+    pub fn kind(&self) -> BackendKind {
         match self {
             Self::Aichat { .. } => BackendKind::Aichat,
             Self::Bedrock { .. } => BackendKind::Bedrock,

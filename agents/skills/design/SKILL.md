@@ -77,7 +77,10 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
   the right of the footer. A secondary action that should stand apart (Cancel, Stop all) carries
   `modal-leading` and goes to the left. A dialog of a sentence or two passes `compact` to `Modal`
   to tighten the vertical spacing around the body; the archive confirmation also keeps Cancel next
-  to the primary action at the right.
+  to the primary action at the right. A dialog that holds a table (Token spend across chats) sets
+  its figures in `--leo-spacing-s` cell padding and puts the table and the notes under it in one
+  box whose height leaves the head and footer on screen at the minimum window. That box always
+  draws a scrollbar, vertical first and horizontal as the fallback.
 
 ## Hard rules
 

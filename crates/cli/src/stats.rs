@@ -12,7 +12,7 @@
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
 use bravebot_session::search;
-use bravebot_session::stats::{MOST_DAYS, Scope, Spent, Totals, since_days_ago};
+use bravebot_session::stats::{MOST_DAYS, Scope, Spent, Totals, service_word, since_days_ago};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -57,6 +57,12 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
     if totals.unreadable > 0 {
         eprintln!("{}", t!(stats_unreadable, count = totals.unreadable));
     }
+    // Beside the figures for the reason the notes above are: the hit rate leaves these sessions
+    // out, and the person reading it is told how many, how many ran on a service that states no
+    // cache figure, and how many may be older than the figures (CLI-5).
+    if let Some(note) = totals.all.without_cache_note() {
+        eprintln!("{note}");
+    }
     ExitCode::SUCCESS
 }
 
@@ -90,42 +96,58 @@ fn read(words: &[String]) -> Option<Request> {
     Some(request)
 }
 
-/// The scope in a sentence, then a table: a row for each model when asked for, then the total.
+/// The scope in a sentence, then a table: a row for each model and service when asked for, then
+/// the total.
 fn report(request: &Request, project: Option<&Path>, totals: &Totals) -> String {
-    let mut rows: Vec<(String, Spent)> = Vec::new();
+    let mut rows: Vec<(String, String, Spent)> = Vec::new();
     if request.models {
         rows.extend(by_model(totals));
     }
-    rows.push((t!(stats_row_total).to_string(), totals.all));
+    rows.push((t!(stats_row_total).to_string(), String::new(), totals.all));
 
-    let heading = [
-        if request.models {
-            t!(stats_column_model).to_string()
-        } else {
-            String::new()
-        },
+    let mut heading = vec![if request.models {
+        t!(stats_column_model).to_string()
+    } else {
+        String::new()
+    }];
+    if request.models {
+        heading.push(t!(stats_column_service).to_string());
+    }
+    heading.extend([
         t!(stats_column_sessions).to_string(),
         t!(stats_column_turns).to_string(),
         t!(stats_column_tokens).to_string(),
         t!(stats_column_read).to_string(),
         t!(stats_column_written).to_string(),
         t!(stats_column_unsplit).to_string(),
-    ];
-    let cells: Vec<[String; 7]> = rows
+        t!(stats_column_cache_read).to_string(),
+        t!(stats_column_cache_written).to_string(),
+        t!(stats_column_hit_rate).to_string(),
+    ]);
+    // The columns that are words rather than figures, which are left-aligned.
+    let named = if request.models { 2 } else { 1 };
+    let cells: Vec<Vec<String>> = rows
         .iter()
-        .map(|(name, spent)| {
-            [
-                name.clone(),
+        .map(|(name, service, spent)| {
+            let mut row = vec![name.clone()];
+            if request.models {
+                row.push(service.clone());
+            }
+            row.extend([
                 spent.sessions.to_string(),
                 spent.turns.to_string(),
                 spent.tokens.to_string(),
                 spent.split.read.to_string(),
                 spent.split.written.to_string(),
                 spent.unsplit().to_string(),
-            ]
+                spent.split.cache.read_tokens.to_string(),
+                spent.split.cache.written_tokens.to_string(),
+                spent.shown_hit_rate(),
+            ]);
+            row
         })
         .collect();
-    let widths: Vec<usize> = (0..7)
+    let widths: Vec<usize> = (0..heading.len())
         .map(|column| {
             std::iter::once(&heading)
                 .chain(&cells)
@@ -147,9 +169,10 @@ fn report(request: &Request, project: Option<&Path>, totals: &Totals) -> String 
             .enumerate()
             .map(|(column, cell)| {
                 let padding = " ".repeat(widths[column] - width(cell));
-                match column {
-                    0 => format!("{cell}{padding}"),
-                    _ => format!("{padding}{cell}"),
+                if column < named {
+                    format!("{cell}{padding}")
+                } else {
+                    format!("{padding}{cell}")
                 }
             })
             .collect::<Vec<_>>()
@@ -165,15 +188,17 @@ fn width(cell: &str) -> usize {
     bravebot_tui::wrap::display_width(cell)
 }
 
-/// A row for each model, the one that spent most first, as [`Totals::by_shown_model`] groups and
-/// orders them, with the row for no name labelled `unknown`.
-fn by_model(totals: &Totals) -> Vec<(String, Spent)> {
+/// A row for each model and the service that answered it, the one that spent most first, as
+/// [`Totals::by_shown_model_and_service`] groups and orders them, with the row for no name
+/// labelled `unknown` and the row for no service labelled the same.
+fn by_model(totals: &Totals) -> Vec<(String, String, Spent)> {
     totals
-        .by_shown_model()
+        .by_shown_model_and_service()
         .into_iter()
-        .map(|(name, spent)| {
+        .map(|((name, service), spent)| {
             (
                 name.unwrap_or_else(|| t!(stats_model_unknown).to_string()),
+                service_word(service).to_string(),
                 spent,
             )
         })
@@ -213,6 +238,7 @@ mod tests {
             turns,
             tokens,
             split: bravebot_session::sessions::Split::default(),
+            ..Spent::default()
         }
     }
 
@@ -241,7 +267,9 @@ mod tests {
         let mut totals = Totals::default();
         for (model, spent) in models {
             totals.all.merge(*spent);
-            totals.by_model.insert(model.map(str::to_string), *spent);
+            totals
+                .by_model_and_service
+                .insert((model.map(str::to_string), None), *spent);
         }
         totals
     }
@@ -333,7 +361,18 @@ mod tests {
         assert!(lines[3].starts_with(t!(stats_row_total)), "{report}");
         assert_eq!(
             lines[3].split_whitespace().collect::<Vec<_>>(),
-            [t!(stats_row_total), "3", "9", "1255", "0", "0", "1255"],
+            [
+                t!(stats_row_total),
+                "3",
+                "9",
+                "1255",
+                "0",
+                "0",
+                "1255",
+                "0",
+                "0",
+                "-"
+            ],
             "{report}"
         );
     }
@@ -356,26 +395,47 @@ mod tests {
             ]),
         );
 
+        // Each heading's words, in order and nothing else, so a heading of two words is two here.
         let heading: Vec<&str> = report.lines().nth(2).unwrap().split_whitespace().collect();
-        assert_eq!(
-            heading,
-            [
-                t!(stats_column_model),
-                t!(stats_column_sessions),
-                t!(stats_column_turns),
-                t!(stats_column_tokens),
-                t!(stats_column_read),
-                t!(stats_column_written),
-                t!(stats_column_unsplit),
-            ],
-            "{report}"
-        );
+        let expected: Vec<&str> = [
+            t!(stats_column_model),
+            t!(stats_column_service),
+            t!(stats_column_sessions),
+            t!(stats_column_turns),
+            t!(stats_column_tokens),
+            t!(stats_column_read),
+            t!(stats_column_written),
+            t!(stats_column_unsplit),
+            t!(stats_column_cache_read),
+            t!(stats_column_cache_written),
+            t!(stats_column_hit_rate),
+        ]
+        .iter()
+        .flat_map(|column| column.split_whitespace())
+        .collect();
+        assert_eq!(heading, expected, "{report}");
+        let unknown = t!(stats_service_unknown);
         assert_eq!(
             stats_rows_of(&report),
             [
-                vec!["split", "2", "5", "1000", "900", "100", "0"],
-                vec!["old", "1", "3", "40", "0", "0", "40"],
-                vec![t!(stats_row_total), "3", "8", "1040", "900", "100", "40"],
+                vec![
+                    "split", unknown, "2", "5", "1000", "900", "100", "0", "0", "0", "-"
+                ],
+                vec![
+                    "old", unknown, "1", "3", "40", "0", "0", "40", "0", "0", "-"
+                ],
+                vec![
+                    t!(stats_row_total),
+                    "3",
+                    "8",
+                    "1040",
+                    "900",
+                    "100",
+                    "40",
+                    "0",
+                    "0",
+                    "-"
+                ],
             ],
             "{report}"
         );
@@ -398,13 +458,41 @@ mod tests {
         );
 
         let rows = stats_rows_of(&report);
+        let unknown = t!(stats_service_unknown);
         assert_eq!(
             rows,
             [
-                vec!["big", "1", "4", "9000", "0", "0", "9000"],
-                vec!["small", "1", "2", "100", "0", "0", "100"],
-                vec![t!(stats_model_unknown), "1", "0", "0", "0", "0", "0"],
-                vec![t!(stats_row_total), "3", "6", "9100", "0", "0", "9100"],
+                vec![
+                    "big", unknown, "1", "4", "9000", "0", "0", "9000", "0", "0", "-"
+                ],
+                vec![
+                    "small", unknown, "1", "2", "100", "0", "0", "100", "0", "0", "-"
+                ],
+                vec![
+                    t!(stats_model_unknown),
+                    unknown,
+                    "1",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "-"
+                ],
+                vec![
+                    t!(stats_row_total),
+                    "3",
+                    "6",
+                    "9100",
+                    "0",
+                    "0",
+                    "9100",
+                    "0",
+                    "0",
+                    "-"
+                ],
             ],
             "{report}"
         );
@@ -431,7 +519,7 @@ mod tests {
         assert_eq!(rows.len(), 2, "{report}");
         assert!(rows[0].starts_with("evil [2Jmodel"), "{report}");
         assert_eq!(
-            rows[0].split_whitespace().rev().nth(3),
+            rows[0].split_whitespace().rev().nth(6),
             Some("30"),
             "the two names were not one row: {report}"
         );
@@ -526,11 +614,132 @@ mod tests {
         );
 
         let rows = stats_rows_of(&report);
+        let unknown = t!(stats_service_unknown);
         assert_eq!(
             rows,
             [
-                vec![t!(stats_model_unknown), "3", "7", "70", "0", "0", "70"],
-                vec![t!(stats_row_total), "3", "7", "70", "0", "0", "70"],
+                vec![
+                    t!(stats_model_unknown),
+                    unknown,
+                    "3",
+                    "7",
+                    "70",
+                    "0",
+                    "0",
+                    "70",
+                    "0",
+                    "0",
+                    "-"
+                ],
+                vec![
+                    t!(stats_row_total),
+                    "3",
+                    "7",
+                    "70",
+                    "0",
+                    "0",
+                    "70",
+                    "0",
+                    "0",
+                    "-"
+                ],
+            ],
+            "{report}"
+        );
+    }
+
+    /// The cache columns are the cache figures of the sessions that carry them, and the hit rate is
+    /// what the cache served over what those sessions read, 450 of 600. A hit rate taken over every
+    /// token read would read 37.5% here, counting the 600 tokens of a session that carries no cache
+    /// figures, and a cache column swapped for its neighbour would put 40 under Cache read.
+    #[test]
+    fn the_cache_columns_and_the_hit_rate_count_the_sessions_that_carry_cache_figures() {
+        let mut cache = bravebot_session::sessions::Split::default().cache;
+        cache.read_tokens = 450;
+        cache.written_tokens = 40;
+        let cached = Spent {
+            sessions: 1,
+            turns: 2,
+            tokens: 700,
+            split: bravebot_session::sessions::Split {
+                read: 600,
+                written: 100,
+                cache,
+            },
+            cache_sessions: 1,
+            cache_sessions_read: 600,
+            older_without_cache: 0,
+        };
+        let without = Spent {
+            split: bravebot_session::sessions::Split {
+                read: 600,
+                written: 100,
+                ..Default::default()
+            },
+            older_without_cache: 1,
+            ..spent(1, 2, 700)
+        };
+        let report = report(
+            &Request::default(),
+            None,
+            &totals(&[(Some("a"), cached), (Some("b"), without)]),
+        );
+
+        assert_eq!(
+            stats_rows_of(&report),
+            [vec![
+                t!(stats_row_total),
+                "2",
+                "4",
+                "1400",
+                "1200",
+                "200",
+                "0",
+                "450",
+                "40",
+                "75.0%"
+            ]],
+            "{report}"
+        );
+    }
+
+    /// One model served by two services is two rows, each naming its service in a word this
+    /// program chose, and the total is the sum of both. Rows grouped by model alone would be one.
+    #[test]
+    fn a_model_answered_by_two_services_is_a_row_for_each_service() {
+        use bravebot_agent::BackendKind;
+
+        let mut totals = Totals::default();
+        for (service, spent) in [
+            (Some(BackendKind::Bedrock), spent(1, 1, 300)),
+            (Some(BackendKind::Gateway), spent(2, 2, 200)),
+            (None, spent(1, 1, 100)),
+        ] {
+            totals.all.merge(spent);
+            totals
+                .by_model_and_service
+                .insert((Some("claude".to_string()), service), spent);
+        }
+        let report = report(
+            &Request {
+                models: true,
+                ..Request::default()
+            },
+            None,
+            &totals,
+        );
+
+        let services: Vec<Vec<&str>> = stats_rows_of(&report)
+            .into_iter()
+            .map(|row| row[..3].to_vec())
+            .collect();
+        assert_eq!(
+            services,
+            [
+                vec!["claude", t!(stats_service_bedrock), "1"],
+                vec!["claude", t!(stats_service_gateway), "2"],
+                vec!["claude", t!(stats_service_unknown), "1"],
+                vec![t!(stats_row_total), "4", "4"],
             ],
             "{report}"
         );

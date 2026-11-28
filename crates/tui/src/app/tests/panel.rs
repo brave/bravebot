@@ -827,6 +827,7 @@ fn running_totals(
         cached: bravebot_aichat::protocol::Cached {
             read_tokens,
             written_tokens,
+            stated: true,
         },
         ..Default::default()
     }
@@ -922,6 +923,7 @@ fn a_report_with_no_completed_request_leaves_the_cache_figures_where_they_were()
         bravebot_aichat::protocol::Cached {
             read_tokens: 12_000,
             written_tokens: 3_000,
+            stated: true,
         },
         20_000,
     );

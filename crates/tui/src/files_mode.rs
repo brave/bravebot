@@ -1105,6 +1105,7 @@ mod tests {
             bravebot_aichat::protocol::Cached {
                 read_tokens: 12_000,
                 written_tokens: 3_000,
+                stated: true,
             },
             20_000,
         );
@@ -1155,6 +1156,7 @@ mod tests {
             bravebot_aichat::protocol::Cached {
                 read_tokens: 12_000,
                 written_tokens: 3_000,
+                stated: true,
             },
             20_000,
         );

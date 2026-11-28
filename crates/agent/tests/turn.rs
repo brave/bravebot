@@ -98486,6 +98486,102 @@ fn the_skip_a_cut_read_git_search_offers_stays_inside_a_distrusted_blobs_body() 
     );
 }
 
+/// The sixth of labels.md's Known costs. Where a show of a file at a revision stops with lines
+/// left depends on how many lines the blob holds, so for a file the map distrusts the offset that
+/// continues it is printed inside the quarantined body, and the planner is told only that the
+/// answer is incomplete. So is the line count a show from an offset past the file's end prints.
+/// The regression it rejects is the continue sentence or the line count written beside the
+/// reference, which would hand the planner a number the blob's author chose.
+#[test]
+fn the_offset_a_cut_show_of_a_distrusted_file_offers_stays_inside_its_body() {
+    let arguments = r#"{"query":"show","revision":"HEAD:vendor/b.js","limit":2}"#;
+    let cut =
+        read_git_over_a_distrusted_file("read-git-show-cut", &"needle\n".repeat(5), arguments);
+    let whole = read_git_over_a_distrusted_file("read-git-show-whole", "a\nb\n", arguments);
+    assert!(
+        cut.contains("could not be shown to you") && whole.contains("could not be shown to you"),
+        "a show of a distrusted file was shown: {cut}\n--\n{whole}"
+    );
+    assert!(
+        !cut.contains("needle"),
+        "a show of a distrusted file carried its bytes: {cut}"
+    );
+    assert!(
+        cut.contains("this result is incomplete") && !whole.contains("incomplete"),
+        "the incomplete notice did not follow whether lines were left: {cut}\n--\n{whole}"
+    );
+    assert!(
+        !cut.contains("offset 3") && !cut.contains("ask again with offset"),
+        "the offset the blob's length decided reached the planner outside the body: {cut}"
+    );
+    // 37 lines, a count no other number in the result spells.
+    let past = read_git_over_a_distrusted_file(
+        "read-git-show-past-the-end",
+        &"needle\n".repeat(37),
+        r#"{"query":"show","revision":"HEAD:vendor/b.js","offset":100}"#,
+    );
+    assert!(
+        past.contains("could not be shown to you"),
+        "a show of a distrusted file was shown: {past}"
+    );
+    assert!(
+        !past.contains("past its end") && !past.contains("37"),
+        "the line count the blob decided reached the planner outside the body: {past}"
+    );
+}
+
+/// GIT-1, GIT-5 and GIT-9 through the tool's arguments. A planner asks for one line of a long
+/// file at a revision by `offset` and `limit` and gets that line, with the offset that prints the
+/// next, in one call; `offset` given to a log is refused by name. The regressions it rejects are
+/// either argument not read from the call, which prints the first 2,000 lines, and an offset to a
+/// log dropped without a word.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn read_git_shows_the_lines_of_a_file_a_call_asks_for() {
+    let scratch = Scratch::new("read-git-show-range");
+    let lines: String = (1..=3000).map(|n| format!("line {n}\n")).collect();
+    repository::commit_files(&scratch.path, &[("big.rs", lines.as_str())], "big");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "read_git",
+            r#"{"query":"show","revision":"HEAD:big.rs","offset":2500,"limit":1}"#,
+        ),
+        tool_request_2("read_git", r#"{"query":"log","offset":2}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what does line 2500 say"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let ranged = newest_tool_result(received.recv().expect("second request"));
+    assert!(
+        ranged.contains("line 2500")
+            && !ranged.contains("line 2499")
+            && !ranged.contains("line 1\\n"),
+        "the show did not print the one line asked for: {ranged}"
+    );
+    assert!(
+        ranged.contains("ask again with offset 2501 for the next of them"),
+        "the show did not name the offset that continues it: {ranged}"
+    );
+    let refused = newest_tool_result(received.recv().expect("third request"));
+    assert!(
+        refused.contains("offset and limit choose which lines of a file show prints")
+            && refused.contains("log takes neither"),
+        "an offset given to a log was not refused by name: {refused}"
+    );
+}
+
 /// The sentence a sealed result carries to name read_git.
 const READ_GIT_SENTENCE: &str = "To read a repository's history, use read_git";
 
@@ -108163,6 +108259,32 @@ mod repeated_call {
         let told = tool_results(ran.requests.last().unwrap());
         assert!(told.contains("5 times"), "{told}");
         assert_eq!(ran.trail.len(), 3, "{:?}", ran.trail);
+    }
+
+    /// TURN-9: a third identical `run` call is held like any other. It is not run, nobody is
+    /// asked, the planner is told to wait on a background job, and the turn goes on to the reply.
+    /// Rejects: running the held command, putting a question about it, the generic text for
+    /// `run`, and ending the turn at the refusal.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_third_identical_run_is_refused_with_the_route_for_a_command() {
+        let same = || tool_request("run", r#"{"command":"true"}"#);
+        let ran = run(
+            "repeat-run",
+            vec![same(), same(), same(), reply_with("done")],
+            vec![run_it()],
+            None,
+        );
+        assert!(ran.ended.is_ok(), "{:?}", ran.ended.err());
+        assert!(ran.asked.is_empty(), "{:?}", ran.asked);
+        assert_eq!(ran.trail.len(), 1, "{:?}", ran.trail);
+        let told = tool_results(ran.requests.last().expect("a request"));
+        assert_eq!(told.matches("It exited 0.").count(), 2, "{told}");
+        assert!(told.contains("same run call 3 times"), "{told}");
+        assert!(told.contains("background: true"), "{told}");
+        assert!(told.contains("job_output with wait_seconds"), "{told}");
+        assert!(!told.contains("Try a different call"), "{told}");
+        assert_eq!(ran.requests.len(), 4, "the turn did not go on to the reply");
     }
 
     fn start_a_job() -> String {

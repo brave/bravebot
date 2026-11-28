@@ -493,6 +493,33 @@ fn an_approved_plan_runs_and_is_recorded() {
     );
 }
 
+/// SESSION-11, MANIFEST-11: the record a manifest run writes names the backend its plan was asked
+/// of, so `bravebot stats` counts the run under that service. The faults this rejects are a run's
+/// outcome that names no backend and a record written without it, either of which `stats` counts
+/// under `unknown`. The planner is the Brave endpoint, whose word is `aichat`.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_run_records_the_service_its_plan_was_asked_of() {
+    let scratch = Scratch::new("bridge-manifest-service");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let ended = front.run_to_the_end(&session, "approve");
+    assert_eq!(ended["event"], "manifest.done", "{ended}");
+    let id = ended["data"]["record"].as_str().expect("the run's record");
+    let path = std::fs::read_dir(scratch.home().join(".bravebot/sessions"))
+        .expect("a sessions directory")
+        .flatten()
+        .map(|project| project.path().join(format!("{id}.json")))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| panic!("no record {id}"));
+    let record: Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("the record reads")).unwrap();
+    assert_eq!(record["service"], "aichat", "{record}");
+}
+
 /// MANIFEST-11: the conversation is neither read nor written. A turn after a run is sent nothing
 /// the run said, and the session's own record, written by that turn, is a second record.
 #[test]

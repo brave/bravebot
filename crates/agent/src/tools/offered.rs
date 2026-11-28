@@ -1492,6 +1492,18 @@ fn table(
                                         line, which is where a commit says why it was made and \
                                         what it closes. Defaults to false."
                     },
+                    "offset": {
+                        "type": "integer",
+                        "description": "show of <revision>:<path> naming a file only: the line \
+                                        to start at, counting from 1. A show that stopped with \
+                                        more of the file left gives the offset that prints the \
+                                        next of its lines."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "show of <revision>:<path> naming a file only: the most \
+                                        lines to print. Defaults to 2000, at most 2000."
+                    },
                     "since": {
                         "type": "string",
                         "description": "log only: skip commits made before this day, YYYY-MM-DD, \

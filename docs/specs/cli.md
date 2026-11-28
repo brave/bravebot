@@ -2693,15 +2693,28 @@ and how many it wrote. With no flag that is every record of
 every project. `--days <n>` keeps the sessions last written within the last `n` days, counted back
 from now in days of 24 hours. `--project` keeps the sessions that ran in the directory the command
 runs in, or in `<dir>` where a word follows it, and a word that opens with `-` is the next flag and
-not a directory. `--models` puts a row for each model above the total, the one that spent most
-first.
+not a directory. `--models` puts a row for each model and the service that answered it above the
+total, the one that spent most first.
 
 The output is a sentence saying what the figures cover, then a table with a heading row, a row for
-each model when asked for, and a total row, with the columns sessions, turns, tokens, read,
-written and unsplit. Read and written are the split of [SESSION-11](sessions.md#SESSION-11) added
+each model and service when asked for, and a total row, with the columns sessions, turns, tokens,
+read, written, unsplit, cache read, cache written and hit rate, and a service column after the
+model under `--models`. Read and written are the split of [SESSION-11](sessions.md#SESSION-11) added
 over the sessions that recorded it, and unsplit is the tokens of the rest, so the three add up to
 the tokens. A session written before the split was kept has tokens and no split, so its tokens are
-all unsplit. Every figure is written out in full as a number, and the only words that are not fixed
+all unsplit. Cache read and cache written are the split's cache figures added over the sessions
+whose record carries them. The hit rate is cache read over the tokens read by those sessions only,
+to a tenth of a percent with the decimal separator and percent form of the catalog (`50.0%` in
+English, `50,0 %` in French), and is `-` where they read nothing. A record carries them, zeros
+included, whenever the service stated them ([SESSION-11](sessions.md#SESSION-11)), so a session
+whose cache missed every request is in the hit rate and a session on a service that states no cache
+figure is not. The service is the word the record
+keeps for the backend that answered ([SESSION-11](sessions.md#SESSION-11)), shown as a fixed word
+for each kind of backend, and a record that names none, or names a word that is no backend, is the
+`unknown` service, so a model served by Bedrock and by a gateway is two rows. Every gateway is the
+one word `gateway`, whichever entry of the settings named it, so two gateways serving one model
+name are one row. Every figure is
+written out in full as a number, and the only words that are not fixed
 are a model's name and the directory, which have the characters a
 terminal would act on removed. A model's name is cut to 60 characters, and names that read alike
 after cleaning and cutting are one row. A name with nothing left after cleaning is the `unknown` row.
@@ -2710,12 +2723,14 @@ The notes about what is not counted go to stderr, so stdout carries the table an
 many entries under the sessions directory could not be read as a record, when any could. Such an
 entry is a `.json` file that does not parse as a record, or a directory or an entry that could not be
 listed. It is counted and never named, and adds to no figure. A directory that does not exist is not
-such an entry.
+such an entry. A third says how many sessions carry no cache figures and are left out of the hit
+rate, when any do, how many of those name a service, which states no cache figure, and how many
+name no service: such a record may have been written before the cache figures were kept.
 
 It writes nothing and runs under `--incognito`, which only stops a session adding records. A file is
 a record when `sessions list` would list it as one, and is read for its directory, when it was last
-written, its turns, its tokens, how they divided and the model that answered its last turn, and for
-nothing it says.
+written, its turns, its tokens, how they divided, the cache figures, the model that answered its
+last turn and the service that answered it, and for nothing it says.
 Which records belong to a project is decided by the path inside each record and never by the name of
 the directory holding them, which two working directories can share. A project that is not a
 directory, an empty directory, a count of zero or above 9223372036854775807, a count that is not a
@@ -2726,22 +2741,31 @@ A session whose record names no model is its own row, named `unknown`: a record 
 model was kept, one whose turns never reached a server, and one copied in from another program. A
 record that holds no turns or tokens counts as a session with none. A record whose split names more
 than its own tokens is cut to the tokens, so a figure somebody edited cannot make the tokens left
-without a split wrap.
+without a split wrap, and a record whose cache read names more than its read is cut to the read, so
+no row's hit rate passes 100%.
 
 The desktop app answers the same totals through the bridge method `session.stats`, which calls the
-same totalling and the same grouping into model rows as the command, and shows them in a "Token
-Spend Across Chats…" dialog, opened from the command list for every project or from a project
-heading's menu for that project. `directory` stands for `--project <dir>` and `days` for
-`--days <n>`, and the answer always carries the total and a row for each model, so the dialog's "by
-model" choice only changes which rows it draws. A model row with no name has `null` for its model,
-which the dialog shows as `unknown`, and the directory sent back is cleaned as the scope sentence's
-is. A directory that is not one is refused with `not_a_directory`, and a count of zero, a negative
-count, one above 9223372036854775807 and one that is not a whole number with `bad_request`, and a
-refusal carries no figures. The answer gives the count of entries that could not be read as
-`unreadable`, and the dialog says how many there were when there were any, and always says that an
-incognito session is not counted. The method writes nothing, needs no open session, and answers the
-same under incognito. The dialog shows tokens and no money, for the reason under Known costs. The
-window may ask about a directory only when the app offered it, as for `session.purge`
+same totalling and the same grouping into rows of a model and its service as the command, and shows
+them in a "Token Spend Across Chats…" dialog, opened from the command list for every project or
+from a project heading's menu for that project. `directory` stands for `--project <dir>` and `days`
+for `--days <n>`, and the answer always carries the total and a row for each model and service, so
+the dialog's "by model" choice only changes which rows it draws. Each row and the total carry the
+cache read, cache written and hit-rate figures, and each row carries the service's word, `null` for
+the `unknown` service. The bridge also sends the hit rate as the command prints it, each row's
+service as the command shows it, and the command's third note, each made by the same function the
+command calls, in the `en-US` catalog the bridge's binary chooses
+([LOCALE-7](localization.md#LOCALE-7)). The dialog draws those strings as sent, with the cache
+columns and, with the model rows, a service column, so a model served by two services is two rows that
+name which service each is. A model row with no name has `null` for its model, which the dialog
+shows as `unknown`, and the directory sent back is cleaned as the scope sentence's is. A directory
+that is not one is refused with `not_a_directory`, and a count of zero, a negative count, one above
+9223372036854775807 and one that is not a whole number with `bad_request`, and a refusal carries no
+figures. The answer gives the count of entries that could not be read as `unreadable`, and the
+counts the command's third note gives, and the dialog says how many entries could not be read when
+there were any, says the third note when any session carries no cache figures, and always says that
+an incognito session is not counted. The method writes nothing, needs no open session, and answers
+the same under incognito. The dialog shows tokens and no money, for the reason under Known costs.
+The window may ask about a directory only when the app offered it, as for `session.purge`
 ([TRUST-20](trust-map.md#TRUST-20)), so a project never opened in the desktop app is counted there
 only in the total for every project.
 
@@ -2756,12 +2780,19 @@ reading the answer, so none of it goes to a planner.
   no model listing carries one, and the record keeps the cache figures as session totals and not
   per turn.
 - Read is the tokens the model was sent, which is the total less what it wrote, so a prompt the
-  service answered out of its own cache is counted as read. A record that holds tokens and no
-  split counts all of those tokens in the unsplit column.
-- A session is counted whole, under the day it was last written and the model that answered its last
-  turn. A session that ran over several days is counted when it was last written, and one that changed
-  model part way is counted under the model it ended on, because the record keeps neither a time nor
-  a model for each turn.
+  service answered out of its own cache is counted as read, and cache read is a part of read and
+  not added to it. A record that holds tokens and no split counts all of those tokens in the
+  unsplit column. The hit rate is taken over the read tokens of the sessions that carry cache
+  figures, so a session on a service that states none, and a record from before the figures, lower
+  neither cache column nor the rate, and the note on stderr says how many such sessions there are.
+  A record from before the figures that this build resumes gets a cache block from its new turns
+  while its read count still holds the older turns, so its hit rate reads lower than its cache
+  served. A session that moved from a service that states the figures to one that states none
+  keeps its block, so the reads of its silent turns are in the denominator and lower the rate.
+- A session is counted whole, under the day it was last written and the model and the service that
+  answered its last turn. A session that ran over several days is counted when it was last written,
+  and one that changed model or service part way is counted under the model and the service it ended
+  on, because the record keeps neither a time nor a model nor a service for each turn.
 - Each record is counted, and a record can hold spend another record holds. A session forked with
   `--fork` or `/branch` starts with the spend of the original up to the fork, and one moved with
   `/cd` leaves its record in the directory it came from beside the record it writes in the new one,
@@ -2780,13 +2811,22 @@ reading the answer, so none of it goes to a planner.
   and one named `Total` prints a row labelled like the total.
 - `--project` with no directory is this directory, so a script that passes an unquoted variable that
   is empty asks about this directory. A quoted empty one is refused.
-- Every record is read whole to find the seven fields, so the time grows with the size of the store.
+- Every record is read whole to find the nine fields, so the time grows with the size of the store.
 
 `verified-by: bravebot_cli::stats::the_words_say_how_far_back_whether_to_split_by_model_and_where`
 `verified-by: bravebot_cli::stats::a_flag_after_project_is_a_flag_and_leaves_the_project_as_this_directory`
 `verified-by: bravebot_cli::stats::a_muddled_request_is_refused_rather_than_guessed_at`
 `verified-by: bravebot_cli::stats::the_most_days_that_can_be_printed_back_are_accepted_and_one_more_is_not`
 `verified-by: bravebot_cli::stats::an_empty_directory_after_project_is_refused_and_not_read_as_this_one`
+`verified-by: bravebot_cli::stats::the_cache_columns_and_the_hit_rate_count_the_sessions_that_carry_cache_figures`
+`verified-by: bravebot_cli::stats::a_model_answered_by_two_services_is_a_row_for_each_service`
+`verified-by: bravebot_session::stats::the_hit_rate_is_taken_over_the_sessions_that_carry_cache_figures_only`
+`verified-by: bravebot_session::stats::a_record_without_cache_figures_is_older_only_where_it_names_no_service`
+`verified-by: bravebot_session::stats::a_model_is_a_row_for_each_service_and_a_word_that_is_no_service_is_none`
+`verified-by: bravebot_session::stats::a_stated_miss_is_in_the_hit_rate_and_a_silent_service_is_counted_apart`
+`verified-by: bravebot_cli::running::a_stated_cache_miss_is_kept_and_counted_and_a_silent_service_is_counted_apart`
+`verified-by: bravebot_cli::running::stats_names_the_service_and_takes_the_hit_rate_over_the_sessions_with_cache_figures`
+`verified-by: bravebot_cli::running::stats_writes_the_hit_rate_in_the_number_form_of_its_catalog`
 `verified-by: bravebot_cli::stats::a_table_without_models_is_the_total_alone`
 `verified-by: bravebot_cli::stats::a_table_with_models_lists_the_one_that_spent_most_first_and_the_total_last`
 `verified-by: bravebot_cli::stats::a_model_name_reaches_a_row_with_nothing_a_terminal_would_act_on`
@@ -2810,6 +2850,7 @@ reading the answer, so none of it goes to a planner.
 `verified-by: bravebot_session::stats::the_split_totals_the_records_that_kept_it_and_leaves_the_rest_unsplit`
 `verified-by: bravebot_session::stats::a_session_that_went_on_after_an_unsplit_record_is_split_for_the_later_turns_only`
 `verified-by: bravebot_session::stats::a_split_past_the_total_is_cut_to_it`
+`verified-by: bravebot_session::stats::a_cache_read_past_the_read_is_cut_to_it_in_its_own_row`
 `verified-by: bravebot_cli::stats::the_split_is_drawn_under_its_own_headings_beside_the_total`
 `verified-by: bravebot_cli::running::stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_total`
 `verified-by: bravebot_cli::running::stats_by_model_has_a_row_for_each_model_and_one_for_a_record_that_names_none`
@@ -2823,6 +2864,7 @@ reading the answer, so none of it goes to a planner.
 `verified-by: bravebot_ui_bridge::stats::a_directory_keeps_only_the_records_that_ran_in_it`
 `verified-by: bravebot_ui_bridge::stats::days_leave_out_a_record_last_written_before_the_cut`
 `verified-by: bravebot_ui_bridge::stats::a_count_that_is_no_number_of_days_and_a_path_that_is_no_directory_are_refused`
+`verified-by: bravebot_ui_bridge::stats::a_model_answered_by_two_services_is_a_row_for_each_with_its_cache_figures`
 
 <a id="CLI-38"></a>
 ### CLI-38: `--max-rounds` and `--max-tokens` stop a one-shot run at a limit, on a status of their own

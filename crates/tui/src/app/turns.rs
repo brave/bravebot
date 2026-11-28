@@ -829,6 +829,7 @@ pub(super) fn run_turn_animated(
     whole.then(finished.work);
     stored.set_work(whole);
     keep_the_effort_of(stored, session);
+    keep_the_service_of(&finished, stored);
     stored.set_written(&session.written());
     // Kept whatever way the turn ended, since the worker reported each reference as it met it.
     stored.set_references(session.references());
@@ -856,6 +857,20 @@ pub(super) fn keep_the_effort_of(
     session: &Session,
 ) {
     stored.set_effort(session.effort_in_force());
+}
+
+/// The backend that answered a turn that finished, kept for the record the turn's save writes, so
+/// `bravebot stats` can name the service beside the model (SESSION-11). A turn that failed leaves
+/// the one before it in place, as the model is left.
+pub(super) fn keep_the_service_of(
+    finished: &FinishedTurn,
+    stored: &mut bravebot_session::sessions::Handle,
+) {
+    if let Ok(outcome) = &finished.outcome
+        && let Some(service) = outcome.backend
+    {
+        stored.set_service(service);
+    }
 }
 
 /// The links the turn recorded with `set_link`, read as links again by the one definition of one
