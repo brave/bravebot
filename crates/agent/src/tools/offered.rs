@@ -857,6 +857,10 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
 /// [`state_what_is_beside`] for `tools` read beside the tools called `names`, which need not be
 /// the ones `tools` holds: the tools a turn holds back for `load_tool` are written beside the list
 /// the turn offers, and not beside each other (TOOL-6, TOOL-7).
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm for each tool whose text names another, all beside the list a turn settled on"
+)]
 fn state_what_is_beside_names(tools: &mut [Tool], names: &[String]) {
     let beside = |name: &str| names.iter().any(|offered| offered == name);
     for tool in tools.iter_mut() {
@@ -1199,6 +1203,10 @@ pub fn state_what_is_held(tools: &mut [Tool], held: &[String]) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one entry for each tool the table offers, with the text of its schema"
+)]
 fn table(
     scheduling: Scheduling,
     arming: crate::watch::Arming,

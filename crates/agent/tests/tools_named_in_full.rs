@@ -19,6 +19,7 @@ use mock_model::{Scratch, config_for, reply_with, serve_sequence};
 mod turns;
 
 /// The names the first request of one turn offered.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn first_request_names(workspace: &Workspace) -> Vec<String> {
     let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
     turns::run(
@@ -43,6 +44,7 @@ fn first_request_names(workspace: &Workspace) -> Vec<String> {
 /// The regression it rejects is a split that reads a definition's `tools:` line and not the
 /// command line's `--tools`, which holds back a tool the person named for the run.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_held_back_tool_named_by_the_command_line_is_offered_in_full() {
     let scratch = Scratch::new("tools-named-in-full");
     let workspace = Workspace::new(&scratch.path).expect("workspace");

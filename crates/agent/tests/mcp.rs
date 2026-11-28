@@ -8949,6 +8949,7 @@ fn tools_under_the_threshold_are_offered_in_full_with_no_loader() {
 }
 
 /// The description of the `load_tool` a request offered, or nothing where it offered none.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn loader_description(request: &str) -> String {
     let request: Value = serde_json::from_str(request).expect("a request");
     request["tools"]

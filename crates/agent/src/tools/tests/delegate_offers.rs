@@ -901,6 +901,7 @@ fn the_isolation_field_says_checkouts_share_refs_and_who_fetches_once() {
 /// and a delegate's list built with the one for a turn that arranges it would name the tool. `run`
 /// sends a watch request to the skill `watching` (RUN-18), which names no such tool.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_delegates_descriptions_do_not_name_schedule_next() {
     use bravebot_core::capability::{Capability, CapabilitySet};
     let offered = for_delegate(

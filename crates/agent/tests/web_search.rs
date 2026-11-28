@@ -260,6 +260,7 @@ const CALL: &str = r#"{"service":"web","q":"rust async","count":3}"#;
 /// own split, so the regression it rejects is a list for loading that holds `web_search` whatever
 /// the configuration, which sends a planner after a tool that can only fail.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_tool_is_listed_for_loading_only_where_a_key_file_is_configured() {
     let listed = |body: &str| -> Vec<String> {
         let request: serde_json::Value = serde_json::from_str(body).expect("a request");

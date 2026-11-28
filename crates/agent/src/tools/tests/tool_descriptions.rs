@@ -1586,6 +1586,7 @@ fn the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_wr
 /// description that names `search_skills`, `load_skill`, `fetch_url` or a reading tool to a turn
 /// whose list lacks it, as a definition's `tools:` line can leave it.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_skill_download_and_ask_user_descriptions_name_only_the_tools_the_list_holds() {
     let every = the_table_without(&[]);
     assert!(names_the_tool(
@@ -1651,6 +1652,7 @@ fn the_skill_download_and_ask_user_descriptions_name_only_the_tools_the_list_hol
 /// the list the turn offers and not beside the other held tools. The regression it rejects is
 /// a loaded tool whose description sends the planner to another that is still held back.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_held_back_tool_names_no_tool_the_offered_list_lacks() {
     let mut every = available(
         Scheduling::ArrangingALook,

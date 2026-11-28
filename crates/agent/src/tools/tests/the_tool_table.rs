@@ -48,6 +48,7 @@ fn the_tool_set_is_reads_plus_gated_writes() {
 /// definition's `tools:` line wrote stays in full. The regressions it rejects are a split that
 /// holds a core tool back, one that loses a held-back tool, and a lookup that matches loosely.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_held_back_tool_is_named_only_by_its_exact_name() {
     let table = available(
         Scheduling::ArrangingALook,

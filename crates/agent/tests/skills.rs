@@ -1456,6 +1456,7 @@ fn the_loop_skill_is_advertised_for_a_tick_and_for_nothing_else() {
 /// told of, a description that invites a load for more than a watch request, and a body that
 /// dropped the first look, a technique or the line about a later look.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_watching_skill_is_listed_and_carries_the_two_techniques() {
     let scratch = Scratch::new("watching-skill");
     let workspace = Workspace::new(scratch.workspace()).expect("workspace");

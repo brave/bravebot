@@ -486,6 +486,7 @@ fn a_plan_nobody_approved_runs_nothing() {
 /// The planner picks from capability names. A tool name in its catalogue would be a name it
 /// could invent variations of, and the mapping to code is the driver's to make.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_planner_is_shown_capabilities_and_no_tool_names() {
     let scratch = Scratch::new("catalogue");
     std::fs::write(scratch.path.join("a.md"), "hello").unwrap();

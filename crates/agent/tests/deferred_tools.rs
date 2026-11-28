@@ -2,13 +2,13 @@
 //! name under `load_tool` until the planner loads it (TOOL-7), end to end against a mock chat
 //! server. Each is asserted on the bodies that went out to the model.
 
-#[allow(
-    dead_code,
-    reason = "turns.rs is shared by several test binaries, and this one uses only run"
-)]
 #[path = "../test-support/turns.rs"]
 mod turns;
 
+#[expect(
+    clippy::allow_attributes,
+    reason = "open_files.rs holds items behind `cfg(unix)`, so the dead code this allows is absent on a platform the expect would then be unfulfilled on"
+)]
 #[allow(
     dead_code,
     reason = "open_files.rs is shared by several test binaries, and this one uses only bind_mock_server"
@@ -39,6 +39,11 @@ struct Scratch {
 }
 
 impl Scratch {
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the scratch directory may not exist yet, and a test fails by panicking"
+    )]
     fn new(name: &str) -> Self {
         let path = std::env::temp_dir().join(format!(
             "bravebot-deferred-tools-{}-{name}",
@@ -51,12 +56,24 @@ impl Scratch {
 }
 
 impl Drop for Scratch {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the scratch directory may already be gone, and a test fails by panicking"
+    )]
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
 }
 
 /// Read one HTTP request off a connection and hand back its body.
+#[expect(
+    clippy::expect_used,
+    reason = "a mock server fails its test by panicking"
+)]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a line or a body that cannot be read is not what the test is about, and it fails by panicking"
+)]
 fn body_of(stream: &std::net::TcpStream) -> String {
     let mut reader = BufReader::new(stream.try_clone().expect("clone"));
     let mut line = String::new();
@@ -83,6 +100,14 @@ const A_CHECK_ASKING: &str = "prompt-injection classifier";
 
 /// A mock chat server: the turn's own rounds get `replies` in order, and every check is answered
 /// that it found nothing. Every body is reported, checks included.
+#[expect(
+    clippy::expect_used,
+    reason = "a mock server fails its test by panicking"
+)]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a body sent after the test stopped reading is one nothing is waiting for"
+)]
 fn serve_chat(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
     let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
@@ -121,6 +146,7 @@ fn serve_chat(replies: Vec<String>) -> (String, mpsc::Receiver<String>) {
 }
 
 /// A whole chat response as the SSE stream that would have delivered it.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn as_sse(reply: &str) -> String {
     let parsed: Value = serde_json::from_str(reply).expect("a valid reply");
     let mut frames = String::new();
@@ -153,6 +179,7 @@ fn as_sse(reply: &str) -> String {
     frames
 }
 
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn config_for(endpoint: &str) -> Config {
     Config::from_lookup(|key| match key {
         "SERVICES_KEY_AICHAT" => Some("test-key".into()),
@@ -268,6 +295,11 @@ fn run(name: &str, task: Task, replies: Vec<String>, confirmer: &mut Counting) -
 }
 
 /// [`run`] with the configuration `configure` makes of the one the mock server needs.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the replies are handed to the mock server, which takes them by value"
+)]
 fn run_configured(
     name: &str,
     task: Task,
@@ -294,6 +326,7 @@ fn run_configured(
 }
 
 /// The functions a request offered, as sent.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn functions(request: &Value) -> Vec<Value> {
     request["tools"]
         .as_array()
@@ -303,6 +336,7 @@ fn functions(request: &Value) -> Vec<Value> {
         .collect()
 }
 
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn names(request: &Value) -> Vec<String> {
     functions(request)
         .iter()
@@ -315,6 +349,7 @@ fn function<'a>(functions: &'a [Value], name: &str) -> Option<&'a Value> {
 }
 
 /// What the planner was sent as the answer to its last tool call.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn answer(request: &Value) -> String {
     request["messages"]
         .as_array()
@@ -381,6 +416,8 @@ fn a_turns_first_request_offers_the_core_list_in_full_and_the_rest_by_name() {
 /// lasts one request, one that offers the definition on the request that loaded it, and a loaded
 /// definition that skipped the step that asks why.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn a_loaded_tool_is_offered_from_the_next_request_to_the_end_of_the_turn_and_asks_why() {
     let sent = run(
         "loaded",
@@ -434,6 +471,7 @@ fn a_loaded_tool_is_offered_from_the_next_request_to_the_end_of_the_turn_and_ask
 /// they were, so the cached prefix in front of it is the one the earlier request sent. The
 /// regression it rejects is a load that rebuilds or re-sorts the list.
 #[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn a_load_leaves_the_tools_offered_before_it_unchanged() {
     let sent = run(
         "prefix",
@@ -465,6 +503,7 @@ fn a_load_leaves_the_tools_offered_before_it_unchanged() {
 /// a space and a prefix each load nothing, and the planner is told so. The regression it rejects
 /// is a load that folds case, trims or takes the nearest or a prefix match.
 #[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn a_name_close_to_a_held_back_tool_loads_nothing() {
     for near in ["Repo_map", "repo_ma", "repo_map2", "repo_map ", "repo"] {
         let sent = run(
@@ -559,6 +598,7 @@ fn a_call_to_a_held_back_tool_is_refused_runs_nothing_and_asks_nobody() {
 
 /// The built-in names `load_tool`'s description lists in `request`, read off the sentence that
 /// lists them. Empty where the request offers no loader or the loader lists no built-in.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn listed_for_loading(request: &Value) -> Vec<String> {
     let all = functions(request);
     let Some(loader) = function(&all, "load_tool") else {
@@ -591,6 +631,7 @@ const SITUATIONAL: [&str; 6] = [
 /// the table alone, before the tools a turn adds for its situation are appended, which would send
 /// each of these in full on every request.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_tools_a_turn_adds_for_its_situation_are_held_back_and_each_loads() {
     let keys = Scratch::new("situational-key");
     let key = keys.path.join("search-key.txt");
@@ -645,6 +686,7 @@ fn the_tools_a_turn_adds_for_its_situation_are_held_back_and_each_loads() {
 /// loader that lists or loads from a fixed list of held-back names, which would hand a turn a tool
 /// its situation withholds.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_tool_the_turn_would_not_offer_is_not_listed_and_does_not_load() {
     let withheld = ["watch_file", "schedule_next", "set_link", "web_search"];
     let mut replies: Vec<String> = withheld
@@ -695,6 +737,7 @@ fn a_tool_the_turn_would_not_offer_is_not_listed_and_does_not_load() {
 /// written out here rather than read off `CORE`, so the regression it rejects is either tool added
 /// to the core list, which sends its definition in full on every request.
 #[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn download_url_and_request_path_are_held_back_and_each_loads() {
     let mut asked = Counting::default();
     let sent = run(
@@ -758,6 +801,14 @@ fn download_url_and_request_path_are_held_back_and_each_loads() {
 /// answered by the first rule whose marker it holds and that has a reply left, and every check is
 /// answered that it found nothing. A turn replays the arguments it called with, so its own marker
 /// goes before the tasks it hands out. Every body is reported.
+#[expect(
+    clippy::expect_used,
+    reason = "a mock server fails its test by panicking"
+)]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a body sent after the test stopped reading is one nothing is waiting for"
+)]
 fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, mpsc::Receiver<String>) {
     let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
@@ -799,6 +850,11 @@ fn serve_by_marker(rules: Vec<(&'static str, Vec<String>)>) -> (String, mpsc::Re
 
 /// Runs a turn that starts a delegate, over a workspace the person vouched for, and hands back the
 /// requests the delegate sent: those holding `delegate` and not `parent`.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the rules are handed to the mock server, which takes them by value"
+)]
 fn a_delegates_requests(
     name: &str,
     task: Task,
@@ -834,6 +890,7 @@ fn a_delegates_requests(
 /// offers it from the delegate's next request. The regression it rejects is a split applied to the
 /// planner's turn alone, which sends a delegate every tool its kind holds in full.
 #[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn a_delegate_is_offered_the_core_list_and_loads_the_rest_by_name() {
     let sent = a_delegates_requests(
         "delegate-split",
@@ -891,6 +948,7 @@ fn a_delegate_is_offered_the_core_list_and_loads_the_rest_by_name() {
 /// regression it rejects is a split that reads the planner's `tools:` line and not a delegate's,
 /// which holds back a tool a person named for that delegate.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_delegate_definition_naming_a_held_back_tool_is_offered_it_in_full() {
     let home = Scratch::new("delegate-named-home");
     std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
@@ -935,6 +993,7 @@ fn a_delegate_definition_naming_a_held_back_tool_is_offered_it_in_full() {
 /// the same request lists that skill, so the route is one the planner can take. The regression it
 /// rejects is guidance moved to a skill the turn does not list.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_first_request_routes_a_watch_request_to_a_skill_it_lists() {
     let sent = run(
         "watching-route",
@@ -964,16 +1023,17 @@ fn the_first_request_routes_a_watch_request_to_a_skill_it_lists() {
 /// holds taken once as the turn starts and never moved by a load, which tells the planner to load a
 /// tool it already holds.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_loaded_tool_is_named_directly_in_a_later_result() {
+    const LOAD_SENTENCE: &str = "call `load_tool` with the name request_path first";
+    // Said only where the list holds `request_path` (CREDENTIAL_LOCATIONS_SENTENCE).
+    const LISTED_SENTENCE: &str = "Any other path a command needs is asked for with the \
+                                   `request_path` tool";
     if bravebot_sandbox::base::Prelude::current().is_none()
         || !bravebot_sandbox::confinement_works_here()
     {
         return;
     }
-    const LOAD_SENTENCE: &str = "call `load_tool` with the name request_path first";
-    // Said only where the list holds `request_path` (CREDENTIAL_LOCATIONS_SENTENCE).
-    const LISTED_SENTENCE: &str = "Any other path a command needs is asked for with the \
-                                   `request_path` tool";
     let failing = || {
         tool_request(
             "run",
@@ -1045,6 +1105,7 @@ fn a_loaded_tool_is_named_directly_in_a_later_result() {
 /// decided by whether any skill has that name, which sends the planner to text the person wrote
 /// for something else.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_skill_of_the_persons_own_named_watching_does_not_take_the_route() {
     const BUILT_IN_DESCRIPTION: &str = "How to answer a request about change";
     const ROUTE: &str = "load the built-in skill watching";
@@ -1102,6 +1163,7 @@ fn a_skill_of_the_persons_own_named_watching_does_not_take_the_route() {
 /// built from the table rather than from what the delegate's kind holds, which would let a reader
 /// load a server.
 #[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn a_checker_may_load_lsp_and_a_reader_may_not() {
     let delegate_of = |kind: &'static str, marker: &'static str, parent: &'static str| {
         a_delegates_requests(
@@ -1178,6 +1240,7 @@ const FIRST_REQUEST_TOOL_BYTES: usize = 46_000;
 /// turn neither offers nor lists it. The regressions it rejects are a tick sent to a tool it holds
 /// back, which costs a refused call on every tick, and the tool offered in full in every turn.
 #[test]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
 fn a_self_paced_tick_is_offered_schedule_next_in_full_and_other_turns_are_not() {
     let tick = run(
         "pacing-tick",
@@ -1240,6 +1303,7 @@ fn a_self_paced_tick_is_offered_schedule_next_in_full_and_other_turns_are_not() 
 /// run. The regressions it rejects are a description that grows its paragraphs back and a held-back
 /// tool offered in full again.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_one_shot_turns_first_request_offers_tools_within_a_budget() {
     let sent = run(
         "tool-budget",

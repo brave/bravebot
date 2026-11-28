@@ -7696,6 +7696,7 @@ fn a_mode_chosen_during_a_turn_applies_to_the_rest_of_it() {
 /// and a plan-mode turn that holds it back for `load_tool`, which its preamble then sends the
 /// planner to as a tool it does not have.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn propose_plan_is_offered_to_the_planner_in_plan_mode_only() {
     use bravebot_agent::PermissionMode;
     for (mode, offered) in [
