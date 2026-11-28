@@ -4634,7 +4634,7 @@ mod tests {
                 assert!(!said.contains("returned HTTP"), "{said}");
             }
         }
-        // Not a refused credential: the error's own text, as before.
+        // Not a refused credential: the message is the error's own text.
         let unavailable = bravebot_agent::TurnError::Chat(refusal(503));
         assert_eq!(failure_message(&unavailable), unavailable.to_string());
         let cancelled = bravebot_agent::TurnError::Cancelled { attempts: None };
