@@ -1220,15 +1220,13 @@ fn table(
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "show of <revision>:<path> naming a file only: the line \
-                                        to start at, counting from 1. A show that stopped with \
-                                        more of the file left gives the offset that prints the \
-                                        next of its lines."
+                        "description": "show of <revision>:<path> only: the first line, from 1. A \
+                                        show cut short gives the next offset."
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "show of <revision>:<path> naming a file only: the most \
-                                        lines to print. Defaults to 2000, at most 2000."
+                        "description": "show of <revision>:<path> only: the most lines, \
+                                        default and most 2000."
                     },
                     "since": {
                         "type": "string",
@@ -1301,8 +1299,7 @@ fn table(
                     },
                     "query": {
                         "type": "string",
-                        "description": "workspaceSymbol's name; needs a server already \
-                                        running."
+                        "description": "workspaceSymbol's name."
                     }
                 },
                 "required": ["operation"]
@@ -1389,7 +1386,7 @@ fn table(
              is left to ask is a choice that the request leaves open and that differs in \
              consequence, such as which of two accounts to send from. Each question you ask \
              costs the user's attention. Ask everything the plan turns on in one call rather \
-             than a question per turn; they are put to the user one at a time. Offer concrete \
+             than a question per turn. Offer concrete \
              options where you can; the user may also answer in their own words or skip a \
              question, and a skipped question is an answer to work with rather than a reason to \
              ask again. Write each question and option so that somebody who has not seen what \
@@ -1517,8 +1514,7 @@ fn table(
                              program gets none, and a line where every stage has one is refused. \
                              macOS `loopback` lets a line listen on a local port. \
                              {LOOPBACK_CONNECT_RULE} On Linux and Windows `loopback` changes \
-                             nothing. `ssh-key` re-picks the key a refused `git push` offers. \
-                             The user is asked every time."
+                             nothing. `ssh-key` re-picks the key a refused `git push` offers."
                         )
                     },
                     "unconfined": {
@@ -1537,8 +1533,8 @@ fn table(
                         "type": "integer",
                         "description": format!(
                             "Default {deadline_default}, from {} to {deadline_ceiling}. One past \
-                             the prompt cache lifetime makes the next request rewrite the cache; \
-                             prefer background: true with shorter waits.",
+                             the prompt cache lifetime rewrites the cache; prefer background: \
+                             true.",
                             crate::exec::FLOOR.as_secs()
                         )
                     },
@@ -1670,8 +1666,7 @@ fn table(
                         "type": "string",
                         "description": format!(
                             "A new checkout of the last commit per delegate, with your changes \
-                             copied in for checkout_with_changes, which a delegate that must \
-                             build or check what you wrote needs. Not for a reader. {}",
+                             copied in for checkout_with_changes. Not for a reader. {}",
                             checkouts_share_refs(running)
                         ),
                         "enum": ["checkout", "checkout_with_changes"]
@@ -1707,9 +1702,8 @@ fn table(
                     },
                     "read": {
                         "type": "boolean",
-                        "description": "Release the page here as vet_content would; kept back, \
-                                        or longer than one result may hold, 16 KiB by \
-                                        default, it is still a reference."
+                        "description": "Release the page here as vet_content would; kept back or over \
+                                        16 KiB, it is still a reference."
                     }
                 },
                 "required": ["url"]
