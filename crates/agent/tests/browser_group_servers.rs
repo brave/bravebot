@@ -568,6 +568,8 @@ const ALL: [&str; 6] = [
 /// offered in full, which shows that it was the sum that decided. Loading one group's tool brings
 /// that definition and no other group's.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn several_groups_are_deferred_by_their_combined_size_and_one_loads_alone() {
     // What the tools weigh in full, for the setting to sit between one server and all of them.
     let scratch = Scratch::new("weigh");
@@ -670,7 +672,19 @@ fn several_groups_are_deferred_by_their_combined_size_and_one_loads_alone() {
     );
     let sent = rounds(&chat);
     let names = offered_names(&sent[0]);
-    assert!(!names.contains(&"load_tool".to_string()), "{names:?}");
+    let request: Value = serde_json::from_str(&sent[0]).expect("a request");
+    let loader = request["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "load_tool")
+        .and_then(|tool| tool["function"]["description"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        !loader.contains("tabs-read:"),
+        "a group offered in full was listed for loading: {loader}"
+    );
     assert!(names.contains(&wire("tabs-read", "list_tabs")), "{names:?}");
     assert!(
         names.contains(&wire("tabs-read", "list_frames")),

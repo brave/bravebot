@@ -552,6 +552,11 @@ pub struct Seeded {
     /// [`Task::with_delegates_that_have_met`]. It is a constant the caller chose and no byte of
     /// anything a delegate read, so nothing about it is decided from untrusted content.
     pub context: bravebot_core::label::Integrity,
+    /// Whether it is offered every built-in its list holds in full, with none held back for
+    /// `load_tool` (TOOL-7). `false` from [`seed`]; the turn that starts it sets its own
+    /// [`Task::every_tool_in_full`](crate::turn::Task::every_tool_in_full) here, as a delegate takes
+    /// that turn's deadlines and confinement. A flag the caller chose and no byte of anything read.
+    pub every_tool_in_full: bool,
 }
 
 /// Names what it holds and never the task.
@@ -624,6 +629,7 @@ pub fn seed<S: Sink>(
         workspace: None,
         stop: bravebot_core::cancel::DelegateStop::new(),
         context: bravebot_core::label::Integrity::Trusted,
+        every_tool_in_full: false,
     }
 }
 
@@ -822,6 +828,7 @@ pub fn run(
         .stoppable_by(seeded.stop.clone());
 
     task.file_authority = Some(seeded.file_authority.clone());
+    task.every_tool_in_full = seeded.every_tool_in_full;
 
     // Its own, and it dies here. A reference minted inside a delegate names nothing once it has
     // gone, which is what makes "nothing but the report crosses back" a fact about the data rather

@@ -248,9 +248,10 @@ round bound out of the call because a larger figure would be authority; a smalle
 ### AGENT-8: the text of `kind` names the round limit of each kind it lists
 
 Each line of the `kind` parameter's description ends with the number of rounds a delegate of that
-kind makes before it loses its tools, and what a round is: one reply with its tool calls. The
-number is [`Kind::rounds`](../delegation.md#DELEGATE-6) of the line's kind. A line for a definition
-carries its kind's number, not the definition's own `rounds:` and not the kind's ceiling.
+kind makes before it loses its tools, and the description says once what a round is: one reply with
+its tool calls. The number is [`Kind::rounds`](../delegation.md#DELEGATE-6) of the line's kind. A line
+for a definition carries its kind's number, not the definition's own `rounds:` and not the kind's
+ceiling.
 
 **Why.** The planner writes the task and has no other way to learn how much work fits in a
 delegate. A task sized to a figure it was never given ends with the delegate's tools removed part

@@ -38,7 +38,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [deep-links.md](deep-links.md) | `LINK` | 6 | a `bravebot://open` link: what it may ask for, where it starts, and why its words are put in the box and not sent |
 | [shell-mode.md](shell-mode.md) | `SHELL` | 8 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [shell-integration.md](shell-integration.md) | `SHELLINT` | 5 | `bravebot shell-init`: a hook that gives `@bravebot` the commands run in a terminal, as quarantined input |
-| [skills.md](skills.md) | `SKILL` | 19 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for, and what a skill kept as a mode adds to every turn |
+| [skills.md](skills.md) | `SKILL` | 20 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for, and what a skill kept as a mode adds to every turn |
 | [skill-evals.md](skill-evals.md) | `SKILLEVAL` | 9 | `bravebot skill eval <name>`: a skill's saved cases run with the skill and without it, graded from the driver's own record of each run, and the two scores set side by side |
 | [instructions.md](instructions.md) | `INSTR` | 17 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 43 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |

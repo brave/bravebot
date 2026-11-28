@@ -132,7 +132,9 @@ answer about the next.
 ### WEBSEARCH-4: the tool is offered only where a key source is configured
 
 `web_search` is on the planner's list when a variable `webSearch.env` names holds text, or
-`webSearch.keyFile` names a file that exists. With neither, it is not on the list and the name is
+`webSearch.keyFile` names a file that exists. It is outside the core list, so it is offered by name
+under `load_tool` and in full once loaded ([TOOL-7](tool-surface.md#TOOL-7)). With neither key
+source, it is neither offered nor listed for loading, a load of it is refused, and the name is
 answered as an unknown tool ([TOOL-3](tool-surface.md#TOOL-3)), so the planner is not sent after a tool
 that can only fail. Which of these holds is read from the configuration, the process environment and
 the file's metadata, and the key is not read to decide it.
@@ -148,6 +150,7 @@ is asked, and the planner's sentence names the settings and not a variable, a pa
 **Why.** A tool that is offered and always fails costs a round and a question to a person.
 
 `verified-by: bravebot_agent::web_search::the_tool_is_offered_only_where_a_key_file_is_configured`
+`verified-by: bravebot_agent::web_search::the_tool_is_listed_for_loading_only_where_a_key_file_is_configured`
 `verified-by: bravebot_agent::web_search::a_variable_alone_offers_the_tool_and_the_key_reaches_only_the_header`
 `verified-by: bravebot_agent::web_search::variables_that_hold_nothing_do_not_offer_the_tool`
 `verified-by: bravebot_agent::web_search::a_variable_removed_after_the_turn_started_is_reported_as_an_unusable_key`

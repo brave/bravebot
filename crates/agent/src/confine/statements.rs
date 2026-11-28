@@ -197,6 +197,13 @@ const TEMPORARY_DIRECTORY_HELD_BACK_SENTENCE: &str = " The person holds the temp
      back in this session: it is read and not written, so a program that makes a scratch file \
      there (a shell heredoc, `mktemp`, a compiler's intermediate files) is refused.";
 
+/// Said at the end of the profile line after a failed step where the turn holds `request_path` back
+/// for `load_tool` and the session would accept a request (TOOL-7). The tool is not on the list, so
+/// no other sentence names it (TOOL-6), and this is the situation it is for.
+pub(super) const REQUEST_PATH_LOADABLE_SENTENCE: &str = " A path outside the workspace that a \
+     command needs is asked for with the `request_path` tool: call `load_tool` with the name \
+     request_path first, then call it. The person is asked, and a yes lasts for this session.";
+
 /// Fixed text that ends every profile line, so the line is the same for every failure.
 pub(super) const CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location such as `~/.ssh`, `~/.aws` \
      or `~/.kube` cannot be added with `/add-dir` or `--add-dir`. Where the mode accepts a \

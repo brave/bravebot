@@ -99,7 +99,11 @@ fn tools_as_sent() -> Vec<Value> {
                 tools::offer_advisor(&mut table);
                 tools::offer_propose_plan(&mut table);
                 tools::offer_message_session(&mut table);
-                tools::offer_tool_loader(&mut table, &["alias:tool".to_string()]);
+                tools::offer_tool_loader(
+                    &mut table,
+                    &["watch_file".to_string()],
+                    &["alias:tool".to_string()],
+                );
                 tools::state_withheld_variables(&mut table);
                 sent.extend(
                     table

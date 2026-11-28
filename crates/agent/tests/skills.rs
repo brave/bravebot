@@ -1450,6 +1450,69 @@ fn the_loop_skill_is_advertised_for_a_tick_and_for_nothing_else() {
     }
 }
 
+/// RUN-18, SKILL-22: the built-in skill `watching` holds the account of how a request to watch
+/// something is answered, and is listed beside `loop` by default, so the planner is told of
+/// it before any load. The regressions it rejects are guidance moved to a skill the planner is not
+/// told of, a description that invites a load for more than a watch request, and a body that
+/// dropped the first look, a technique or the line about a later look.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_watching_skill_is_listed_and_carries_the_two_techniques() {
+    let scratch = Scratch::new("watching-skill");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let advertised = catalogue.describe_for_prompt();
+    assert!(
+        advertised.contains("- watching: ") && advertised.contains("- loop: "),
+        "the watching skill is not listed beside loop: {advertised}"
+    );
+    let description = &catalogue
+        .get(skills::WATCHING_SKILL)
+        .expect("the watching skill")
+        .description;
+    assert!(
+        description.ends_with("Load it when asked to watch something or to say when it changes."),
+        "{description}"
+    );
+    assert_eq!(
+        description.to_lowercase().matches("load").count(),
+        1,
+        "{description}"
+    );
+
+    let body = body_of(&catalogue, skills::WATCHING_SKILL);
+    for stated in [
+        "a file and a program are watched by different means",
+        "read_file hands back a change token",
+        "background: true and call job_output",
+        "with wait_seconds",
+        "killed when the turn ends",
+        "So take the first look now.",
+        "rather than telling somebody to arrange it",
+        "rather than a time of day, which you have no clock for",
+        "Where the request is to watch something or to be told when it changes, and you have \
+         scheduled no further look, say that too.",
+        "Any other request gets no sentence about a later look.",
+    ] {
+        assert!(
+            body.contains(stated),
+            "the body does not say '{stated}': {body}"
+        );
+    }
+    // `tail -f` is not in the read-proven table, so watching a file with it costs an approval, and
+    // it reports appends only, where a file is watched by its change token. The tool that arranges
+    // a look differs by turn. A body sent to every turn names neither.
+    for unsaid in ["tail -f", "schedule_next"] {
+        assert!(!body.contains(unsaid), "the body says '{unsaid}': {body}");
+    }
+}
+
 /// The condition is the last thing the description says and the only one it names. A second
 /// sentence inviting the planner to load the skill for some other request, such as polling a
 /// build, keeps the required words and the two banned ones while widening the invitation.

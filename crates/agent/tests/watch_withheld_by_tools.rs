@@ -26,7 +26,11 @@ fn a_request_from_a_turn_that_may_arm_a_watch(workspace: &Workspace) -> String {
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
         workspace,
-        &Task::new("tell me when notes.txt changes").arming(Arming::Allowed { free: 8 }),
+        &Task::new("tell me when notes.txt changes")
+            .arming(Arming::Allowed { free: 8 })
+            // ARM-6 is about the command line's limit, so the control offers `watch_file` in
+            // full rather than held back for `load_tool` (TOOL-7).
+            .offering_every_tool_in_full(),
         &mut bravebot_agent::confirm::ApproveWrites,
         &mut RecordingSink::new(),
     )

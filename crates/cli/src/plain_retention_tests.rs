@@ -447,10 +447,23 @@ fn the_planner_of_a_hosted_session_is_offered_message_session_and_its_call_reach
             "plain-session-cannot-send"
         });
         let workspace = Workspace::new(directory.path()).unwrap();
-        let (config, requests, server) = endpoint::endpoint(vec![
-            endpoint::tool("message_session", r#"{"target":"build","text":"hi"}"#),
-            endpoint::answer(),
-        ]);
+        // A hosted session holds `message_session` back for `load_tool`, so its model loads the
+        // tool before calling it. A session with no courier offers it nowhere, so its model calls
+        // it directly and is told there is no such tool.
+        let mut script = Vec::new();
+        if hosted {
+            script.push(endpoint::tool(
+                "load_tool",
+                r#"{"name":"message_session","why":"to tell build"}"#,
+            ));
+        }
+        script.push(endpoint::tool(
+            "message_session",
+            r#"{"target":"build","text":"hi"}"#,
+        ));
+        script.push(endpoint::answer());
+        let loads = usize::from(hosted);
+        let (config, requests, server) = endpoint::endpoint(script);
         let courier = std::sync::Arc::new(FindsBuild::default());
         let mut session = running(&config, &workspace, TrustStore::new(workspace.root()));
         session.courier = hosted.then(|| {
@@ -461,12 +474,12 @@ fn the_planner_of_a_hosted_session_is_offered_message_session_and_its_call_reach
         server.join().unwrap();
 
         let sent: Vec<_> = requests.try_iter().collect();
-        assert_eq!(sent.len(), 2, "hosted {hosted}");
+        assert_eq!(sent.len(), 2 + loads, "hosted {hosted}");
         assert_eq!(
-            sent[0].contains(r#""name":"message_session""#),
+            sent[loads].contains(r#""name":"message_session""#),
             hosted,
             "hosted {hosted}: {}",
-            sent[0]
+            sent[loads]
         );
         assert_eq!(
             courier.0.load(std::sync::atomic::Ordering::SeqCst),
@@ -474,16 +487,16 @@ fn the_planner_of_a_hosted_session_is_offered_message_session_and_its_call_reach
             "hosted {hosted}"
         );
         assert_eq!(
-            sent[1].contains("the message was not sent"),
+            sent[loads + 1].contains("the message was not sent"),
             hosted,
             "hosted {hosted}: {}",
-            sent[1]
+            sent[loads + 1]
         );
         assert_eq!(
-            sent[1].contains("error: no such tool 'message_session'"),
+            sent[loads + 1].contains("error: no such tool 'message_session'"),
             !hosted,
             "hosted {hosted}: {}",
-            sent[1]
+            sent[loads + 1]
         );
     }
 }

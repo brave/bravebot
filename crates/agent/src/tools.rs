@@ -57,11 +57,11 @@ use offered::checkouts_share_refs;
 #[cfg(test)]
 use offered::state_withheld;
 pub use offered::{
-    Beside, Named, Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
-    offer_message_session, offer_propose_plan, offer_propose_rule, offer_recall, offer_remember,
-    offer_set_link, offer_tool_loader, offer_web_search, state_confinement,
-    state_read_output_answer, state_vet_content_answer, state_what_is_beside,
-    state_withheld_variables,
+    Beside, CORE, Deferred, Named, Running, Scheduling, available, for_delegate, for_planner,
+    offer_advisor, offer_message_session, offer_propose_plan, offer_propose_rule, offer_recall,
+    offer_remember, offer_set_link, offer_tool_loader, offer_web_search, state_confinement,
+    state_read_output_answer, state_vet_content_answer, state_watching_route, state_what_is_beside,
+    state_what_is_held, state_withheld_variables,
 };
 
 /// The argument every tool takes saying why the call is being made.
@@ -393,8 +393,9 @@ pub struct Output {
     /// Built from the roster's name and id and the label the policy layer gave the words, never from
     /// anything the receiver answered.
     pub message_sent: Option<crate::conversation::Composed>,
-    /// The wire name of the MCP server tool the planner asked to have offered from the next round
-    /// on (SERVERS-16). Carried back because the offer is the turn's to hold.
+    /// The name of the tool the planner asked to have offered from the next round on: a built-in's
+    /// own name (TOOL-7) or a server tool's wire name (SERVERS-16). Carried back because what is
+    /// held back is the turn's to hold.
     pub tool_loaded: Option<String>,
 }
 
@@ -548,6 +549,9 @@ pub struct Tools<'a> {
     /// and the session they are called through. `None` for a run that holds no server's grant
     /// and for a session that reached no server.
     pub mcp: Option<&'a crate::mcp::Offer>,
+    /// The built-in tools this turn holds back until the planner loads one by name (TOOL-7), or
+    /// `None` where no turn's list is in play.
+    pub deferred: Option<&'a Deferred>,
     /// The pipelines this turn left running, by the reference each was given.
     ///
     /// Held by the turn so they end with it: a background job outliving the turn that started one
@@ -2058,7 +2062,8 @@ struct Produced {
     skill: Option<String>,
     /// The tag for a `message_session` result whose message was delivered (MSG-11).
     message_sent: Option<crate::conversation::Composed>,
-    /// The wire name of the server tool the planner loaded (SERVERS-16), for the turn to offer.
+    /// The name of the built-in (TOOL-7) or the wire name of the server tool (SERVERS-16) the
+    /// planner loaded, for the turn to offer.
     tool_loaded: Option<String>,
 }
 
@@ -3414,10 +3419,13 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     // The planner's form is always kept beside the shown one. Whether they differ is not asked:
     // that would compare the target's bytes.
     let as_the_planner_had_it = Some(as_the_planner_had_it);
-    // `load_tool` is offered only where a turn defers its server tools, so a definition's `tools:`
-    // line cannot name it and `--tools` cannot take it away: a `tools:` line without `mcpServers:`
-    // selects no server, and with either holding the server's tools back the offer is not deferred.
-    let loads_a_tool = name == "load_tool" && tools.mcp.is_some_and(|offer| offer.is_deferred());
+    // `load_tool` is offered only where a turn holds tools back, so a definition's `tools:` line
+    // cannot name it and `--tools` cannot take it away. Every name a `tools:` line or `--tools`
+    // names is offered in full, and a `tools:` line without `mcpServers:` selects no server, so
+    // where either is all the list holds nothing is held back.
+    let loads_a_tool = name == "load_tool"
+        && (tools.deferred.is_some_and(Deferred::holds_any)
+            || tools.mcp.is_some_and(|offer| offer.is_deferred()));
     let why = why_of(policy, &name, &arguments);
     let call_id = CallId::next();
     reporter.tool_started(
@@ -3461,6 +3469,21 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         {
             Produced::problem(format!("error: no such tool '{taken_away}'"))
         }
+        // A built-in held back and not loaded is not offered, so naming it is answered as an
+        // unknown name is, with the way to load it, before anything else is checked: it runs
+        // nothing and asks nobody (TOOL-3, TOOL-7). Decided from the name the planner called and
+        // the turn's fixed list.
+        unloaded
+            if server_tool.is_none()
+                && tools
+                    .deferred
+                    .is_some_and(|deferred| deferred.is_unloaded(unloaded)) =>
+        {
+            Produced::problem(format!(
+                "refused: {unloaded} is not loaded, so it was not called. Call load_tool with the \
+                 name {unloaded} first."
+            ))
+        }
         // Refused before the tool is reached, so nothing runs and nobody is asked about a call
         // that would have done something other than what the planner meant.
         _ if undeclared.is_some() => Produced::problem(undeclared.clone().unwrap_or_default()),
@@ -3499,7 +3522,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
                  name {shown} first."
             ))
         }
-        "load_tool" if loads_a_tool => load_tool(policy, tools.mcp, &arguments),
+        "load_tool" if loads_a_tool => load_tool(policy, tools.deferred, tools.mcp, &arguments),
         "read_file" => read_file(policy, tools, confirmer, reporter, &arguments),
         // `read` asks for vet_content's release in the result, so it is checked to be a boolean
         // and carried, as fetch_url's is, and a delegate's is ignored as fetch_url's would be
@@ -11598,6 +11621,7 @@ fn settle_the_confinement<S: Sink>(
                         && tools.permission_mode.answers_requests(),
                 )
                 .with_request_path_listed(tools.beside.holds(Named::RequestPath))
+                .with_request_path_loadable(tools.beside.loadable(Named::RequestPath))
                 .with_nobody_to_ask(tools.permission_mode.nobody_to_ask())
         });
     if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
@@ -15688,13 +15712,17 @@ fn beside_the_skill(
     listing
 }
 
-/// Load a tool of an MCP server out of the ones a person vouched for (SERVERS-16).
+/// Load a built-in tool the turn holds back (TOOL-7), or a tool of an MCP server out of the ones a
+/// person vouched for (SERVERS-16).
 ///
-/// The name is routing, promoted as a skill's is, and it only **selects** from the offer the turn
-/// holds: matched exactly against `alias:tool` of a vouched tool, so a name one character out
-/// loads nothing. The result is a sentence of this process's own and holds no byte a server sent.
+/// The name is routing, promoted as a skill's is, and it only **selects** from what the turn holds
+/// back: matched exactly against a built-in's name or the `alias:tool` of a vouched tool, so a name
+/// one character out loads nothing. A server's tools are looked in only where they are held back,
+/// since one offered in full is not loaded again. The result is a sentence of this process's own
+/// and holds no byte a server sent.
 fn load_tool<S: Sink>(
     policy: &mut Policy<'_, S>,
+    deferred: Option<&Deferred>,
     offer: Option<&crate::mcp::Offer>,
     arguments: &Value,
 ) -> Produced {
@@ -15708,8 +15736,22 @@ fn load_tool<S: Sink>(
     let Ok(name) = name.into_trusted() else {
         return Produced::problem("error: the tool name was not usable");
     };
-    let Some(offer) = offer else {
-        return Produced::problem("error: no tools are waiting to be loaded");
+    if let Some(loaded) = deferred.and_then(|deferred| deferred.named(&name)) {
+        let note = if loaded { "already loaded" } else { "loaded" };
+        let mut produced = confirmed(
+            format!("{name} is loaded and is offered to you from your next request on."),
+            note,
+        );
+        if !loaded {
+            produced.tool_loaded = Some(name);
+        }
+        return produced;
+    }
+    let Some(offer) = offer.filter(|offer| offer.is_deferred()) else {
+        return Produced::problem(format!(
+            "error: no tool named '{name}'. The tools you can load are listed in the description \
+             of load_tool; there are no others."
+        ));
     };
     let Some((wire, loaded)) = offer.named(&name) else {
         return Produced::problem(format!(

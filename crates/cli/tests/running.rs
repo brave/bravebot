@@ -16770,16 +16770,23 @@ done
 #[cfg(unix)]
 fn a_gateway_asking_about_a_symbol() -> Gateway {
     a_gateway(r#"["tools"]"#, |body| {
-        let frame = match body.contains(r#""role":"tool""#) {
-            true => serde_json::json!({"model":"reasons-only","choices":[{
-                "index":0,"delta":{"role":"assistant","content":"all done"},
-                "finish_reason":"stop"}]}),
-            false => serde_json::json!({"model":"reasons-only","choices":[{
+        // `lsp` is held back for `load_tool`, so the model loads it, then asks, then is done.
+        let frame = match body.matches(r#""role":"tool""#).count() {
+            0 => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-0","type":"function","function":{
+                        "name":"load_tool",
+                        "arguments":"{\"name\":\"lsp\",\"why\":\"to find a definition\"}"}}]},
+                "finish_reason":"tool_calls"}]}),
+            1 => serde_json::json!({"model":"reasons-only","choices":[{
                 "index":0,"delta":{"role":"assistant","tool_calls":[{
                     "index":0,"id":"call-1","type":"function","function":{
                         "name":"lsp",
                         "arguments":"{\"operation\":\"goToDefinition\",\"path\":\"src/a.rs\",\"line\":1,\"character\":12}"}}]},
                 "finish_reason":"tool_calls"}]}),
+            _ => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
         };
         let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
         format!(
@@ -16842,6 +16849,14 @@ fn a_one_shot_run_starts_a_language_server_only_under_bypass_with_the_sandbox_of
             .asked
             .recv_timeout(Duration::from_secs(60))
             .expect("the run reached the gateway");
+        #[expect(
+            clippy::expect_used,
+            reason = "a test: a round that never arrives fails it with the message"
+        )]
+        let _loaded = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the planner was sent the result of loading lsp");
         let answered = gateway
             .asked
             .recv_timeout(Duration::from_secs(60))
@@ -27515,7 +27530,7 @@ fn the_first_round_of_a_goal_run_is_told_the_goal_takes_the_next_look() {
         .collect();
     assert_eq!(turns.len(), 2, "{stderr}");
     let goal = "This session's goal sends the work back";
-    let nothing = "Nothing will ask you again";
+    let nothing = "nothing will ask you again";
     assert!(
         turns[0].contains(goal) && !turns[0].contains(nothing),
         "the person's line was not told the goal takes the next look: {}",
@@ -29056,6 +29071,10 @@ fn a_lines_run_refuses_a_rule_proposal() {
     let gateway = a_gateway_following(
         vec![
             Model::Calls(
+                "load_tool",
+                serde_json::json!({"name": "propose_rule", "why": "to propose a rule"}).to_string(),
+            ),
+            Model::Calls(
                 "propose_rule",
                 serde_json::json!({
                     "text": "Always use tabs.",
@@ -29085,14 +29104,14 @@ fn a_lines_run_refuses_a_rule_proposal() {
     );
     let sent = bodies(&gateway);
     assert!(
-        sent[1].contains("Nobody could be asked to keep the rule"),
+        sent[2].contains("Nobody could be asked to keep the rule"),
         "unexpected response to planner: {}",
-        sent[1]
+        sent[2]
     );
     assert!(
-        !sent[1].contains("The user chose: Keep this rule"),
+        !sent[2].contains("The user chose: Keep this rule"),
         "the planner was told the rule was kept: {}",
-        sent[1]
+        sent[2]
     );
 }
 

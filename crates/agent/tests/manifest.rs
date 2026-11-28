@@ -486,6 +486,7 @@ fn a_plan_nobody_approved_runs_nothing() {
 /// The planner picks from capability names. A tool name in its catalogue would be a name it
 /// could invent variations of, and the mapping to code is the driver's to make.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn the_planner_is_shown_capabilities_and_no_tool_names() {
     let scratch = Scratch::new("catalogue");
     std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
@@ -502,7 +503,7 @@ fn the_planner_is_shown_capabilities_and_no_tool_names() {
     let mut sink = RecordingSink::new();
     run(&config, &workspace, "show me a.md", &mut sink).expect("runs");
 
-    let _shaping = received.recv().expect("the shape request");
+    let shaping = received.recv().expect("the shape request");
     let planning = received.recv().expect("the fit request");
     for name in ["FILE_READ", "TRANSFORM", "ANSWER"] {
         assert!(planning.contains(name), "{name} should be advertised");
@@ -510,11 +511,18 @@ fn the_planner_is_shown_capabilities_and_no_tool_names() {
     for name in ["read_file", "spawn_processor", "edit_file", "todo_write"] {
         assert!(!planning.contains(name), "{name} leaked into the catalogue");
     }
-    // No tool list on the request either, so there is nothing for a planner to call.
-    assert!(
-        !planning.contains("\"tools\""),
-        "the planner was given tools"
-    );
+    // No tool list on either request, so there is nothing for a planner to call, and nothing held
+    // back for it to load first (TOOL-7): a plan needs no load step.
+    for (round, body) in [("shape", &shaping), ("fit", &planning)] {
+        assert!(
+            !body.contains("\"tools\""),
+            "the {round} request gave the planner tools"
+        );
+        assert!(
+            !body.contains("load_tool"),
+            "the {round} request named a loader"
+        );
+    }
 }
 
 /// BACKEND-15: both planning requests of a manifest run go out with no tool list even when the model

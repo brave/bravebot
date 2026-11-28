@@ -149,6 +149,7 @@ fn with_tools_offered<R>(
         offered,
         servers: None,
         mcp: None,
+        deferred: None,
         jobs: &mut jobs,
         permission_mode: crate::LiveMode::default(),
         vouched_channel: false,

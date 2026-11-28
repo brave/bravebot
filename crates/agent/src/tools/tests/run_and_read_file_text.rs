@@ -1,3 +1,4 @@
+use super::tool_descriptions::{description_of, the_table_without};
 use super::*;
 
 /// A wait is a way to spend part of one turn watching. A planner that reads it as a way to be
@@ -215,58 +216,34 @@ fn the_run_description_says_to_probe_a_browsers_debugging_port_before_asking_abo
     assert!(holding > 0, "no kind of delegate is offered `run`");
 }
 
-/// A session asked to watch a file read it once, said what it held, and left nothing watching.
-/// Both techniques already existed and nothing joined a watch request to either, so the
-/// description has to: which one a bound picks, which one outlives a turn, and that the turn
-/// arranges the later look itself instead of asking the person to arrange it.
+/// RUN-18. A session asked to watch a file that has nothing joining the request to either
+/// technique reads it once, says what it holds, and leaves nothing watching. `run`'s description
+/// joins it to the built-in skill `watching`, before the first look, and the skill holds the
+/// techniques (tests/skills.rs pins its body). The skill's techniques are not repeated in the
+/// description, which is sent on every request. The regressions it rejects are a description
+/// that drops the route, one that names a skill other than the one the catalogue holds, and one
+/// that keeps the whole paragraph as well.
 #[test]
 fn the_run_description_routes_a_watch_request_to_one_of_the_two_techniques() {
     let described = run_description();
-    for stated in [
-        "watch something",
-        "background: true",
-        "wait_seconds",
-        "killed when the turn ends",
-        "call schedule_next at the end of the turn",
+    assert!(
+        described.contains(&format!(
+            "Asked to watch something, or to say when it changes, load the built-in skill {} \
+             before you take the first look",
+            crate::skills::WATCHING_SKILL
+        )),
+        "the description does not send a watch request to the skill: {described}"
+    );
+    for moved in [
+        "whole of the technique",
+        "tail -f",
+        "scheduled no further look",
     ] {
         assert!(
-            described.contains(stated),
-            "the description does not say '{stated}': {described}"
+            !described.contains(moved),
+            "the description still carries '{moved}': {described}"
         );
     }
-    // A file is watched by comparing read_file's token, and `tail -f` was the wrong recipe
-    // twice over: it is not in the read-proven table, so every watch of a file cost an
-    // approval, and it sees appends only, so a file truncated or replaced looked untouched.
-    assert!(
-        described.contains("read_file hands back a change token"),
-        "the description does not route a file to the token it can compare: {described}"
-    );
-    assert!(
-        !described.contains("tail -f"),
-        "the description still names tail -f as the way to watch a file: {described}"
-    );
-    // The failure that shipped: an open-ended request landed in the loop branch, which asks for
-    // nothing to be done, so the turn made no tool call at all and reported no watch.
-    assert!(
-        described.contains("take the first look now"),
-        "the description lets an unbounded watch request end the turn with no look: {described}"
-    );
-    assert!(
-        described.contains("scheduled no further look, say that too"),
-        "the description does not say to report that nothing is watching: {described}"
-    );
-    // The same sentence spanning the join, so a formatting pass that swallows the line break
-    // is caught here rather than reaching a planner as a run of spaces mid-sentence.
-    assert!(
-        described.contains("rather than a time of day"),
-        "the description came out with its continuation baked in: {described}"
-    );
-    // Said, because the planner has no clock: the preamble gives it today's date and tells it
-    // not to run `date`, so an instruction to date a sample invites it to invent a time.
-    assert!(
-        described.contains("no clock for"),
-        "the description asks the planner for a time of day it cannot know: {described}"
-    );
 }
 
 /// RUN-29. A planner writing the line that sends a message reads `run`'s description and the
@@ -346,7 +323,18 @@ fn what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_a
         .description
     };
 
-    for name in ["read_file", "run"] {
+    // `run` sends a watch request to the skill `watching`, which names no tool that arranges a
+    // look, so `read_file` alone says which of the three this turn is.
+    for scheduling in [
+        Scheduling::ArrangingALook,
+        Scheduling::PacingALoop,
+        Scheduling::NoLaterLook,
+    ] {
+        let run = described(scheduling, "run");
+        assert!(!run.contains("schedule_next"), "{scheduling:?}: {run}");
+    }
+    let name = "read_file";
+    {
         let arranging = described(Scheduling::ArrangingALook, name);
         assert!(
             arranging.contains("call schedule_next at the end of th"),
@@ -735,10 +723,9 @@ fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_chang
         Scheduling::UnderAWatch,
         Scheduling::NoLaterLook,
     ] {
-        for (name, instruction) in [
-            ("read_file", "not scheduled another, say so"),
-            ("run", "scheduled no further look, say that too"),
-        ] {
+        let name = "read_file";
+        let instruction = "not scheduled another, say so";
+        {
             let description = tool_description(scheduling, name);
             assert!(
                 sentence_with(&description, instruction).starts_with(WATCH_REQUEST),
@@ -754,6 +741,7 @@ fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_chang
 
     // A line typed under the session's own loop, goal or watch is told where the next look comes
     // from, and that is a sentence about a later look too, so it opens with the same condition.
+    // Only `read_file` says it: `run` names the skill `watching` instead.
     for (scheduling, instruction) in [
         (
             Scheduling::UnderALoop,
@@ -769,15 +757,28 @@ fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_chang
             "where what was asked about is a file, arm a standing watch of it with watch_file",
         ),
     ] {
-        for name in ["read_file", "run"] {
-            let description = tool_description(scheduling, name);
-            assert!(
-                sentence_with(&description, instruction).starts_with(WATCH_REQUEST),
-                "{scheduling:?}: {name} has the planner say where the next look comes from for \
-                 any request: {description}"
-            );
-        }
+        let name = "read_file";
+        let description = tool_description(scheduling, name);
+        assert!(
+            sentence_with(&description, instruction).starts_with(WATCH_REQUEST),
+            "{scheduling:?}: {name} has the planner say where the next look comes from for any \
+             request: {description}"
+        );
     }
+    // `run` says it only where it carries the paragraph itself, in a turn that cannot load the
+    // skill `watching`, whose body says it in the same words (tests/skills.rs).
+    let mut offered = the_table_without(&["load_skill"]);
+    state_watching_route(&mut offered, true);
+    let inline = description_of(&offered, "run");
+    assert!(
+        sentence_with(&inline, "scheduled no further look, say that too")
+            .starts_with(WATCH_REQUEST),
+        "run has the planner report no further look for any request: {inline}"
+    );
+    assert!(
+        inline.contains("Any other request gets no sentence about a later look"),
+        "{inline}"
+    );
 }
 
 /// A turn nothing will ask again, which is what a delegate and the desktop app's turns are,
@@ -794,10 +795,7 @@ fn a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request() 
         None,
         Deadlines::BUILT_IN,
     );
-    for (name, announcement) in [
-        ("read_file", "no later look is coming"),
-        ("run", "no later one is coming"),
-    ] {
+    for (name, announcement) in [("read_file", "no later look is coming")] {
         let given_to_a_delegate = delegate
             .iter()
             .find(|t| t.function.name == name)

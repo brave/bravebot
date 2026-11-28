@@ -342,17 +342,31 @@ fn service_judging(answers: Answers, judge: Judge) -> (u16, Bodies) {
             if (judging && judge == Judge::Slowly) || (!judging && answers == Answers::Slowly) {
                 std::thread::sleep(Duration::from_secs(3));
             }
-            let answered = request["messages"]
-                .as_array()
-                .and_then(|messages| messages.last())
-                .is_some_and(|last| last["role"] == "tool");
+            let answered = request["messages"].as_array().map_or(0, |messages| {
+                messages
+                    .iter()
+                    .rev()
+                    .take_while(|message| {
+                        message["role"] == "tool" || message["role"] == "assistant"
+                    })
+                    .filter(|message| message["role"] == "tool")
+                    .count()
+            });
             let (delta, finish) = if judging {
                 let verdict = match judge {
                     Judge::Says(text) => text,
                     Judge::Slowly => "MET",
                 };
                 (json!({"role": "assistant", "content": verdict}), "stop")
-            } else if answers == Answers::Watch && !answered {
+            } else if answers == Answers::Watch && answered == 0 {
+                // `watch_file` is held back for `load_tool`, so the model loads it first.
+                (
+                    json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "l1",
+                        "type": "function", "function": {"name": "load_tool",
+                        "arguments": json!({"name": "watch_file", "why": "to watch a.txt"}).to_string()}}]}),
+                    "tool_calls",
+                )
+            } else if answers == Answers::Watch && answered == 1 {
                 (
                     json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "w1",
                         "type": "function", "function": {"name": "watch_file",
@@ -625,16 +639,16 @@ fn a_turn_under_a_goal_arms_no_watch_and_its_calls_are_counted() {
     chat.send("watch a.txt");
     assert_eq!(chat.ended(1), "turn.done");
     let bodies = chat.bodies.lock().unwrap().clone();
-    assert_eq!(bodies.len(), 2, "{bodies:?}");
+    assert_eq!(bodies.len(), 3, "{bodies:?}");
     assert!(
-        bodies[1].contains("working towards a goal"),
+        bodies[2].contains("working towards a goal"),
         "{}",
-        bodies[1]
+        bodies[2]
     );
     let open = chat.bridge.open.get(&chat.handle).unwrap();
     assert!(open.watches.lock().unwrap().is_empty());
     let slot = chat.slot();
-    assert_eq!(slot.calls, 1);
+    assert_eq!(slot.calls, 2);
     assert!(slot.due);
 }
 
@@ -903,7 +917,7 @@ fn the_eleventh_not_met_ends_the_goal_as_spent() {
 /// while the goal or the watch is about to start one.
 #[test]
 fn a_line_typed_under_a_goal_or_a_watch_is_told_which_one_takes_the_next_look() {
-    const NOTHING: &str = "Nothing will ask you again";
+    const NOTHING: &str = "nothing will ask you again";
     const ARRANGES: &str = "The next look is yours to arrange";
     const GOAL: &str = "This session's goal sends the work back";
     const WATCH: &str = "This session's standing watches start a turn";
@@ -920,12 +934,17 @@ fn a_line_typed_under_a_goal_or_a_watch_is_told_which_one_takes_the_next_look() 
             );
         }
         // The tool table, not the descriptions: `watch_file`'s description names `schedule_next`
-        // wherever `watch_file` is offered.
-        assert_eq!(
-            body.contains(r#""name":"schedule_next""#),
-            expected == ARRANGES,
-            "{case}: {body}"
+        // wherever `watch_file` is offered. A turn that may arrange a look holds `schedule_next`
+        // back and lists it under `load_tool`; the others neither offer nor list it.
+        assert!(
+            !body.contains(r#""name":"schedule_next""#),
+            "{case}: schedule_next is offered in full: {body}"
         );
+        let listed = body
+            .split_once("Tools of this program: ")
+            .and_then(|(_, after)| after.split_once('.'))
+            .is_some_and(|(list, _)| list.split(", ").any(|name| name == "schedule_next"));
+        assert_eq!(listed, expected == ARRANGES, "{case}: {body}");
         assert!(body.contains(r#""name":"read_file""#), "{case}: {body}");
     };
 

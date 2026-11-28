@@ -364,6 +364,16 @@ pub struct Task {
     /// once the turn returns. A one-shot run, `--plain`, a goal run and a manifest run drop them, so
     /// the planner is not offered a tool whose "recorded" would be untrue.
     pub keeps_links: bool,
+    /// Whether every built-in this turn would offer is offered in full from its first request,
+    /// with none held back for `load_tool` (TOOL-7).
+    ///
+    /// `false` unless a caller says so, so every front end holds back what is outside the core
+    /// list. No front end sets it: a manifest run's planning requests carry no tool list at all
+    /// (MANIFEST-5), so they have nothing to hold back. A test of a held-back tool's own behaviour
+    /// sets it so the script does not have to load the tool first. The delegates the turn starts
+    /// take it as they take its deadlines. Read from the task alone, never from anything the turn
+    /// reads.
+    pub every_tool_in_full: bool,
     /// The front end the person is using, where the caller says so (INSTR-9).
     ///
     /// `None` unless a caller says so, and then the prompt says nothing about one: a default would
@@ -744,6 +754,7 @@ impl Task {
             retriever: None,
             courier: None,
             keeps_links: false,
+            every_tool_in_full: false,
             front_end: None,
             default_repository: None,
             model: None,
@@ -1007,6 +1018,13 @@ impl Task {
     /// Say that the front end running this turn keeps the links `set_link` records (SETLINK-2).
     pub fn keeping_links(mut self, keeps: bool) -> Self {
         self.keeps_links = keeps;
+        self
+    }
+
+    /// Offer every built-in this turn would offer in full, with none held back for `load_tool`
+    /// (TOOL-7). See [`Task::every_tool_in_full`].
+    pub fn offering_every_tool_in_full(mut self) -> Self {
+        self.every_tool_in_full = true;
         self
     }
 

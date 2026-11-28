@@ -254,6 +254,100 @@ fn told(requests: &[String]) -> String {
 
 const CALL: &str = r#"{"service":"web","q":"rust async","count":3}"#;
 
+/// WEBSEARCH-4, TOOL-7: with a key file configured, a turn offers `web_search` by name under
+/// `load_tool`, and once loaded a call reaches the person; with none, the name is neither offered
+/// nor listed, its load is refused, and a call is answered as an unknown tool. Run with the turn's
+/// own split, so the regression it rejects is a list for loading that holds `web_search` whatever
+/// the configuration, which sends a planner after a tool that can only fail.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_tool_is_listed_for_loading_only_where_a_key_file_is_configured() {
+    let listed = |body: &str| -> Vec<String> {
+        let request: serde_json::Value = serde_json::from_str(body).expect("a request");
+        request["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["function"]["name"] == "load_tool")
+            .and_then(|tool| tool["function"]["description"].as_str())
+            .and_then(|said| said.split_once("Tools of this program: "))
+            .and_then(|(_, after)| after.split_once('.'))
+            .map(|(list, _)| list.split(", ").map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    let offered = |body: &str| -> Vec<String> {
+        let request: serde_json::Value = serde_json::from_str(body).expect("a request");
+        request["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+            .collect()
+    };
+    let load = || {
+        tool_request(
+            "load_tool",
+            r#"{"name":"web_search","why":"to search the web"}"#,
+        )
+    };
+    let (_keep, key) = a_key_file("search-listed");
+    let (index, _heads) = serve_the_index(vec![json_results("{}")]);
+
+    let (endpoint, received) = serve_sequence(vec![
+        load(),
+        tool_request("web_search", CALL),
+        reply_with("done"),
+    ]);
+    let mut asked = Asked::answering(Decision::Approve);
+    let bodies = a_turn(
+        &searching(&endpoint, &key, &index),
+        Task::new("search"),
+        &mut asked,
+        &received,
+    );
+    assert!(
+        !offered(&bodies[0]).contains(&"web_search".to_string()),
+        "web_search was offered in full before it was loaded"
+    );
+    assert!(
+        listed(&bodies[0]).contains(&"web_search".to_string()),
+        "web_search is not listed for loading: {:?}",
+        listed(&bodies[0])
+    );
+    assert!(
+        offered(bodies.last().expect("a request")).contains(&"web_search".to_string()),
+        "the load did not offer web_search"
+    );
+    assert_eq!(
+        asked.searches.len(),
+        1,
+        "the loaded web_search did not reach the person: {}",
+        told(&bodies)
+    );
+
+    let (endpoint, received) = serve_sequence(vec![
+        load(),
+        tool_request("web_search", CALL),
+        reply_with("done"),
+    ]);
+    let bodies = a_turn(
+        &config_for(&endpoint),
+        Task::new("search"),
+        &mut Asked::answering(Decision::Approve),
+        &received,
+    );
+    assert!(
+        !listed(&bodies[0]).contains(&"web_search".to_string()),
+        "web_search is listed with no key file: {:?}",
+        listed(&bodies[0])
+    );
+    assert!(
+        !offered(bodies.last().expect("a request")).contains(&"web_search".to_string()),
+        "web_search was loaded with no key file"
+    );
+    assert!(told(&bodies).contains("no such tool"), "{}", told(&bodies));
+}
+
 /// R1: with no key file configured the tool is not on the list and the name is unknown; with one it
 /// is on the list. The regression it rejects: the tool offered whatever the configuration, which
 /// sends a planner after a tool that can only fail.
@@ -267,7 +361,7 @@ fn the_tool_is_offered_only_where_a_key_file_is_configured() {
     let none = config_for(&endpoint);
     let bodies = a_turn(
         &none,
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut Asked::answering(Decision::Approve),
         &received,
     );
@@ -281,7 +375,7 @@ fn the_tool_is_offered_only_where_a_key_file_is_configured() {
     let with = searching(&endpoint, &key, &index);
     let bodies = a_turn(
         &with,
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut Asked::answering(Decision::Approve),
         &received,
     );
@@ -297,7 +391,7 @@ fn the_tool_is_offered_only_where_a_key_file_is_configured() {
         .with_web_search_base(&index);
     let bodies = a_turn(
         &missing,
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut Asked::answering(Decision::Approve),
         &received,
     );
@@ -322,7 +416,12 @@ fn a_search_returns_a_reference_sends_the_key_in_one_header_and_asks_about_the_q
     let config = searching(&endpoint, &key, &index);
     let mut asked = Asked::answering(Decision::Approve);
 
-    let bodies = a_turn(&config, Task::new("search"), &mut asked, &received);
+    let bodies = a_turn(
+        &config,
+        Task::new("search").offering_every_tool_in_full(),
+        &mut asked,
+        &received,
+    );
 
     let head = heads
         .recv_timeout(Duration::from_secs(5))
@@ -391,6 +490,7 @@ fn a_search_that_asks_to_read_is_released_as_a_fetch_is_and_one_that_does_not_is
         let bodies = a_turn_with(
             &searching(&endpoint, &key, &index),
             Task::new("search")
+                .offering_every_tool_in_full()
                 .with_permission_mode(mode)
                 .with_auto_vetting(false),
             &mut confirmer,
@@ -433,6 +533,7 @@ fn a_search_that_asks_to_read_past_the_output_cap_is_told_the_cap_the_size_and_t
     let bodies = a_turn_with(
         &searching(&endpoint, &key, &index),
         Task::new("search")
+            .offering_every_tool_in_full()
             .with_permission_mode(mode)
             .with_auto_vetting(false)
             .with_output_cap(Some(64)),
@@ -475,7 +576,7 @@ fn a_search_whose_read_is_not_a_boolean_is_refused_before_a_question_or_a_reques
         let mut asked = Asked::answering(Decision::Approve);
         let bodies = a_turn(
             &searching(&endpoint, &key, &index),
-            Task::new("search"),
+            Task::new("search").offering_every_tool_in_full(),
             &mut asked,
             &received,
         );
@@ -515,6 +616,7 @@ fn bypass_answers_a_search_and_auto_leaves_it_to_the_person_without_a_classifier
             a_turn_with(
                 &searching(&endpoint, &key, &index),
                 Task::new("search")
+                    .offering_every_tool_in_full()
                     .with_permission_mode(mode)
                     .with_auto_vetting(false),
                 &mut confirmer,
@@ -604,7 +706,7 @@ fn a_search_the_person_declines_is_not_sent() {
 
     let bodies = a_turn(
         &searching(&endpoint, &key, &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut asked,
         &received,
     );
@@ -635,7 +737,9 @@ fn a_websearch_rule_answers_the_prompt_and_a_webfetch_rule_does_not() {
         let (endpoint, received) =
             serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
         let mut asked = Asked::answering(Decision::Reject);
-        let task = Task::new("search").with_permissions(rules(&list, which));
+        let task = Task::new("search")
+            .offering_every_tool_in_full()
+            .with_permissions(rules(&list, which));
         a_turn(
             &searching(&endpoint, &key, &index),
             task,
@@ -665,7 +769,7 @@ fn an_argument_off_the_documented_range_is_refused_before_a_question_or_a_reques
     let mut asked = Asked::answering(Decision::Approve);
     let bodies = a_turn(
         &searching(&endpoint, &key, &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut asked,
         &received,
     );
@@ -694,7 +798,7 @@ fn a_failure_is_worded_by_the_driver_and_carries_none_of_the_vendors_body() {
             serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
         let bodies = a_turn(
             &searching(&endpoint, &key, &index),
-            Task::new("search"),
+            Task::new("search").offering_every_tool_in_full(),
             &mut Asked::answering(Decision::Approve),
             &received,
         );
@@ -732,7 +836,7 @@ fn a_service_that_cannot_be_reached_is_reported_without_a_transport_message() {
         serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
     let bodies = a_turn(
         &searching(&endpoint, &key, &closed),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut Asked::answering(Decision::Approve),
         &received,
     );
@@ -772,7 +876,7 @@ fn a_redirect_off_the_search_host_is_refused_and_sent_neither_a_request_nor_the_
 
     let bodies = a_turn(
         &searching(&endpoint, &key, &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut asked,
         &received,
     );
@@ -800,7 +904,7 @@ fn a_body_past_the_cap_is_reported_as_incomplete() {
         serve_sequence(vec![tool_request("web_search", CALL), reply_with("done")]);
     let bodies = a_turn(
         &searching(&endpoint, &key, &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut Asked::answering(Decision::Approve),
         &received,
     );
@@ -824,7 +928,7 @@ fn an_unusable_key_file_is_reported_before_a_question_without_its_path_or_conten
     let mut asked = Asked::answering(Decision::Approve);
     let bodies = a_turn(
         &searching(&endpoint, &path, &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut asked,
         &received,
     );
@@ -928,7 +1032,7 @@ fn a_variable_alone_offers_the_tool_and_the_key_reaches_only_the_header() {
 
     let bodies = a_turn(
         &searching_with(&endpoint, &[NAME], None, &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut asked,
         &received,
     );
@@ -961,7 +1065,7 @@ fn variables_that_hold_nothing_do_not_offer_the_tool() {
 
     let bodies = a_turn(
         &searching_with(&endpoint, &[UNSET, BLANK], None, &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut Asked::answering(Decision::Approve),
         &received,
     );
@@ -991,7 +1095,7 @@ fn a_variable_beats_the_key_file() {
 
     let bodies = a_turn(
         &searching_with(&endpoint, &[NAME], Some(&file), &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut Asked::answering(Decision::Approve),
         &received,
     );
@@ -1021,7 +1125,7 @@ fn the_key_file_answers_where_no_named_variable_holds_text() {
 
     a_turn(
         &searching_with(&endpoint, &[NAME], Some(&file), &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut Asked::answering(Decision::Approve),
         &received,
     );
@@ -1052,7 +1156,7 @@ fn the_first_named_variable_that_holds_text_is_the_key() {
 
     a_turn(
         &searching_with(&endpoint, &[EMPTY, FIRST, SECOND], None, &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut Asked::answering(Decision::Approve),
         &received,
     );
@@ -1107,7 +1211,7 @@ fn a_variable_holding_no_usable_key_is_refused_without_its_name_or_its_text() {
 
     let bodies = a_turn(
         &searching_with(&endpoint, &[NAME], Some(&file), &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut asked,
         &received,
     );
@@ -1156,7 +1260,7 @@ fn a_variable_removed_after_the_turn_started_is_reported_as_an_unusable_key() {
 
     let bodies = a_turn_reporting(
         &searching_with(&endpoint, &[NAME], None, &index),
-        Task::new("search"),
+        Task::new("search").offering_every_tool_in_full(),
         &mut asked,
         &mut RemovesTheVariable(NAME),
         &received,

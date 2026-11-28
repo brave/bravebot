@@ -10,6 +10,16 @@ There are twenty-seven tools, and no way to add another from a configuration fil
 arguments into **routing**, the part that decides where the effect lands, and **content**, the part
 that is merely carried.
 
+**Not every tool is sent in full on every request.** Seventeen form a fixed core list, sent in full
+whenever the turn would offer them: [`read_file`](#read_file), [`list_files`](#list_files),
+[`search`](#search), [`write_file`](#write_file), [`edit_file`](#edit_file), [`run`](#run),
+[`job_output`](#job_output), [`read_output`](#read_output), [`vet_content`](#vet_content),
+[`spawn_processor`](#spawn_processor), [`spawn_agent`](#spawn_agent), [`load_skill`](#load_skill),
+[`search_skills`](#search_skills), [`ask_user`](#ask_user), [`todo_write`](#todo_write),
+[`fetch_url`](#fetch_url) and [`read_git`](#read_git). Every other tool the turn would offer is held
+back and listed by name under [`load_tool`](#load_tool), which the planner calls to have one sent in
+full from its next request.
+
 | Tool | Routing | Content | Asks you? |
 |---|---|---|---|
 | [`read_file`](#read_file) | `path`, `path_ref`, `offset`, `limit` | none | only to trust a quarantined file |
@@ -31,6 +41,7 @@ that is merely carried.
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
 | [`search_skills`](#search_skills) | `query` | none | no |
+| [`load_tool`](#load_tool) | `name` | none | no |
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
 | [`propose_plan`](#propose_plan) | the plan | none | it *is* the plan you approve |
 | [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
@@ -1283,6 +1294,44 @@ A match's name and description are returned in full, never cut, with the same wo
 [`load_skill`](#load_skill) then loads the body of. A query that matches more than 25 skills
 returns the first 25, in the order they would be listed, and says how many more matched: narrow
 the query rather than widening it. See [Skills](../customize/skills.md).
+
+## `load_tool`
+
+Loads a tool the turn holds back, so that its full definition is sent from the planner's next
+request to the end of the turn.
+
+| Parameter | |
+|---|---|
+| `name` | the exact name of a held-back tool, as the description of `load_tool` lists it: a built-in's own name, or `alias:tool` for a server's tool |
+
+A turn is offered `load_tool` only where it holds something back. Its description lists the
+built-ins the turn would offer outside the core list (above), and, where the
+[`deferMcpToolsAbove`](../customize/configuration.md#defermcptoolsabove) setting holds a server's tools back, those
+tools as `alias:tool`. A tool the turn would not offer is not listed and cannot be loaded: a
+one-shot run, which keeps no watches, lists no [`watch_file`](#watch_file), and a session with no
+Brave Search key lists no [`web_search`](#web_search).
+
+The name is matched exactly. Another case, a prefix or a name one character out loads nothing, and
+the planner is told the listed names are the only ones. A load asks nobody. A call to a held-back
+tool before it is loaded is refused with the sentence to load it first, and runs nothing and asks
+nobody. A loaded tool is still asked about as it would have been.
+
+A name in a [definition's](../customize/agents.md) `tools:` line or in `--tools` is sent in full,
+so a turn whose list such a line settled holds nothing back. A tick of a self-paced loop is sent
+[`schedule_next`](#schedule_next) in full, and a turn in plan mode is sent
+[`propose_plan`](#propose_plan) in full. A delegate's turn is split the same
+way as the planner's. A [planned run](../using/manifest-mode.md) sends no tool list while it plans, so no
+plan needs a load step.
+
+A description names only the tools its request is sent in full, so a planner is not sent to a tool
+it would have to load first. Where the situation a held-back tool is for arises, the result says to
+load it: the line after a refused command names `request_path` with the `load_tool` step, and the
+note of a delegate's kept checkout names `apply_checkout` the same way. Once the tool is loaded,
+those results name it directly.
+
+The tool list is the front of what the model provider caches, so the request after a load writes
+the cache from the end of the list it had before. A loaded definition is added after every tool
+already sent, so the rest of that cached text is unchanged.
 
 ## `ask_user`
 

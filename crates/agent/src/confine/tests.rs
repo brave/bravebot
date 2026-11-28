@@ -5181,7 +5181,7 @@ fn no_sentence_names_request_path_where_the_list_lacks_it() {
                 assert_eq!(
                     listed,
                     stated(true, Some(prelude), Network::Open, mode, offered).unwrap(),
-                    "{at}: the full list reads the text it always did"
+                    "{at}: a list holding request_path does not read as the full-list text"
                 );
                 // What is left of the menu and the refusal is still said.
                 assert!(unlisted.contains("`scopes`"), "{at}: {unlisted}");
@@ -5306,6 +5306,60 @@ fn the_profile_line_names_request_path_only_where_the_list_holds_it() {
         unlisted.contains("write every path a request for write access would be granted"),
         "{unlisted}"
     );
+}
+
+/// TOOL-6, TOOL-7: where the turn holds `request_path` back for `load_tool`, the profile line
+/// after a failed step names neither the tool's route in the menu nor the count, and ends with
+/// the one sentence that `load_tool` loads it, said only where the session accepts a request.
+/// A list that holds the tool reads exactly as the full-list text, and one that neither holds it
+/// nor holds it back is told nothing of it. The regressions it rejects are a held-back tool named
+/// as if offered, and a held-back tool never named at all in the situation it is for, which leaves
+/// the planner no way to reach a path outside the workspace.
+#[test]
+fn a_held_back_request_path_is_named_with_load_tool_after_a_failure() {
+    let script = step("/bin/sh", &["-c", "false"]);
+    for mode in [
+        SandboxMode::Strict,
+        SandboxMode::ReadOnly,
+        SandboxMode::WorkspaceWrite,
+    ] {
+        for offered in [true, false] {
+            let session = reading_confinement(Prelude::Linux, &["/work/project"])
+                .with_mode(mode)
+                .with_requests_offered(offered);
+            let at = format!("{mode:?} offered={offered}");
+            let listed = session.clone().profile(&[&script]);
+            let loadable = session
+                .clone()
+                .with_request_path_listed(false)
+                .with_request_path_loadable(true)
+                .profile(&[&script]);
+            let unlisted = session
+                .clone()
+                .with_request_path_listed(false)
+                .with_request_path_loadable(false)
+                .profile(&[&script]);
+            let still_listed = session
+                .clone()
+                .with_request_path_loadable(true)
+                .profile(&[&script]);
+            assert!(!listed.contains("load_tool"), "{at}: {listed}");
+            assert_eq!(still_listed, listed, "{at}");
+            assert!(!unlisted.contains("request_path"), "{at}: {unlisted}");
+            assert!(!unlisted.contains("load_tool"), "{at}: {unlisted}");
+            assert_eq!(
+                loadable
+                    .contains("call `load_tool` with the name request_path first, then call it"),
+                offered,
+                "{at}: {loadable}"
+            );
+            assert_eq!(
+                loadable.matches("request_path").count(),
+                usize::from(offered) * 2,
+                "{at}: the tool is named outside the load sentence: {loadable}"
+            );
+        }
+    }
 }
 
 /// A tool's own scope lifts its own directory and no other, and a stage that names none keeps

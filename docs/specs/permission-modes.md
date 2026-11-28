@@ -746,7 +746,10 @@ says it once, on the command line, where no content can say it for them.
 <a id="MODE-14"></a>
 ### MODE-14: a finished plan is put to the person, who chooses the mode the work continues in
 
-In plan mode the planner is offered `propose_plan`, which takes the plan text and shows it to the
+In plan mode the planner is offered `propose_plan` in full from the turn's first request, decided by
+the permission mode alone and never held back for `load_tool`
+([TOOL-7](tools/tool-surface.md#TOOL-7)); a turn in any other mode is not offered it. It takes the
+plan text and shows it to the
 person with three answers: accept edits, ask before each edit, and keep planning. The two approving
 answers end plan mode for the mode they name, and the planner is told the plan was approved. Any
 other answer, including a typed reply or a skip, leaves the session in plan mode and tells the
