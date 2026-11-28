@@ -50,7 +50,9 @@ The selftest runs the parsers on output captured from the real tools, with total
 ## Score
 
 A turn's cost is one number in units of an uncached input token: fresh tokens count 1, cache
-reads 0.10, cache writes 1.25 (Anthropic) or 1.0 (OpenAI), and output 5 or 8. A contestant can
+reads 0.10, cache writes 1.25 (Anthropic) or 1.0 (OpenAI), and output 5 or 8. Anthropic bills a
+one-hour cache write at 2x base while the bench weights every write at 1.25x, so a contestant that
+writes one-hour entries is undercounted by the difference. A contestant can
 choose a profile or state its own numbers with `"weights": {"write": 1.25, "read": 0.1,
 "output": 5}`. These are list-price ratios, so change them if the prices you pay differ.
 

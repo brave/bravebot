@@ -703,7 +703,7 @@ began, or was refused something along the way. It holds how the run ended, the s
 identifier of CLI-6, the message where there is one, the reply, the model that answered, the
 definition the turn was addressed to where there was one (CLI-17), the session it wrote down where
 it wrote one (CLI-25), how many rounds it took, what it
-cost in tokens, every tool it called with what it acted on and whether that call was refused, and every refusal with the principle it upholds. A tool is named as the driver
+cost in tokens, every tool it called with what it acted on and whether that call was refused, how many delegates the run started at every level, and every refusal with the principle it upholds. A tool is named as the driver
 matched it rather than by the word a person is shown. What a call acted on is the name it was given
 rather than a resolved path, since the driver carries that argument without reading it. A refusal
 is listed once: a write, a run, a fetch or a call to a server's tool nobody could approve is the
@@ -723,6 +723,11 @@ It carries a schema number. Within one number a field may be added, and never re
 given a different meaning, so a caller reading the fields it knows keeps working. `structured`
 (CLI-28) is such a field: the reply as a JSON value when the run was given `--output-schema`, and
 `null` otherwise.
+
+`delegates` is another: the number of delegates the run started, its delegates' own delegates
+included, as the driver counted them when it started each one. One `spawn_agent` call can start
+several with `each`, so the number of `spawn_agent` entries in the calls is not this count. A run
+that started none says `0`.
 
 **Why.** The prose reply is written for a person, and a program can recover almost nothing from it:
 which files changed, what the turn cost, which tools ran and why an effect was refused are either
@@ -751,6 +756,9 @@ what may change, every field is either frozen by accident or broken without warn
 `verified-by: bravebot_cli::json::a_failure_before_the_turn_is_still_a_result_object`
 `verified-by: bravebot_cli::json::a_refusal_names_the_principle_it_upholds`
 `verified-by: bravebot_cli::json::content_cannot_break_out_of_the_object_it_is_written_in`
+`verified-by: bravebot_cli::json::a_run_says_how_many_delegates_it_started_apart_from_its_calls`
+`verified-by: bravebot_cli::progress::every_delegate_the_driver_starts_is_counted_however_many_calls_started_them`
+`verified-by: bravebot_cli::running::a_result_object_counts_every_delegate_one_call_started`
 `verified-by: bravebot_cli::running::a_run_under_a_definition_names_it_in_the_result_object`
 `verified-by: bravebot_cli::json::a_recorded_run_names_its_session`
 `verified-by: bravebot_cli::running::a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so`

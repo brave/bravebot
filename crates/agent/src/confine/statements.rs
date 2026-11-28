@@ -294,15 +294,14 @@ pub(super) fn credential_locations_sentence(
 /// Said to the planner on macOS, whose profile refuses a listening socket that no line asked for,
 /// in the description where the session accepts a `scopes` argument.
 pub(super) const MACOS_LISTENING_SENTENCE: &str = " On macOS a program cannot listen on a port of this \
-     machine unless its line asks for `loopback`, so `cargo test` on a crate whose tests bind \
-     `127.0.0.1:0`, and any build through `sccache`, fail with `Operation not permitted` without \
-     it.";
+     machine unless its line asks for `loopback`, so `cargo test` over tests that bind \
+     `127.0.0.1:0` and a build through `sccache` fail with `Operation not permitted` without it.";
 
 /// Said to the planner on macOS, whose profile refuses a write to a `.git` from every step whose
 /// program is not git (SANDBOX-14), in the description and after a failed step alike.
-pub(super) const MACOS_GIT_SENTENCE: &str = " On macOS a step whose program is not `git` cannot write any \
-     `.git`: a script, `make`, `npm`, `gh` or any other program that runs git to commit, check out \
-     or clone is refused that write, so run git as a step of its own.";
+pub(super) const MACOS_GIT_SENTENCE: &str = " On macOS only a step whose program is `git` may write a \
+     `.git`, so a script, `make`, `npm` or `gh` that runs git to commit, check out or clone is \
+     refused that write. Run git as a step of its own.";
 
 /// [`MACOS_GIT_SENTENCE`] under `read-only`, where a git step cannot write the session's `.git`
 /// either, so running git on its own helps only in a place the mode writes.
@@ -337,11 +336,10 @@ pub(super) fn macos_git_sentence(mode: SandboxMode) -> &'static str {
 /// at the startup question may start without a prompt, and then with no network access (RUN-5,
 /// SANDBOX-20). Fixed text, whatever the settings say about which directory that is.
 pub(super) const TRUSTED_DIRECTORY_LINE_SENTENCE: &str = " In a directory the person trusted at the startup \
-     question, a plain line may start without a prompt, and then it has no network access: a \
-     connection refused or a host that does not resolve for a program that is not a package \
-     manager's fetch, `git` or `gh` with a remote operation, `curl`, `ssh` or a command that names \
-     a remote credential scope was stopped by the sandbox, and a line that needs the network is \
-     put to the person when it runs with no sandbox.";
+     question a plain line may start unasked and with no network access, so a connection refused \
+     or a host that does not resolve there, for any program but a package manager's fetch, remote \
+     `git` or `gh`, `curl`, `ssh` or a remote credential scope, was stopped by the sandbox. A line \
+     that needs the network is put to the person when it runs with no sandbox.";
 
 /// Said after the closed network on macOS, where loopback is also how a line connects to a port of
 /// this machine, in the description where the session accepts a `scopes` argument.
@@ -356,8 +354,8 @@ pub(super) const MACOS_CLOSED_LOOPBACK_SENTENCE: &str =
 /// profile's egress already reaches a local port, and a stage held to a host list's proxy gets
 /// listening from `loopback` and no port to connect to.
 pub(crate) const LOOPBACK_CONNECT_RULE: &str = "Ask for `loopback` to connect to a port of this \
-     machine only from a line that has no network access: it adds nothing to a connect from a \
-     line that has network access, so do not ask for it there.";
+     machine only from a line with no network access; it adds nothing to a line that has network \
+     access.";
 
 /// What a step that asked for `loopback` could do, said in the paragraph after a failed step, or
 /// `None` where the platform does nothing with the request, as Linux and Windows do.
@@ -398,18 +396,17 @@ pub(super) fn requests_menu_sentence(mode: SandboxMode, request_path_listed: boo
         (_, false) => "",
         (SandboxMode::ReadOnly, true) => {
             " A path outside the workspace that a command needs to read is asked for with the \
-             `request_path` tool instead, and a yes lasts for the session; a request for a path to \
-             write is refused in this mode before anyone is asked."
+             `request_path` tool, and a yes lasts for the session; a request for a path to write \
+             is refused in this mode before anyone is asked."
         }
         (_, true) => {
             " A path outside the workspace that a command needs is asked for with the \
-             `request_path` tool instead, and a yes lasts for the session."
+             `request_path` tool, and a yes lasts for the session."
         }
     };
     format!(
-        "A line that needs more can ask for it with `run`'s `scopes` argument, by name from this \
-         list: {}. The person is asked about the line every time, and no answer to it is \
-         remembered.{paths}",
+        "A line that needs more can ask for it with `run`'s `scopes` argument: {}. The person is \
+         asked every time, and no answer is remembered.{paths}",
         bravebot_sandbox::scope::Requested::MENU.join(", ")
     )
 }
@@ -462,6 +459,25 @@ fn widens(clause: &'static str, askable: Askable) -> &'static str {
     }
 }
 
+/// What a program that reads the machine may not read without a scope, in the statement of
+/// [`stated_listing`] (SANDBOX-12, SANDBOX-19).
+const CREDENTIAL_PLACES: &str = "the places that hold a credential (ssh private keys, cloud and \
+     container logins, keychains, browser profiles, password stores)";
+
+/// Ends the sentence of [`stated_listing`] that names what is refused, so a refusal is read as the
+/// sandbox's and not as a fault in the machine (SANDBOX-19).
+const REFUSED_BY_THE_SANDBOX: &str = "is refused by the operating system as `Operation not \
+     permitted` or `Permission denied`, so a program that reports either was stopped by the \
+     sandbox and not by a fault in the machine.";
+
+/// The statement of [`stated_listing`] where a stage is held to listed rows and does not read the
+/// machine: on Windows under `workspace-write` and `strict`, and on Linux and macOS under `strict`.
+/// [`REFUSED_BY_THE_SANDBOX`] follows it.
+const HELD_TO_LISTED_ROWS: &str = "Programs this tool starts are confined. Each may read and \
+     write only the session's directories, the scratch directory and the temporary directory, read \
+     the system and program directories and git's configuration files, and reach the caches of \
+     its toolchain and the credential scope its command names. Any other path";
+
 /// The statement of a turn's programs for a turn whose list holds `request_path`
 /// (`facts.request_path_listed`) or does not, in a run where nobody can be asked
 /// (`Askable::Nobody`) or somebody can.
@@ -482,63 +498,39 @@ pub(super) fn stated_listing(
     }
     let mut said = match prelude {
         Some(Prelude::Windows) if mode == SandboxMode::ReadOnly => format!(
-            "Programs this tool starts are confined and cannot write the project. Each may reach \
-             only the directories the session was opened on and the scratch directory, read, the \
-             temporary directory, the paths the person's own `allowWrite` entries and remembered \
-             write grants name, read and written, the system and program directories and git's configuration files, \
-             read, and the credential scope its command names. A path outside those, and a write \
-             anywhere else, the directories the session was opened on included, is refused by the \
-             operating system as `Operation not permitted` or `Permission denied`, so a program \
-             that reports either for such a path was stopped by the sandbox and not by a fault in \
-             the machine. {} The \
-             file tools write nothing in this mode either, and a line that redirects output into \
-             a file is refused.",
+            "Programs this tool starts are confined and cannot write the project. Each may read \
+             only the session's directories, the scratch directory, the system and program \
+             directories and git's configuration files, read and write only the temporary \
+             directory and the paths the person's own `allowWrite` entries and remembered write \
+             grants name, and reach the credential scope its command names. Any other path, and \
+             any other write, the session's directories included, {REFUSED_BY_THE_SANDBOX} {} \
+             The file tools write nothing in this mode either, and a line that redirects output \
+             into a file is refused.",
             widens(READ_ONLY_PERSON_WIDENS_CLAUSE, askable)
         ),
         Some(Prelude::Windows) => format!(
-            "Programs this tool starts are confined. Each may reach only the directories the \
-             session was opened on, the scratch directory and the temporary directory, all read \
-             and written, the system and program directories and git's configuration files, \
-             read, the caches of the toolchain it belongs to, and the credential scope its \
-             command names. A path outside those is refused by the operating system as \
-             `Operation not permitted` or `Permission denied`, so a program that reports either \
-             for such a path was stopped by the sandbox and not by a fault in the machine. {}",
+            "{HELD_TO_LISTED_ROWS} {REFUSED_BY_THE_SANDBOX} {}",
             widens(STRICT_PERSON_WIDENS_CLAUSE, askable)
         ),
         Some(Prelude::Linux | Prelude::MacOs) if mode == SandboxMode::Strict => format!(
-            "Programs this tool starts are confined. Each may reach only the directories the \
-             session was opened on, the scratch directory and the temporary directory, all read \
-             and written, the system and program directories and git's configuration files, \
-             read, the caches of the toolchain it belongs to, and the credential scope its \
-             command names. A path outside those is refused by the operating system as \
-             `Operation not permitted` or `Permission denied`, so a program that reports either \
-             for such a path was stopped by the sandbox and not by a fault in the machine. {}",
+            "{HELD_TO_LISTED_ROWS} {REFUSED_BY_THE_SANDBOX} {}",
             widens(STRICT_PERSON_WIDENS_CLAUSE, askable)
         ),
         Some(Prelude::Linux | Prelude::MacOs) if mode == SandboxMode::ReadOnly => format!(
             "Programs this tool starts are confined and cannot write the project. Each may read \
-             this machine except the places that hold a credential: ssh private keys, cloud and \
-             container logins, keychains, browser profiles and password stores. It may write the \
-             temporary directory, the paths the person's own `allowWrite` entries and remembered \
-             write grants name, and reads a credential directory only where the command's scope names it. Any other \
-             write, the directories the session was opened on and the toolchain caches included, \
-             and a path outside those it may reach, is refused by the operating system as \
-             `Operation not permitted` or `Permission denied`, so a program that reports either \
-             for such a path was stopped by the sandbox and not by a fault in the machine. {} \
-             The file tools write \
-             nothing in this mode either, and a line that redirects output into a file is \
-             refused.",
+             this machine except {CREDENTIAL_PLACES}, reading one only where its command's scope \
+             names it, and write the temporary directory and the paths the person's own \
+             `allowWrite` entries and remembered write grants name. Any other write, the \
+             session's directories and the toolchain caches included, {REFUSED_BY_THE_SANDBOX} \
+             {} The file tools write nothing in this mode either, and a line that redirects \
+             output into a file is refused.",
             widens(READ_ONLY_PERSON_WIDENS_CLAUSE, askable)
         ),
         Some(Prelude::Linux | Prelude::MacOs) => format!(
-            "Programs this tool starts are confined. Each may read this machine except the places \
-             that hold a credential: ssh private keys, cloud and container logins, keychains, \
-             browser profiles and password stores. It may write only the directories the session \
-             was opened on, the scratch directory, the temporary directory and the toolchain \
-             caches, and reads a credential directory only where the command's scope names it. \
-             A path outside those is refused by the operating system as `Operation not \
-             permitted` or `Permission denied`, so a program that reports either for such a path \
-             was stopped by the sandbox and not by a fault in the machine. {}",
+            "Programs this tool starts are confined. Each may read this machine except \
+             {CREDENTIAL_PLACES}, reading one only where its command's scope names it, and write \
+             only the session's directories, the scratch directory, the temporary directory and \
+             the toolchain caches. Any other path {REFUSED_BY_THE_SANDBOX} {}",
             widens(PERSON_WIDENS_CLAUSE, askable)
         ),
         None => String::from(
@@ -583,10 +575,10 @@ pub(super) fn stated_listing(
         }
     } else if prelude.is_some() && network.is_closed() {
         said.push_str(
-            " The network is closed: a program has no network access unless it is a package \
-             manager's fetch, `git` or `gh` with a remote operation, `curl`, `ssh`, or a \
-             command that names a remote credential scope. A connection refused or a host that \
-             does not resolve for any other program was stopped by the sandbox.",
+            " The network is closed: only a package manager's fetch, `git` or `gh` with a remote \
+             operation, `curl`, `ssh` and a command that names a remote credential scope have \
+             network access, so a connection refused or a host that does not resolve for any \
+             other program was stopped by the sandbox.",
         );
         if prelude == Some(Prelude::MacOs) && requests_offered {
             said.push_str(MACOS_CLOSED_LOOPBACK_SENTENCE);

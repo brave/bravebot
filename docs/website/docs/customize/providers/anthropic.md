@@ -80,11 +80,12 @@ unless you state another: a model's `limit.output`, as above, or `BRAVEBOT_OUTPU
 outranks every model's. A model that refuses 32,000 is asked again with 8,192, and a figure you stated
 is never lowered for you.
 
-**Prompt caching.** The system prompt and the end of the conversation are marked, so a turn that
-sends its history again each round does not pay for all of it each time. The `promptCacheTtl` setting
-chooses how long Anthropic keeps what was marked. A model that refuses the marks is asked again
-without them, and `/status` reports how much of each prompt was read from the cache and how much was
-written to it.
+**Prompt caching.** The tool definitions, the system prompt and the end of the conversation are
+marked, so a turn that sends its history again each round does not pay for all of it each time. The
+tool definitions and the system prompt are kept for one hour and the conversation for Anthropic's
+default, unless the `promptCacheTtl` setting chooses one lifetime for all of them. A model that
+refuses the marks is asked again without them, and `/status` reports how much of each prompt was read
+from the cache and how much was written to it.
 
 **Options of your own.** A model's `options` are put in the request as written. bravebot does not
 read them, and they cannot replace the model or the messages a turn built. They cannot add a tool

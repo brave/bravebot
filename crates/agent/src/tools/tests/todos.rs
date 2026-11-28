@@ -659,7 +659,7 @@ fn the_todo_tool_states_that_the_whole_list_is_required() {
     .find(|t| t.function.name == "todo_write")
     .expect("todo_write is offered");
     assert!(
-        tool.function.description.contains("whole list"),
+        tool.function.description.contains("whole current list"),
         "the description does not ask for the whole list: {}",
         tool.function.description
     );

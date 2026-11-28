@@ -4191,6 +4191,55 @@ fn a_run_asked_for_a_result_object_puts_one_on_stdout() {
     );
 }
 
+/// CLI-12: one `spawn_agent` call whose `each` names three entries starts three delegates, and the
+/// result object says three. The calls list holds one `spawn_agent` entry, so a count taken from
+/// the calls would say one.
+#[cfg(unix)]
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_result_object_counts_every_delegate_one_call_started() {
+    let gateway = a_gateway(r#"["tools"]"#, |body| {
+        let answered = body.contains(r#""role":"tool""#);
+        let frame = match (body.contains("You are a delegated agent"), answered) {
+            (false, false) => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"spawn_agent",
+                        "arguments":serde_json::json!({
+                            "kind": "reader", "task": "say hello",
+                            "each": ["one", "two", "three"],
+                            "why": "fan out"}).to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+            _ => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    });
+    let scratch = Scratch::new("cli-running-json-delegates").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--json", "--dangerously-skip-permissions", "-p", "fan out"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert_eq!(
+        stdout.matches(r#"{"tool":"spawn_agent""#).count(),
+        1,
+        "the run did not make exactly one spawn_agent call: {stdout}"
+    );
+    assert!(stdout.contains(r#""delegates":3,"#), "{stdout}");
+}
+
 /// A gateway whose model asks to write `out.txt` and, once that call has an answer in the
 /// conversation, says it is done. A one-shot run has nobody to approve the write, so the call is
 /// refused, and what the model says after it is the reply.
@@ -16615,7 +16664,7 @@ fn the_sandbox_flag_reaches_what_the_planner_is_told_of_a_run() {
 
     let strict = asked_under("strict");
     assert!(
-        strict.contains("may reach only the directories"),
+        strict.contains("may read and write only the session's directories"),
         "{strict}"
     );
     let workspace_write = asked_under("workspace-write");
@@ -25566,18 +25615,18 @@ fn a_trigger_run_opens_asking_where_the_setting_opens_sessions_in_auto() {
 fn a_no_shell_run_does_not_send_the_planner_from_read_git_to_run() {
     let (control, _, _) = a_limited_run_asked_for_a_program("cli-running-git-run-control", &[]);
     assert!(
-        control.contains("elsewhere it says so and you use run"),
+        control.contains("elsewhere use run"),
         "the control run's read_git never names run: {control}"
     );
     let (limited, _, _) =
         a_limited_run_asked_for_a_program("cli-running-git-run-limited", &["--no-shell"]);
     assert!(
-        !limited.contains("elsewhere it says so and you use run")
+        !limited.contains("elsewhere use run")
             && !limited.contains("For --follow, blame or anything else use run."),
         "read_git still sends the planner to run: {limited}"
     );
     assert!(
-        limited.contains("no tool on your list reads that history instead"),
+        limited.contains("elsewhere no tool on your list reads that history"),
         "read_git does not say nothing on the list reads that history: {limited}"
     );
 }
@@ -27448,7 +27497,7 @@ fn the_first_round_of_a_goal_run_is_told_the_goal_takes_the_next_look() {
         .collect();
     assert_eq!(turns.len(), 2, "{stderr}");
     let goal = "This session's goal sends the work back";
-    let nothing = "Nothing will ask you again";
+    let nothing = "Nothing asks about this line again";
     assert!(
         turns[0].contains(goal) && !turns[0].contains(nothing),
         "the person's line was not told the goal takes the next look: {}",

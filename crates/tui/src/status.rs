@@ -4555,7 +4555,7 @@ mod tests {
     fn the_panel_says_which_cache_lifetime_the_settings_asked_for() {
         use bravebot_config::CacheTtl;
 
-        let words = ["5 minutes", "1 hour", "the service's own"];
+        let words = ["5 minutes", "1 hour", "1 hour for the tools"];
         let cases = [
             (Some(CacheTtl::FiveMinutes), words[0]),
             (Some(CacheTtl::OneHour), words[1]),
@@ -4575,6 +4575,10 @@ mod tests {
             let shown = rendered(&report(&turn));
             assert!(shown.contains("lifetime asked of the service"), "{shown}");
             for word in words {
+                // The default's line names "1 hour" as well, so that word is not checked against it.
+                if chosen.is_none() && word == words[1] {
+                    continue;
+                }
                 assert_eq!(
                     shown.contains(word),
                     word == expected,

@@ -7,9 +7,8 @@ use super::*;
 fn job_output_says_its_wait_ends_with_the_turn() {
     let said = tool_description(Scheduling::ArrangingALook, "job_output");
     for stated in [
-        "a wait inside this turn",
-        "anything that happens after the turn ends",
-        "says whether it is killed then or kept",
+        "A wait stays inside this turn",
+        "the job's start says whether it outlives the turn",
     ] {
         assert!(
             said.contains(stated),
@@ -31,7 +30,8 @@ fn the_run_description_tells_the_planner_to_filter_at_the_source() {
         );
     }
     assert!(
-        described.contains("returns less"),
+        described.contains("Narrowing inside the line is cheapest")
+            && described.contains("returns less"),
         "the description does not say to prefer whichever returns less: {described}"
     );
 }
@@ -42,22 +42,16 @@ fn the_run_description_tells_the_planner_to_filter_at_the_source() {
 #[test]
 fn the_run_description_names_the_special_parameters_and_the_dollar_quote_as_refused() {
     let described = run_description();
-    for form in [
-        "`$?`", "`$$`", "`$@`", "`$*`", "`$#`", "`$-`", "`$!`", "`$'...'`",
-    ] {
+    let refused = sentence_with(&described, "are refused, so write values out");
+    for form in ["$?", "$$", "$@", "$*", "$#", "$-", "$!", "$'...'"] {
         assert!(
-            described.contains(form),
+            refused.contains(form),
             "the description does not name {form} as refused: {described}"
         );
     }
     assert!(
-        described.contains("result of a run already says how each step ended")
-            && described.contains("a newline comes from a file or from standard input"),
-        "the description does not say what to do instead: {described}"
-    );
-    assert!(
-        described.contains("Double quotes do not")
-            && described.contains("no name, brace, parenthesis, special parameter or quote"),
+        described.contains("Single quotes are literal, double quotes are not")
+            && described.contains("a `$` before no name, brace, parenthesis or quote is literal"),
         "the description does not say what quoting settles or when a `$` is ordinary: {described}"
     );
 }
@@ -69,17 +63,8 @@ fn the_run_description_names_the_special_parameters_and_the_dollar_quote_as_refu
 fn the_run_description_says_when_a_pattern_for_the_program_is_quoted() {
     let described = run_description();
     assert!(
-        described.contains("`find . -name '*.md'`"),
-        "the description does not show the quoted pattern: {described}"
-    );
-    assert!(
-        described.contains("replaced by the files it matches here")
-            && described.contains("passed as written only when none matches"),
-        "the description does not say what an unquoted pattern becomes: {described}"
-    );
-    assert!(
-        described.contains("`grep -r x . --include=*.md`, is passed to the program as written"),
-        "the description does not say an option's pattern is passed as written: {described}"
+        described.contains("Quote a pattern meant for the program."),
+        "the description does not say to quote a pattern meant for the program: {described}"
     );
 }
 
@@ -92,8 +77,8 @@ fn the_run_description_says_when_a_pattern_for_the_program_is_quoted() {
 fn the_run_description_says_cd_moves_nothing_and_directory_is_how_a_line_runs_elsewhere() {
     let described = run_description();
     assert!(
-        described.contains("`cd` step is refused")
-            && described.contains("`directory` argument is how a line runs elsewhere"),
+        described.contains("`cd` step is refused since it moves nothing for later steps")
+            && described.contains("the `directory` argument runs a line elsewhere"),
         "the description does not say cd is refused and directory is the route: {described}"
     );
 }
@@ -108,7 +93,7 @@ fn the_run_description_says_a_limit_or_mask_step_is_refused_and_goes_inside_sh_c
     let described = run_description();
     for part in [
         "`ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash` or `wait` step is refused",
-        "changes nothing for the steps after it",
+        "changes nothing for later steps",
         "`sh -c '... ulimit ...'`",
         "approved as one line",
     ] {
@@ -223,7 +208,7 @@ fn the_run_description_says_to_probe_a_browsers_debugging_port_before_asking_abo
 fn the_run_description_routes_a_watch_request_to_one_of_the_two_techniques() {
     let described = run_description();
     for stated in [
-        "watch something",
+        "A file is watched by",
         "background: true",
         "wait_seconds",
         "killed when the turn ends",
@@ -238,7 +223,7 @@ fn the_run_description_routes_a_watch_request_to_one_of_the_two_techniques() {
     // twice over: it is not in the read-proven table, so every watch of a file cost an
     // approval, and it sees appends only, so a file truncated or replaced looked untouched.
     assert!(
-        described.contains("read_file hands back a change token"),
+        described.contains("comparing read_file's change token between looks"),
         "the description does not route a file to the token it can compare: {described}"
     );
     assert!(
@@ -248,17 +233,22 @@ fn the_run_description_routes_a_watch_request_to_one_of_the_two_techniques() {
     // The failure that shipped: an open-ended request landed in the loop branch, which asks for
     // nothing to be done, so the turn made no tool call at all and reported no watch.
     assert!(
-        described.contains("take the first look now"),
+        described.contains("Take the first look now and call schedule_next"),
         "the description lets an unbounded watch request end the turn with no look: {described}"
     );
+    // RUN-18: said why the call is made, which is that the line comes back after the wait.
     assert!(
-        described.contains("scheduled no further look, say that too"),
+        described.contains("has you asked again after the wait with the user's line unchanged"),
+        "the description does not say schedule_next has the line asked again: {described}"
+    );
+    assert!(
+        described.contains("no further look scheduled, say so"),
         "the description does not say to report that nothing is watching: {described}"
     );
     // The same sentence spanning the join, so a formatting pass that swallows the line break
     // is caught here rather than reaching a planner as a run of spaces mid-sentence.
     assert!(
-        described.contains("rather than a time of day"),
+        described.contains("never a time of day"),
         "the description came out with its continuation baked in: {described}"
     );
     // Said, because the planner has no clock: the preamble gives it today's date and tells it
@@ -280,9 +270,9 @@ fn the_run_description_points_text_made_from_an_output_at_the_processor() {
     let described = run_description();
     assert!(
         described.contains(
-            "hand it to spawn_processor, or write it to a file with write_file. A summary, \
-             a translation or other text made from it is written by spawn_processor, whose \
-             description says how that text reaches a program."
+            "give it to spawn_processor, or save it with write_file. Text made from it, such \
+             as a summary, is written by spawn_processor, whose description says how it \
+             reaches a program"
         ),
         "the output sentence does not send derived text to the processor: {described}"
     );
@@ -303,15 +293,12 @@ fn the_run_description_points_text_made_from_an_output_at_the_processor() {
         .expect("a description")
         .to_string();
     assert!(
-        stdin.contains(
-            "A program that sends text, such as a summary a processor wrote, takes its body \
-             this way: name the processor's answer here."
-        ),
+        stdin.contains("a program sending a processor's answer as its body takes it here"),
         "stdin_ref does not say a processor's answer can be a body: {stdin}"
     );
     // The line that already stood in this parameter still stands.
     assert!(
-        stdin.contains("do not also add a '<' redirection to the line"),
+        stdin.contains("Not with '<'"),
         "stdin_ref lost its advice about redirection: {stdin}"
     );
 }
@@ -347,9 +334,13 @@ fn what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_a
     };
 
     for name in ["read_file", "run"] {
+        // read_file opens its sentence with the call and run follows "Take the first look now
+        // and", so the capital is the only difference between the two.
         let arranging = described(Scheduling::ArrangingALook, name);
         assert!(
-            arranging.contains("call schedule_next at the end of th"),
+            arranging
+                .to_lowercase()
+                .contains("call schedule_next at the end of th"),
             "{name} did not tell a turn that can arrange a look to arrange one: {arranging}"
         );
 
@@ -357,11 +348,13 @@ fn what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_a
         // arranging a second look nobody asked for.
         let pacing = described(Scheduling::PacingALoop, name);
         assert!(
-            pacing.contains("Inside a loop"),
+            pacing.contains("In a loop"),
             "{name} did not tell a tick its next look is the next tick: {pacing}"
         );
         assert!(
-            !pacing.contains("call schedule_next at the end of th"),
+            !pacing
+                .to_lowercase()
+                .contains("call schedule_next at the end of th"),
             "{name} had a tick arrange a look the loop is already taking: {pacing}"
         );
 
@@ -369,7 +362,8 @@ fn what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_a
         // to say that nothing is watching rather than to promise a report.
         let last = described(Scheduling::NoLaterLook, name);
         assert!(
-            last.to_lowercase().contains("nothing will ask you again"),
+            last.to_lowercase()
+                .contains("nothing asks about this line again"),
             "{name} did not tell a turn nothing will ask again to say so: {last}"
         );
         assert!(
@@ -581,10 +575,6 @@ fn run_says_a_vouched_command_comes_back_readable() {
         description.contains("vouched"),
         "run's description does not mention vouching, so blind output reads as permanent"
     );
-    assert!(
-        description.contains("compile and test"),
-        "run's description does not say to use it for building and testing"
-    );
     // The old wording promised the output would never be shown, which is false for a vouched
     // command and is the sentence a planner reasoned from.
     assert!(
@@ -617,19 +607,20 @@ fn read_file_sends_a_question_about_change_to_a_token_it_can_compare() {
 
     for stated in [
         "change token",
-        "comparing it with the token from",
+        "Answer whether something changes by reading it now, keeping the token",
         // The baseline is taken in the turn the question is asked, rather than deferred to a
         // loop that nobody has started: a turn that names /loop and reads nothing answers less
         // than the single read this clause exists to correct.
-        "Take that baseline in this turn",
-        "not what changed",
+        "taking the first in this turn",
         "no clock for",
         // A session told somebody to type `/loop 10s`, which starts nothing. Handing over a
         // line for the person to type was the wrong shape of answer: the turn can arrange the
         // look itself, so it does.
-        "call schedule_next at the end of this turn",
-        "rather than telling somebody to arrange it themselves",
-        "not scheduled another, say so",
+        "Call schedule_next at the end of this turn",
+        "you are asked again after the wait with the user's line unchanged",
+        "reading it now and scheduling the look that would catch a change",
+        "Do not tell somebody to arrange it",
+        "no later look scheduled, say so",
     ] {
         assert!(
             description.contains(stated),
@@ -653,12 +644,12 @@ fn read_file_says_what_a_change_token_does_and_does_not_settle() {
     let description = read_file_description(Scheduling::ArrangingALook);
 
     for stated in [
-        "The same token on a later read means nobody wrote the file in between",
-        "a different one means somebody did",
-        "the size in its reference is what there is to compare instead",
-        "say which looks you compared",
-        "a rewrite of the same bytes moves it too",
-        "a change that leaves the file's modification time alone moves nothing",
+        "the same token on a later read means nobody wrote the file in between, a \
+         different one means somebody did",
+        "for a file you may not see, compare its size",
+        "name the looks, never a time of day",
+        "even with the same bytes",
+        "a change that keeps the modification time moves nothing",
     ] {
         assert!(
             description.contains(stated),
@@ -718,7 +709,12 @@ fn sentence_with<'a>(description: &'a str, needle: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no sentence says '{needle}': {description}"))
 }
 
-const WATCH_REQUEST: &str = "Where the request is to watch something or to be told when it changes";
+const WATCH_REQUEST: &str = "Where asked to watch";
+
+/// How the sentences for a line typed under the session's own loop, goal or watch open. They say
+/// where the next look comes from and keep the longer form of the condition.
+const WATCH_REQUEST_UNDER_A_SESSION_WATCH: &str =
+    "Where the request is to watch something or to be told when it changes";
 
 /// An answer to a request that had nothing to do with watching or change ended on a line
 /// saying no later look was scheduled, which reads as if a first look had been taken and a
@@ -736,8 +732,8 @@ fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_chang
         Scheduling::NoLaterLook,
     ] {
         for (name, instruction) in [
-            ("read_file", "not scheduled another, say so"),
-            ("run", "scheduled no further look, say that too"),
+            ("read_file", "no later look scheduled, say so"),
+            ("run", "no further look scheduled, say so"),
         ] {
             let description = tool_description(scheduling, name);
             assert!(
@@ -772,7 +768,8 @@ fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_chang
         for name in ["read_file", "run"] {
             let description = tool_description(scheduling, name);
             assert!(
-                sentence_with(&description, instruction).starts_with(WATCH_REQUEST),
+                sentence_with(&description, instruction)
+                    .starts_with(WATCH_REQUEST_UNDER_A_SESSION_WATCH),
                 "{scheduling:?}: {name} has the planner say where the next look comes from for \
                  any request: {description}"
             );
@@ -796,7 +793,7 @@ fn a_turn_nothing_asks_again_announces_no_later_look_only_for_a_watch_request() 
     );
     for (name, announcement) in [
         ("read_file", "no later look is coming"),
-        ("run", "no later one is coming"),
+        ("run", "no later look is coming"),
     ] {
         let given_to_a_delegate = delegate
             .iter()

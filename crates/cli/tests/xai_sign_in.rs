@@ -1599,6 +1599,9 @@ fn a_request_refused_with_a_400_is_made_again_with_a_new_token_and_the_turn_goes
         (
             "/v1/chat/completions",
             vec![
+                // The first 400 is answered by giving up the default cache lifetime (BACKEND-27),
+                // before the token is in question.
+                Served::json(400, &refusal),
                 Served::json(400, &refusal),
                 Served::json(400, &refusal),
                 Served::chat("it worked the second time"),

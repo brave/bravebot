@@ -1080,6 +1080,41 @@ again.
 `verified-by: bravebot_agent::turn::stopped_parents_collect_outstanding_delegate_usage_once`
 `verified-by: bravebot_agent::turn::delegate_processor_compaction_and_vetting_requests_cover_parent_waits`
 
+<a id="DELEGATE-35"></a>
+### DELEGATE-35: delegates of one kind share a request prefix, and the first of a call sends first
+
+A service's prompt cache matches a request from its first byte, in the order tools, system prompt,
+messages, and the first byte that differs ends the match. So the tools and the system prompt a
+delegate is sent hold nothing that differs between two delegates of the same kind started by one
+call. Its task, the entry `each` gave it, and a checkout's commit and path go in its first user
+message. The checkout's sentence is in the same message as the task, so a compaction
+that sends the task again sends it too ([COMPACT-19](compaction.md#COMPACT-19)). The working
+directory line of the system prompt says that the first message names the checkout, and does not
+give the path.
+
+The tools a delegate is offered are still the ones its capabilities and its definition reach
+([DELEGATE-4](#DELEGATE-4), [DELEGATE-19](#DELEGATE-19)). Nothing is added to the list to make two
+lists alike.
+
+Where one call starts more than one delegate, the first of them sends its first request at once and
+each of the others waits, before its first request, until that request has returned, the first
+delegate has ended, the turn or a person has stopped it ([DELEGATE-25](#DELEGATE-25)), or 60 seconds
+have passed. Each then sends its own, which reads the prefix the first request wrote instead of
+writing it again. Only the first request waits. The wait adds the time of one request to each
+delegate's run after the first.
+
+**What the wait reads.** A flag the driver sets when the first delegate's request returns or its
+run ends, the two stops and a clock. Nothing a delegate read and nothing a model wrote decides it
+([LABEL-5](labels.md#LABEL-5)).
+
+**Known limits.** A delegate whose system prompt differs for another reason still writes its own
+prefix: one of another kind, one of another definition, and a checkout's delegate beside one in the
+working directory. Delegates started by separate calls do not wait for each other.
+
+`verified-by: bravebot_agent::turn::delegates_of_one_call_send_the_same_tools_and_system_prompt`
+`verified-by: bravebot_agent::turn::delegates_in_checkouts_of_one_call_are_told_their_checkout_in_the_first_message`
+`verified-by: bravebot_agent::delegate::the_others_of_a_call_wait_for_the_first_request_and_no_longer`
+
 ## Definitions
 
 <a id="DELEGATE-19"></a>

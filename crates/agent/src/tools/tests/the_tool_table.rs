@@ -345,33 +345,21 @@ fn request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off() {
         .function
         .description;
     let (_, after_denial) = described
-        .split_once("does not widen")
-        .expect("the description no longer says what a yes leaves closed");
+        .split_once("The file tools are not widened")
+        .expect("the description no longer says a yes leaves the file tools closed");
     let (default_case, exception) = after_denial
-        .split_once("turned permission prompts off")
+        .split_once("permission prompts off")
         .unwrap_or_else(|| panic!("no exception for the user who turned prompts off: {described}"));
-    assert!(
-        default_case.contains("/add-dir"),
-        "the default case no longer says /add-dir is what opens a directory to them: {described}"
+    assert_eq!(
+        default_case, ", except with ",
+        "the denial is not stated as holding everywhere but where prompts are off: {described}"
     );
     assert!(
-        exception.contains("with no request")
-            && exception.contains("without a question")
-            && exception.contains("opens the directory")
-            && exception.contains("trusts it"),
+        exception.contains("they reach outside paths with no request")
+            && exception.contains("granted unasked")
+            && exception.contains("opens and trusts the directory for them"),
         "the exception does not say what a request does there: {described}"
     );
-    for file_tool in [
-        "read_file",
-        "write_file",
-        "edit_file",
-        "the other file tools",
-    ] {
-        assert!(
-            default_case.contains(file_tool),
-            "{file_tool} is not among the tools the denial is about: {described}"
-        );
-    }
 }
 
 /// A person watching sees every call and, without this, nothing of what it was for, so every

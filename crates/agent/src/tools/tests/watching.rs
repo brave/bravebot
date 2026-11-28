@@ -469,7 +469,7 @@ fn a_read_is_sent_to_the_watch_where_one_can_be_armed() {
     .function
     .description;
     assert!(
-        described.contains("watch_file is the better answer"),
+        described.contains("For one file, watch_file outlives this turn."),
         "a read does not send a question about one file to the watch: {described}"
     );
 }
@@ -494,7 +494,7 @@ fn a_read_is_sent_to_the_schedule_alone_where_no_watch_can_be_armed() {
         "a read names a tool this surface does not offer: {described}"
     );
     assert!(
-        described.contains("call schedule_next at the end of this turn"),
+        described.contains("Call schedule_next at the end of this turn"),
         "a read stopped naming the answer that is left: {described}"
     );
 }

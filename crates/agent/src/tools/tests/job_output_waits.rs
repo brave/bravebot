@@ -155,9 +155,9 @@ fn the_descriptions_quote_the_wait_in_force_and_its_cache_cost() {
     use bravebot_config::CacheTtl;
 
     for (lifetime, longest) in [
-        (None, "Between 1 and 270."),
-        (Some(CacheTtl::FiveMinutes), "Between 1 and 270."),
-        (Some(CacheTtl::OneHour), "Between 1 and 600."),
+        (None, "From 1 to 270"),
+        (Some(CacheTtl::FiveMinutes), "From 1 to 270"),
+        (Some(CacheTtl::OneHour), "From 1 to 600"),
     ] {
         let offered = available(
             Scheduling::ArrangingALook,
@@ -172,12 +172,13 @@ fn the_descriptions_quote_the_wait_in_force_and_its_cache_cost() {
         let said = job_output.function.parameters.to_string();
         assert!(said.contains(longest), "{lifetime:?}: {said}");
         assert!(
-            said.contains("prompt cache lifetime"),
+            said.contains("prompt cache lifetime")
+                && said.contains("write the whole conversation to the cache again"),
             "{lifetime:?}: wait_seconds does not give the cache cost: {said}"
         );
         assert!(
-            job_output.function.description.contains("prompt cache"),
-            "{lifetime:?}: the job_output description does not give the cache cost"
+            job_output.function.description.contains("wait_seconds"),
+            "{lifetime:?}: the job_output description does not name the wait"
         );
         let run = offered
             .iter()
@@ -215,11 +216,11 @@ fn job_output_offers_a_bounded_wait_rather_than_only_a_snapshot() {
     // Built from the figures in force rather than written out, so changing the bound fails
     // here instead of leaving the planner told a number that is no longer the one enforced.
     let bounds = format!(
-        "Between {} and {}",
+        "From {} to {}",
         crate::exec::WAIT_FLOOR.as_secs(),
         Deadlines::BUILT_IN.wait_ceiling.as_secs()
     );
-    for stated in [bounds.as_str(), "refused rather than adjusted"] {
+    for stated in [bounds.as_str(), "outside is refused"] {
         assert!(
             said.contains(stated),
             "wait_seconds no longer says '{stated}': {said}"
@@ -235,17 +236,14 @@ fn job_output_offers_a_bounded_wait_rather_than_only_a_snapshot() {
         )),
         "the refusal quotes bounds that are not the ones enforced: {refusal}"
     );
+    let described = &tool.function.description;
     assert!(
-        said.contains("as soon as"),
-        "wait_seconds does not say the wait ends when the thing happens early: {said}"
+        described.contains("wait_seconds waits for new output, the end or a typed line"),
+        "job_output does not say the wait ends at new output or a typed line: {described}"
     );
     assert!(
         !said.contains("costs nothing"),
         "wait_seconds still says a long wait is free: {said}"
-    );
-    assert!(
-        said.contains("the user types a line"),
-        "wait_seconds does not say a typed line ends the wait: {said}"
     );
     assert!(
         tool.function.description.contains("wait_seconds"),
@@ -271,8 +269,8 @@ fn job_output_says_its_wait_stays_inside_the_turn() {
 
     let said = &tool.function.description;
     for stated in [
-        "still a wait inside this turn",
-        "cannot tell you about anything that happens after the turn ends",
+        "A wait stays inside this turn",
+        "whether it outlives the turn",
     ] {
         assert!(
             said.contains(stated),
@@ -445,11 +443,7 @@ fn job_output_offers_a_wait_that_output_does_not_end() {
     let until_exit = &tool.function.parameters["properties"]["until_exit"];
     assert_eq!(until_exit["type"], "boolean", "until_exit is not offered");
     let said = until_exit["description"].as_str().expect("it is described");
-    for stated in [
-        "does not end the wait",
-        "Needs wait_seconds",
-        "cannot be given with kill",
-    ] {
+    for stated in ["Needs wait_seconds", "not with kill"] {
         assert!(
             said.contains(stated),
             "until_exit no longer says '{stated}': {said}"
@@ -464,17 +458,20 @@ fn job_output_offers_a_wait_that_output_does_not_end() {
         "until_exit is required of every look: {required:?}"
     );
     // The planner reads the tool's description before it reads a parameter's, and the case the
-    // flag is for is one it has to recognise there.
+    // flag is for is one it has to recognise there: output ends wait_seconds and does not end
+    // until_exit, which waits for the end.
+    let described = &tool.function.description;
     assert!(
-        tool.function.description.contains("until_exit"),
-        "job_output's description never names the flag: {}",
-        tool.function.description
+        described.contains("wait_seconds waits for new output")
+            && described.contains("until_exit waits for the end"),
+        "job_output does not say output ends one wait and only the end ends the other: \
+         {described}"
     );
     let wait = tool.function.parameters["properties"]["wait_seconds"]["description"]
         .as_str()
         .expect("wait_seconds is described");
     assert!(
-        wait.contains("until_exit") && wait.contains("user types a line"),
-        "wait_seconds says output ends it, that until_exit changes that and that a line the user types ends it: {wait}"
+        wait.contains("outside is refused"),
+        "wait_seconds does not give its bounds: {wait}"
     );
 }

@@ -205,6 +205,7 @@ saving it with a script that opens the file itself leaves the page readable.
 `verified-by: bravebot_agent::tools::tests::tool_descriptions::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::tests::tool_descriptions::the_write_to_a_file_is_described_only_where_the_list_holds_write_file`
 `verified-by: bravebot_agent::tools::tests::tool_descriptions::the_processor_instruction_does_not_forbid_asking_for_a_summary`
+`verified-by: bravebot_agent::tools::tests::tool_descriptions::the_processor_description_gives_the_summary_example_and_why_a_script_is_not_the_way`
 `verified-by: bravebot_agent::tools::tests::tool_descriptions::the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_write`
 `verified-by: bravebot_agent::turn::a_summary_of_a_scraped_page_reaches_the_sending_program_in_the_file_the_page_was_saved_to`
 `verified-by: bravebot_agent::turn::a_summary_of_a_fetched_page_reaches_the_sending_program_once_the_page_is_saved_to_a_file`

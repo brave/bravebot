@@ -1321,7 +1321,8 @@ fn the_glob_arguments_say_matching_is_case_sensitive() {
             .unwrap_or_else(|| panic!("{tool}.{property} is described"))
             .to_string();
         assert!(
-            described.contains("case-sensitive") && described.contains("{r,R}eadme*"),
+            described.to_lowercase().contains("case-sensitive")
+                && described.contains("{r,R}eadme* matches both cases"),
             "{tool}.{property} does not say matching is case-sensitive: {described}"
         );
     }

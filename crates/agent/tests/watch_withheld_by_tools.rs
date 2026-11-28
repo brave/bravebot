@@ -41,7 +41,7 @@ fn a_read_does_not_name_a_watch_the_command_line_took_away() {
 
     let control = a_request_from_a_turn_that_may_arm_a_watch(&workspace);
     assert!(
-        control.contains("watch_file is the better answer"),
+        control.contains("watch_file outlives this turn"),
         "the control run was not sent to a watch, so the limited run proves nothing: {control}"
     );
 

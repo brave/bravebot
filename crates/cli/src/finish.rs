@@ -332,7 +332,7 @@ pub(crate) fn what_ran(
     message: &str,
     steps: usize,
     spent: bravebot_agent::Spent,
-    calls: &[json::Call],
+    ran: Ran<'_>,
     refusals: &[json::Refusal],
     notices: &[String],
 ) -> String {
@@ -351,11 +351,19 @@ pub(crate) fn what_ran(
             cache_read: spent.cached.read_tokens,
             cache_written: spent.cached.written_tokens,
         },
-        calls,
+        calls: ran.calls,
+        delegates: ran.delegates,
         refusals,
         notices,
         structured: None,
     })
+}
+
+/// What a run had done when it stopped: the calls it made and how many delegates it started.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Ran<'a> {
+    pub(crate) calls: &'a [json::Call],
+    pub(crate) delegates: usize,
 }
 
 /// Put a result object on stdout.
@@ -386,7 +394,7 @@ pub(crate) fn stopped_before_the_turn(
             &message,
             0,
             Default::default(),
-            &[],
+            Ran::default(),
             &[],
             &[],
         ));

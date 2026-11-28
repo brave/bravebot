@@ -1635,7 +1635,9 @@ to this in turn, so the local file cannot raise what the project file lowered.
 For `promptCacheTtl`, a layer states a value when it holds the string `5m` or `1h`, ignoring
 surrounding space and spelled in lower case. Any other string, a number, a boolean and `null` state
 nothing. `5m` is the narrower value, since the longer lifetime is charged at a higher write rate
-([BACKEND-27](#BACKEND-27)). The key has a default bound, which is no lifetime, so where the
+([BACKEND-27](#BACKEND-27)). The key has a default bound, which states no lifetime: requests then
+carry an hour on the schemas and the prompt and none on the conversation (BACKEND-27), which a
+checkout's `5m` narrows and a checkout's `1h` widens. So where the
 person's own files state nothing a checkout's `5m` is obeyed and its `1h` is not. Where they state
 `5m`, a checkout's `1h` is not obeyed, and where they state `1h` a checkout's `5m` is obeyed. A
 checkout's `1h` over the person's `1h` changes nothing and is not reported. A checkout value that
@@ -1921,12 +1923,18 @@ wire format, which marks a prefix a different way and marks less of one: the sys
 last thing the user said, never a result. That is BACKEND-32, and it turns on the same trade, that
 asking a service which refuses costs one round trip while not asking costs every request.
 
-**How long the service keeps it is a person's choice.** A `promptCacheTtl` of `5m` or `1h` in the
-settings puts a `ttl` of that word on each breakpoint, the schemas', the prompt's and the
-conversation's alike.
-Absent, or any other word, nothing is added and the service keeps its own default, so a build nobody
-has configured sends breakpoints with no `ttl` field. The longer lifetime is charged at a higher write rate, which
-is why the default is no lifetime rather than the longest. The setting is read from the person's own
+**How long the service keeps it is a person's choice, and the fixed prefix asks for an hour where
+nobody chose.** A `promptCacheTtl` of `5m` or `1h` in the settings puts a `ttl` of that word on each
+breakpoint, the schemas', the prompt's and the conversation's alike. Absent, or any other word, the
+breakpoint after the last tool schema and the one on the system prompt carry a `ttl` of `1h` and the
+conversation's carries none, so the service keeps it for its own default. The schemas and the prompt
+are the same bytes on every request of every session, and a request after a pause of more than five
+minutes reads them back instead of writing them again. The conversation's breakpoint moves every
+round, so an hour on it would raise the rate of every round's write and be read back only after a
+pause. The longer lifetime is charged at a higher write rate, which is why a person's choice applies
+to every breakpoint and the default puts the hour on the fixed prefix alone. The service requires a
+longer lifetime to come before a shorter one in the order tools, system, messages, and the default
+keeps that order. The setting is read from the person's own
 file and from the file `--settings` names. A project or local layer may state `5m` and may not state
 `1h`, which is dropped and reported ([BACKEND-24](#BACKEND-24)), so a repository cannot make every
 request in it carry the dearer lifetime. The value comes from the settings and
@@ -1937,20 +1945,24 @@ writes the whole conversation again and reads none of it, so the longest wait th
 seconds under the lifetime in force: 270 seconds where the setting is `5m` or absent, 600 where it
 is `1h` ([RUN-17](tools/run.md#RUN-17)). Absent is treated as `5m`, whichever service answers,
 including the Brave endpoint and `api.openai.com`, which cache without being asked and whose
-lifetime is not stated here: the shorter bound is the one that cannot cost a rewrite where the
-lifetime is five minutes, and costs only an extra call where it is longer.
+lifetime is not stated here: the conversation's breakpoint carries no lifetime where the setting is
+absent, so the conversation is kept for the service's default of five minutes even where the
+schemas and the prompt are kept for an hour. The shorter bound is the one that cannot cost a
+rewrite where the lifetime is five minutes, and costs only an extra call where it is longer.
 
 **A model that refuses the lifetime keeps its breakpoints.** A model that reads a breakpoint and not
 a lifetime on it refuses the request in the same way a model without caching does. A refusal of a
-request carrying a lifetime is therefore sent once more with the lifetime removed and the breakpoints
-kept, ahead of the retry that removes the breakpoints, and where that answers no later request in the
-process sends that model a lifetime. A request carrying no lifetime is not affected.
+request carrying a lifetime, the default hour on the schemas and the prompt included, is therefore
+sent once more with the lifetime removed from every breakpoint and the breakpoints kept, ahead of
+the retry that removes the breakpoints, and where that answers no later request in the process sends
+that model a lifetime. A request carrying no lifetime is not affected.
 
 **A request to an `anthropic` entry marks the same two prefixes.** The breakpoint is a `cache_control`
 field on the block it follows, and not a block of its own, the shape that API states: on the last text
 block of the system prompt, and on the last block of the conversation where that is text or a tool
 result. The conversation's comes off where the caller says no later request sends it, the lifetime
-is a `ttl` on each, and a model that refuses a lifetime keeps its breakpoints, while one that refuses
+is a `ttl` on each as the settings and the default above say, and a model that refuses a lifetime
+keeps its breakpoints, while one that refuses
 a breakpoint is not sent one again. What a model refused is remembered against the service and the
 name the model goes out under, so two services serving one slug are asked separately, and
 [BACKEND-57](#BACKEND-57) says in what order a refused request gives its fields up.
@@ -1964,9 +1976,12 @@ for one that does not.
 `verified-by: bravebot_bedrock::protocol::the_system_prompt_carries_a_breakpoint`
 `verified-by: bravebot_bedrock::protocol::the_tool_list_ends_in_one_cache_point`
 `verified-by: bravebot_bedrock::protocol::a_chosen_lifetime_is_stated_on_every_breakpoint`
+`verified-by: bravebot_bedrock::protocol::the_default_asks_an_hour_for_the_tools_and_the_prompt_and_nothing_for_the_conversation`
+`verified-by: bravebot_config::lib::an_unset_cache_lifetime_asks_an_hour_of_the_prefix_and_nothing_of_the_conversation`
 `verified-by: bravebot_bedrock::protocol::no_lifetime_is_sent_where_none_was_chosen`
 `verified-by: bravebot_bedrock::lib::the_chosen_lifetime_is_sent_until_the_model_refuses_it`
 `verified-by: bravebot_bedrock::lib::a_refused_lifetime_is_given_up_before_the_breakpoints_and_remembered`
+`verified-by: bravebot_bedrock::lib::a_refused_default_hour_is_given_up_before_the_breakpoints`
 `verified-by: bravebot_bedrock::lib::one_refused_request_does_not_stop_later_requests_carrying_the_breakpoints`
 `verified-by: bravebot_bedrock::lib::a_model_that_refuses_on_a_second_request_is_sent_no_breakpoints_after_it`
 `verified-by: bravebot_bedrock::lib::refusals_by_requests_that_began_together_count_once`
@@ -2005,12 +2020,14 @@ for one that does not.
 `verified-by: bravebot_aichat::anthropic::protocol::a_conversation_ending_in_a_picture_or_a_document_is_marked_nowhere_but_the_prompt`
 `verified-by: bravebot_aichat::anthropic::protocol::a_request_giving_up_its_conversation_keeps_the_prompts_breakpoint_alone`
 `verified-by: bravebot_aichat::anthropic::protocol::a_chosen_lifetime_is_stated_on_every_breakpoint_and_none_is_added`
+`verified-by: bravebot_aichat::anthropic::protocol::the_default_asks_an_hour_for_the_tools_and_the_prompt_and_nothing_for_the_conversation`
 `verified-by: bravebot_aichat::anthropic::protocol::the_last_tool_definition_carries_a_breakpoint_and_no_other_does`
 `verified-by: bravebot_aichat::anthropic::protocol::a_request_without_breakpoints_keeps_everything_that_was_asked_for`
 `verified-by: bravebot_aichat::client::an_anthropic_request_refused_on_its_contents_is_asked_again_without_what_nobody_asked_for`
 `verified-by: bravebot_aichat::client::an_anthropic_entry_that_refused_a_breakpoint_is_not_sent_one_again_per_service`
 `verified-by: bravebot_aichat::client::an_anthropic_request_giving_up_its_conversation_is_sent_without_the_breakpoint_on_it`
 `verified-by: bravebot_aichat::client::an_anthropic_refused_lifetime_is_given_up_before_the_breakpoints`
+`verified-by: bravebot_aichat::client::an_anthropic_request_asks_an_hour_for_its_prefix_by_default_and_none_once_refused`
 `verified-by: bravebot_aichat::client::a_probe_that_failed_as_well_leaves_what_was_known_alone`
 
 <a id="BACKEND-28"></a>
@@ -2262,7 +2279,8 @@ before it read, and a turn that failed or was stopped reports nothing rather tha
 before it on the panel.
 
 **The lifetime asked for is reported beside them.** The status panel's cache lines end with the
-`promptCacheTtl` the settings chose, or say none was and the service's own applies. That is the
+`promptCacheTtl` the settings chose, or, where none was, say the tool definitions and the system
+prompt ask for an hour and the conversation the service's own. That is the
 setting and not a reading: no reply says how long a service kept a prefix, and a model that refuses
 the field is sent the request without it (BACKEND-27, BACKEND-32). The line is drawn from the setting
 whichever service answered ([Known costs](#known-costs)). It sits there because a read of
@@ -2413,11 +2431,15 @@ it: two gateways can offer the same name, and one of them can be the name Brave'
 answers to. A refusal recorded against the id alone would stop the asking everywhere one appeared.
 
 **A gateway may be asked how long to keep it.** With a `promptCacheTtl` setting, `cache_control`
-becomes `{"type": "ephemeral", "ttl": "1h"}` (or `"5m"`) on a request to a gateway, and is unchanged
-on a request to Brave's own endpoint, which reads no such field. A request to `api.openai.com` carries no
+becomes `{"type": "ephemeral", "ttl": "1h"}` (or `"5m"`) on every mark of a request to a gateway.
+Without one, the marks on the last tool definition and on the system prompt carry `"ttl": "1h"` and
+the mark on the last thing the user said carries none, for the reason BACKEND-27 gives. A request to
+Brave's own endpoint, which reads no such field, carries no lifetime either way. A request to
+`api.openai.com` carries no
 `cache_control`, so it carries no lifetime. The refusal rule is BACKEND-27's: a
-gateway that refuses a request carrying a lifetime is sent it again without the lifetime and with the
-breakpoints, and is not sent one again for that model on that service.
+gateway that refuses a request carrying a lifetime, the default hour included, is sent it again
+without any lifetime and with the breakpoints, and is not sent one again for that model on that
+service.
 
 **Nothing here claims a service reads it.** What is established is that the request asks and that a
 service refusing it with an invalid-request status does not cost the turn. A service that objects
@@ -2434,6 +2456,7 @@ sent.
 `verified-by: bravebot_aichat::protocol::the_system_prompt_and_the_last_thing_the_user_said_are_marked`
 `verified-by: bravebot_aichat::protocol::the_last_tool_definition_carries_a_breakpoint_with_the_lifetime_asked_for`
 `verified-by: bravebot_aichat::lib::a_chosen_lifetime_goes_to_a_gateway_and_to_nothing_else`
+`verified-by: bravebot_aichat::client::a_gateway_is_asked_an_hour_for_its_prefix_by_default_and_none_once_refused`
 `verified-by: bravebot_aichat::lib::a_request_to_openais_own_api_is_sent_no_breakpoints_and_one_to_a_proxy_is`
 `verified-by: bravebot_config::provider::openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called`
 `verified-by: bravebot_config::provider::the_spellings_of_openais_host_are_its_own_api_and_another_host_or_port_is_not`
@@ -5948,10 +5971,11 @@ cancel kills it rather than asking it to stop.
   that: BACKEND-31's figures are per turn, and the turn that compacted is charged for the write in
   the same figure as the rounds that profited from it.
 
-- **An ephemeral cache entry expires on inactivity, and nothing here tracks it.** The lifetime is
-  the provider's default of a few minutes unless the `promptCacheTtl` setting chooses one (BACKEND-27,
-  BACKEND-32), and the longer one is charged at a higher write rate, which is why nothing is sent until
-  a person chooses. A wait the tool offers is bounded under the lifetime in force (BACKEND-27), so
+- **An ephemeral cache entry expires on inactivity, and nothing here tracks it.** Unless the
+  `promptCacheTtl` setting chooses a lifetime, the conversation's breakpoint is kept for the
+  provider's default of a few minutes and the schemas and the prompt for an hour (BACKEND-27,
+  BACKEND-32). The longer lifetime is charged at a higher write rate, which is why it is not put on
+  the conversation until a person chooses. A wait the tool offers is bounded under the lifetime in force (BACKEND-27), so
   that cost is not paid by a `job_output` wait, and a `run` deadline of five minutes or more is
   not bounded and its description names the cost. A person who thinks between turns misses more
   often than the token arithmetic

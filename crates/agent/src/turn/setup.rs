@@ -412,7 +412,6 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 )]
 pub(super) fn system_prompt(
     task: &Task,
-    workspace: &Workspace,
     delegates: &Definitions,
     addressed: Option<&Addressed>,
     style: Option<&Style>,
@@ -425,10 +424,6 @@ pub(super) fn system_prompt(
     memory: impl Fn(bool, &str) -> String,
 ) -> Prompt {
     let mode = started_in.instruction().unwrap_or_default();
-    let checkout_notice = workspace
-        .checkout()
-        .map(crate::delegate::checkout_notice)
-        .unwrap_or_default();
     let mut system = Prompt::default();
     match &task.delegate {
         Some(spec) => {
@@ -443,7 +438,9 @@ pub(super) fn system_prompt(
                     spec.budget().is_some(),
                 ),
             );
-            system.push(Provenance::Driver, checkout_notice);
+            // A checkout's commit and path are said with the task, in the first user message, and
+            // not here: they differ between the delegates of one call, and the system prompt is the
+            // prefix those delegates share (DELEGATE-35).
             system.extend(preamble.prompt.clone());
         }
         // `for_a_person` names tools only this side is offered, so it sits with the rest of what

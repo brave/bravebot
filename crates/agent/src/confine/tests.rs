@@ -3207,7 +3207,7 @@ fn the_planner_is_told_a_read_only_stage_cannot_write_the_project() {
             "{said}"
         );
         assert!(
-            !said.contains("It may write only the directories the session was opened on"),
+            !said.contains("write only the session's directories"),
             "{said}"
         );
         let writing = stated(
@@ -3935,9 +3935,7 @@ fn the_planner_is_told_of_loopback_only_what_the_sandbox_does_on_its_platform() 
     .expect("run has a scopes entry that says what it is for");
 
     // The entry is read on every platform, so what it says of an ability is said of macOS.
-    let macos_at = scopes
-        .find("On macOS")
-        .expect("names the platform it acts on");
+    let macos_at = scopes.find("macOS").expect("names the platform it acts on");
     assert!(
         scopes.find("listen").is_some_and(|at| at > macos_at),
         "{scopes}"
@@ -3948,12 +3946,11 @@ fn the_planner_is_told_of_loopback_only_what_the_sandbox_does_on_its_platform() 
     );
     assert!(scopes.contains(LOOPBACK_CONNECT_RULE), "{scopes}");
     // Every text that says when a connect needs the scope is this rule, so the condition and
-    // the instruction not to ask on a line with network access are pinned in its own words:
-    // a rule that dropped them would pass each check that compares a text with the rule.
+    // the reason not to ask on a line with network access are pinned in its own words: a rule
+    // that dropped them would pass each check that compares a text with the rule.
     for said in [
-        "to connect to a port of this machine only from a line that has no network access",
-        "adds nothing to a connect from a line that has network access",
-        "do not ask for it there",
+        "to connect to a port of this machine only from a line with no network access",
+        "adds nothing to a line that has network access",
     ] {
         assert!(LOOPBACK_CONNECT_RULE.contains(said), "{said:?}");
     }
