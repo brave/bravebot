@@ -5400,7 +5400,7 @@ where
                         // whether the offer can be answered, which the listing also reads.
                         let read_by_name = sentences::read_file_would_vouch(
                             &output.tool,
-                            plan.beside,
+                            state.beside,
                             policy.vouch_is_answerable(),
                         );
                         let composed = |described: &str, advice: &str| {

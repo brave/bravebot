@@ -7,6 +7,8 @@
 //! settles it cannot share a binary with tests that need it unset. This file holds one test, which
 //! runs a turn before the limit is settled as its control and a second after.
 
+#![expect(clippy::expect_used, reason = "a test fails by panicking")]
+
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::Task;
 use bravebot_core::event::RecordingSink;

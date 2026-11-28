@@ -28896,6 +28896,10 @@ fn a_lines_run_refuses_a_rule_proposal() {
     let gateway = a_gateway_following(
         vec![
             Model::Calls(
+                "load_tool",
+                serde_json::json!({"name": "propose_rule", "why": "to propose a rule"}).to_string(),
+            ),
+            Model::Calls(
                 "propose_rule",
                 serde_json::json!({
                     "text": "Always use tabs.",
@@ -28925,14 +28929,14 @@ fn a_lines_run_refuses_a_rule_proposal() {
     );
     let sent = bodies(&gateway);
     assert!(
-        sent[1].contains("Nobody could be asked to keep the rule"),
+        sent[2].contains("Nobody could be asked to keep the rule"),
         "unexpected response to planner: {}",
-        sent[1]
+        sent[2]
     );
     assert!(
-        !sent[1].contains("The user chose: Keep this rule"),
+        !sent[2].contains("The user chose: Keep this rule"),
         "the planner was told the rule was kept: {}",
-        sent[1]
+        sent[2]
     );
 }
 

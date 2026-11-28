@@ -905,6 +905,7 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface() {
         let mut state = stand_in.state();
         state.refreshing.extend([Refresh::Busy, Refresh::Ended]);
         state.serving.extend([
+            Serving::Calls("load_tool", r#"{"name": "lsp", "why": "to look it up"}"#),
             Serving::Calls(
                 "lsp",
                 r#"{"operation": "goToDefinition", "path": "a.zz", "line": 1, "character": 12}"#,
