@@ -3023,6 +3023,82 @@ fn a_query_off_the_list_names_run_only_where_the_turn_holds_one() {
     );
 }
 
+/// GIT-5. `count`, `skip`, `messages`, `since` and `until` given to a query that does not take
+/// them are refused by naming the argument, where they were dropped and the answer read as one
+/// to the question asked. Each argument is given alone, so the sentence can only name the one
+/// that was given; the queries that do take it are the control, which a refusal of every call
+/// would fail. A `skip` of 0 and a `messages` of false are what leaving them out means, so a
+/// status carrying them is not refused. The regressions it rejects are the arguments still
+/// dropped, a refusal naming a different argument than the one given, and a refusal of the
+/// queries that use the argument.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn an_argument_a_query_does_not_take_is_refused_by_name() {
+    let scratch = Scratch::new("read-git-untaken");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let said = |arguments: serde_json::Value| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink);
+        let produced = with_tools(&workspace, |tools| {
+            read_git(
+                &mut policy,
+                tools,
+                &mut crate::confirm::Unattended,
+                &arguments,
+            )
+        });
+        told(&mut policy, &produced.text)
+    };
+
+    for (query, argument, value, takers) in [
+        ("show", "count", json!(5), "log, tags and search"),
+        ("diff", "count", json!(5), "log, tags and search"),
+        ("status", "count", json!(5), "log, tags and search"),
+        ("show", "skip", json!(3), "log, tags and search"),
+        ("diff", "skip", json!(3), "log, tags and search"),
+        ("status", "skip", json!(3), "log, tags and search"),
+        ("show", "messages", json!(true), "log"),
+        ("diff", "messages", json!(true), "log"),
+        ("tags", "messages", json!(true), "log"),
+        ("search", "messages", json!(true), "log"),
+        ("show", "since", json!("2026-01-01"), "log"),
+        ("diff", "since", json!("2026-01-01"), "log"),
+        ("tags", "since", json!("2026-01-01"), "log"),
+        ("show", "until", json!("2026-01-01"), "log"),
+        ("status", "until", json!("2026-01-01"), "log"),
+        ("search", "until", json!("2026-01-01"), "log"),
+    ] {
+        let mut arguments = json!({"query": query});
+        arguments[argument] = value;
+        assert_eq!(
+            said(arguments),
+            format!("error: {argument} is for {takers}, and {query} takes none.")
+        );
+    }
+
+    for (query, argument, value) in [
+        ("log", "count", json!(5)),
+        ("tags", "count", json!(5)),
+        ("search", "count", json!(5)),
+        ("log", "skip", json!(3)),
+        ("tags", "skip", json!(3)),
+        ("search", "skip", json!(3)),
+        ("log", "messages", json!(true)),
+        ("log", "since", json!("2026-01-01")),
+        ("log", "until", json!("2026-01-01")),
+        ("status", "skip", json!(0)),
+        ("status", "messages", json!(false)),
+    ] {
+        let mut arguments = json!({"query": query});
+        arguments[argument] = value;
+        let said = said(arguments);
+        assert!(
+            !said.contains("takes none"),
+            "{query} with {argument} was refused as one that does not take it: {said}"
+        );
+    }
+}
+
 /// PATHREQ-1. `path` decides what programs may reach, so a `request_path` call made after the
 /// context has met untrusted content is answered `refused:` before anything is asked: the
 /// confirmer is never put the question, nothing is held for programs, and the trail records no

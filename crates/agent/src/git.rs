@@ -135,6 +135,37 @@ impl Query {
         }
     }
 
+    /// The queries that take the argument `argument`, as words for a sentence. Only the arguments
+    /// [`Query::refuse_untaken`] is given are listed.
+    pub(crate) fn takers(argument: &str) -> &'static str {
+        match argument {
+            "count" | "skip" => "log, tags and search",
+            _ => "log",
+        }
+    }
+
+    /// Whether this query uses `argument`, one of `count`, `skip`, `messages`, `since` and `until`.
+    fn takes(self, argument: &str) -> bool {
+        match argument {
+            "count" | "skip" => matches!(self, Query::Log | Query::Tags | Query::Search),
+            "messages" | "since" | "until" => self == Query::Log,
+            _ => true,
+        }
+    }
+
+    /// Refuse the first of `given` that this query does not take, by name. Each of them would
+    /// otherwise be dropped, and the planner would read the answer as one to the question it
+    /// asked ([GIT-5](../../../docs/specs/tools/read-git.md#GIT-5)).
+    pub fn refuse_untaken(self, given: &[&'static str]) -> Result<(), Declined> {
+        match given.iter().find(|argument| !self.takes(argument)) {
+            Some(argument) => Err(Declined::NotTaken {
+                argument,
+                query: self,
+            }),
+            None => Ok(()),
+        }
+    }
+
     pub fn word(self) -> &'static str {
         match self {
             Query::Log => "log",
