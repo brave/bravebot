@@ -400,6 +400,10 @@ fn a_reopened_session_counts_the_kept_checkout_it_did_not_apply() {
     rules.push((
         "ASK-TO-APPLY",
         vec![
+            endpoint::tool(
+                "load_tool",
+                json!({"name": "apply_checkout", "why": "to bring the checkout back"}),
+            ),
             endpoint::tool("apply_checkout", json!({"checkout": "c1"})),
             endpoint::answer(),
         ],
@@ -534,6 +538,10 @@ fn a_later_turn_is_told_the_working_directory_was_written_since_the_checkout() {
     rules.push((
         "ASK-TO-APPLY",
         vec![
+            endpoint::tool(
+                "load_tool",
+                json!({"name": "apply_checkout", "why": "to bring the checkout back"}),
+            ),
             endpoint::tool("apply_checkout", json!({"checkout": "c1"})),
             endpoint::answer(),
         ],

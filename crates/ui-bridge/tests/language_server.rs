@@ -142,9 +142,10 @@ impl Drop for Scratch {
     }
 }
 
-/// A planner that asks where the symbol in `src/a.rs` is defined whenever the last thing said was
-/// not a tool's result, and ends the turn when it was. So every prompt is one question of a
-/// language server, and the service keeps no state of its own.
+/// A planner that loads `lsp`, which a turn holds back until it is loaded, then asks where the
+/// symbol in `src/a.rs` is defined, and ends the turn once it has been told. It reads which of
+/// those it is at from how many tool results the conversation after the last user message holds,
+/// so every prompt is one question of a language server and the service keeps no state of its own.
 ///
 /// Returns every round the planner was asked, in order.
 fn a_planner_asking_about_a_symbol() -> (String, mpsc::Receiver<String>) {
@@ -193,27 +194,40 @@ fn answer(mut stream: std::net::TcpStream, asked: &Mutex<mpsc::Sender<String>>) 
         )
     } else {
         let request: Value = serde_json::from_slice(&body).expect("a request the stub can read");
-        let answered = request["messages"]
+        let results = request["messages"]
             .as_array()
             .expect("a conversation")
-            .last()
-            .is_some_and(|message| message["role"] == "tool");
+            .iter()
+            .rev()
+            .take_while(|message| message["role"] != "user")
+            .filter(|message| message["role"] == "tool")
+            .count();
         let _ = asked
             .lock()
             .expect("not poisoned")
             .send(String::from_utf8_lossy(&body).into_owned());
-        let (delta, finish) = if answered {
-            (json!({"role": "assistant", "content": "done"}), "stop")
-        } else {
-            let arguments = json!({"operation": "goToDefinition", "path": "src/a.rs",
-                "line": 1, "character": 12})
-            .to_string();
-            (
-                json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "lsp",
-                    "type": "function",
-                    "function": {"name": "lsp", "arguments": arguments}}]}),
-                "tool_calls",
-            )
+        let (delta, finish) = match results {
+            0 => {
+                let arguments = json!({"name": "lsp", "why": "to find a definition"}).to_string();
+                (
+                    json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "load",
+                        "type": "function",
+                        "function": {"name": "load_tool", "arguments": arguments}}]}),
+                    "tool_calls",
+                )
+            }
+            1 => {
+                let arguments = json!({"operation": "goToDefinition", "path": "src/a.rs",
+                    "line": 1, "character": 12})
+                .to_string();
+                (
+                    json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "lsp",
+                        "type": "function",
+                        "function": {"name": "lsp", "arguments": arguments}}]}),
+                    "tool_calls",
+                )
+            }
+            _ => (json!({"role": "assistant", "content": "done"}), "stop"),
         };
         let chunk = json!({"id": "c1", "object": "chat.completion.chunk",
             "model": "stub-model",
@@ -463,8 +477,8 @@ fn an_approved_server_starts_and_answers() {
 
     assert_eq!(scratch.starts(), 1);
     let rounds: Vec<String> = rounds.try_iter().collect();
-    let [_, after] = rounds.as_slice() else {
-        panic!("two rounds were expected and the planner was asked {rounds:#?}");
+    let [_, _, after] = rounds.as_slice() else {
+        panic!("three rounds were expected and the planner was asked {rounds:#?}");
     };
     assert!(
         after.contains("src/a.rs:1:11"),
@@ -528,8 +542,8 @@ fn a_refused_server_does_not_start() {
     std::thread::sleep(QUIET);
     assert_eq!(scratch.starts(), 0, "a refused server started");
     let rounds: Vec<String> = rounds.try_iter().collect();
-    let [_, after] = rounds.as_slice() else {
-        panic!("two rounds were expected and the planner was asked {rounds:#?}");
+    let [_, _, after] = rounds.as_slice() else {
+        panic!("three rounds were expected and the planner was asked {rounds:#?}");
     };
     assert!(
         after.contains("was not started, because the user declined"),
@@ -633,8 +647,8 @@ fn a_server_that_cannot_run_ends_the_question_and_not_the_session() {
 
     assert_eq!(scratch.starts(), 1, "the approved program was not run");
     let told: Vec<String> = rounds.try_iter().collect();
-    let [_, after] = told.as_slice() else {
-        panic!("two rounds were expected and the planner was asked {told:#?}");
+    let [_, _, after] = told.as_slice() else {
+        panic!("three rounds were expected and the planner was asked {told:#?}");
     };
     assert!(
         !after.contains("src/a.rs:1:11"),

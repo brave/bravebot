@@ -779,10 +779,11 @@ fn download_url_description(beside: &dyn Fn(&str) -> bool) -> String {
 /// tools it sends the planner to for a fact about this machine, only where `beside` says it is on
 /// the list. A list holding none of them is told to say what it could not find out.
 ///
-/// ASK-12. The text does not depend on the mode. The four sentences it adds say that a question
-/// costs the user's attention, and name no mode and no place a question goes, because the planner
-/// is told of no mode but plan mode (MODE-3, MODE-8) and nothing about what decides (AUTO-7). The
-/// older clause that the questions are put to the user one at a time is unchanged.
+/// ASK-12. The text does not depend on the mode. The sentences it adds say that a question costs
+/// the user's attention and how to word a question for somebody who has not seen what the planner
+/// read. They name no mode and no place a question goes, because the planner is told of no mode
+/// but plan mode (MODE-3, MODE-8) and nothing about what decides (AUTO-7). The sentence that the
+/// questions are put to the user one at a time is not part of ASK-12.
 fn ask_user_description(beside: &dyn Fn(&str) -> bool) -> String {
     let looking: Vec<&str> = ["list_files", "search", "read_file", "run"]
         .into_iter()

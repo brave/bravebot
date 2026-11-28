@@ -123,6 +123,13 @@ fn a_path_the_person_lets_a_turn_reach_is_the_one_status_lists_afterwards() {
     let (config, _requests, server) = undo_tests::endpoint::endpoint(
         vec![
             undo_tests::endpoint::tool(
+                "load_tool",
+                serde_json::json!({
+                    "name": "request_path",
+                    "why": "the build writes its output beside the project",
+                }),
+            ),
+            undo_tests::endpoint::tool(
                 "request_path",
                 serde_json::json!({
                     "path": beside.display().to_string(),

@@ -16782,6 +16782,10 @@ fn a_one_shot_run_starts_a_language_server_only_under_bypass_with_the_sandbox_of
             .asked
             .recv_timeout(Duration::from_secs(60))
             .expect("the run reached the gateway");
+        #[expect(
+            clippy::expect_used,
+            reason = "a test: a round that never arrives fails it with the message"
+        )]
         let _loaded = gateway
             .asked
             .recv_timeout(Duration::from_secs(60))
