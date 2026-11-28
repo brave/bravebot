@@ -836,7 +836,8 @@ beside its category ([BACKEND-37](backends.md#BACKEND-37)), and the failure the 
 fixed name as `account`, which is `null` for a failure that did not come from the account. The value is a
 step of this clause or the refusal chosen above, and no string from a reply is in it. A refusal's status is
 in the diagnosis and in the desktop's `status`, and the wait it asked for is in the diagnosis. The planner
-is told the category and the request count, as for every failure ([TURN-13](turns.md#TURN-13)), and not
+is told the category and the request count, as for every failure that is neither a transport failure nor
+an incomplete reply that went quiet past the gap ([TURN-13](turns.md#TURN-13)), and not
 which failure of the account it was, nor a status or a wait.
 
 Each sentence is a message of the catalog, in English and in French, chosen from the value alone in
@@ -876,7 +877,8 @@ service's, and which refusal it came with does not change that it is when to ask
 terminal's, the one-shot run's and the window's alike. `accountMessage` is the description of one card in
 `ui/src/renderer/failure.ts`, drawn by the error card and by the card of a run that stopped, with the
 command in a code element and everything else as text. A failure with no sentence is drawn from its
-category. An editor hosting a session is told the same sentence ([ACP-8](acp.md#ACP-8)).
+category, or from the agent's own line where the bridge sends one beside it
+([BACKEND-37](backends.md#BACKEND-37)). An editor hosting a session is told the same sentence ([ACP-8](acp.md#ACP-8)).
 
 The window is told a summary the account could not make as two narrations of its own, one sentence each:
 that the turn goes on with the messages it has, and then the failure's sentence with its command beside it

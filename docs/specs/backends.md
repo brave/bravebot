@@ -2796,9 +2796,14 @@ told so in a sentence this driver writes for each of the four categories. The fi
 starting the same delegate again meets the same limit. The other two say that no refusal came from
 the service, that starting the same delegate again on the same task may meet the same silence or
 stop, and that the task should be split so that each delegate makes smaller replies or writes
-([DELEGATE-26](delegation.md#DELEGATE-26)). The sentence is chosen from the
-closed category name the trail records, so no word of the service's answer is carried, and every
-other category is still not named to the planner. A delegate ends transport when a request did not
+([DELEGATE-26](delegation.md#DELEGATE-26)). A transport ending also says which part of the request
+ended: the connection could not be made or failed, the reply did not begin within the time it was
+given, or the reply went quiet for longer than the gap allowed. One that ended on the connection is
+not told to split the task, since smaller replies do not help a connection that failed. An
+incomplete ending whose reply began and then went quiet past the gap says so. The sentence is
+chosen from the closed category name the trail records and the closed name of the cause, which the
+trail does not record ([TRACE-8](trace.md#TRACE-8)), so no word of the service's answer is carried,
+and every other category is still not named to the planner. A delegate ends transport when a request did not
 reach the service, when the connection was dropped or went silent before any of the reply's body
 arrived (including the Bedrock case below), when the time to begin a reply that was streamed ran
 out, and when a redirect chain did not end or named no location. It ends incomplete when any of the
@@ -2833,9 +2838,62 @@ character that draws as nothing or moves the cursor as a visible picture or code
 line is stored or shown, and every front end gets the same safe text. A turn with no model name
 says no model. Only the refused category names the model and the backend.
 
-The note to the planner after a failed turn holds the category and the count only. The desktop
-bridge stores a failed turn's reason through the same line, with the configured model, so the
-desktop's stored reason names the model and the backend of a refused turn as the line above says.
+A failure of the category transport says which part of the request it ended, chosen by the network
+layer from the kind of error the transport raised (the variant of the transport's timeout, or the
+kind of an I/O error) and never from its text, which is the same for every timeout: the request
+could not connect, the reply did not begin within the time it was given, or the reply went quiet for
+longer than the gap allowed. The last names the gap in force for the backend that sent the request:
+the `idleTimeoutMs` of its `provider` entry or `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` where the person
+stated one, and the network layer's default otherwise ([BACKEND-55](#BACKEND-55)), in milliseconds
+under a second, in whole seconds under two minutes and in whole minutes from there, each rounded down,
+since the line says the reply went quiet for longer than it. The line then names the settings that
+change it, chosen
+as for a rate limit by where the backend states its retry count. A request to a `provider` entry
+that could not connect is told `retryWindowMs` and `maxRetries`, and one whose reply went quiet is
+told `idleTimeoutMs` and `maxRetries`. A request to an AWS account reached through the tier
+variables is told `BRAVEBOT_BEDROCK_MAX_RETRIES`, and `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` where the
+reply went quiet, and no window, since it has no setting for one. A request to any other backend is
+told no setting. A reply that did not begin is told no setting and no gap, because neither setting
+lengthens that wait. A request the client does not send again whatever its retry count says is told
+no retry count: a failure the network layer marked as not worth another attempt, and a Bedrock reply
+that went quiet while the service may have been holding a tool's arguments back. A reply of either
+that went quiet is told the gap's setting alone (`idleTimeoutMs`, or
+`BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS`) and that the request is not sent again, and a connection that
+failed that way is told no setting. A transport failure that ended none of the three parts (a reply
+larger than a reply is read to, a request whose thread ended without a reply, a redirect chain that
+did not end) carries no cause, and its line says that the request did not get through and names no
+setting. The line ends by saying that a new message continues from what was already
+done. An incomplete reply that began and then went quiet past the gap is told the same cause, gap
+and settings, and keeps its category. A stream to this machine that asked to be waited on is held
+to no gap ([NET-10](network-egress.md#NET-10)), so it is never told it went quiet past one. The
+cause, the gap and the settings come from the kind of error, the person's own configuration and the
+variant that sent the request, never from a reply, a header or an address.
+
+Both the line and the note to the planner take the settings they name from one choice in
+`bravebot-agent` (`Diagnosis::transport_remedy`), so the two cannot name different settings for the
+same failure.
+
+The note to the planner after a failed turn holds the category and the count. For a transport
+failure, and for an incomplete reply that went quiet past the gap, it also holds the cause, the gap
+in force and the settings named above, and for a transport failure the sentence that a new message
+from the person continues from what was already done ([TURN-13](turns.md#TURN-13)). These are the
+driver's words: a closed cause, a figure from the person's settings or the network layer's default,
+and fixed setting names. The status, the backend, the model and the fields a refused call left out
+are not in it. The desktop bridge stores a failed turn's reason through the same line, with the
+configured model, so the desktop's stored reason names the model and the backend of a refused turn,
+and the cause, gap and settings of a transport failure, as the line above says. The bridge also
+sends the window that line for a transport failure, and for an incomplete reply that went quiet past
+the gap, in a field of its own beside the category, and the window's error card and the card of a
+plan run that stopped draw it as the description. The closed name of the cause is sent beside it,
+and the card's title is chosen from that name: a reply that did not begin and a reply that went
+quiet each have a title of their own, since the category's title says the service could not be
+reached and it was. The window does not read the line to choose the title. Each step is joined
+after a semicolon, so it is one sentence, in sentence case, with no backticks. The setting names the
+line holds arrive beside it, in the order it holds them, and the card draws them as code without
+reading the line to find them. The words are made by the same function as the terminal's, from the
+closed cause, the gap in force and the fixed setting names, so the window keeps no table of them and
+nothing the service sent is in them. A failure the bridge sends no line for is described from the
+window's own words for its category.
 
 Cancellation is distinct from failure. A processor carries cancellation and its attempt count
 separately from its tool-result text, so the parent can report the stop without parsing that text.
@@ -2913,7 +2971,16 @@ afterwards, so it never depends on the type the service wrote.
 
 A reply stopped at its output ceiling reports that ceiling alongside the category. It is this
 program's own configured figure rather than anything a service said, so it is not a detail taken
-from a reply, and without it the report names a limit and no way to change it.
+from a reply, and without it the report names a limit and no way to change it. The line names
+`BRAVEBOT_OUTPUT_BUDGET` as what raises the limit, whether or not the ceiling is known, and says the
+limit is on one reply and not on the context window, so compaction does not change it. A person who
+reads a too-long failure as the context filling up otherwise asks why compaction did not prevent it.
+It ends with what to do: ask for the work in smaller parts, or raise the limit in the `env` block of
+`~/.bravebot/settings.json`. The setting name is written as code, so the desktop window draws it as
+one. The desktop window is sent the same line for it, in the same field and joined the same way as a
+transport failure's, and its card draws that line in place of its own words for the ceiling. Where
+no line arrives, the card's words for the category name `BRAVEBOT_OUTPUT_BUDGET` and say the limit is
+on one reply and not on the context window, whether or not the ceiling is known.
 
 A failure of a ChatGPT account reports which one it was beside its category
 ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)): the step of the sign-in that failed, the refusal that
@@ -2924,7 +2991,8 @@ of the model is read apart from the closed list and is not a refusal of the sign
 other kind reports none. A refusal that names the account also reports the status of the reply that
 refused and, at a 429, the wait its `Retry-After` asked for, as any other refusal does, and one reported
 in an event of a stream reports neither. A refusal of the model reports neither. The planner is told the
-category and the request count and no more, as for every failure.
+category and the request count and no more, as for every failure that is neither a transport failure
+nor an incomplete reply that went quiet past the gap ([TURN-13](turns.md#TURN-13)).
 
 A failure of the category unauthorized is said with the commands to run after its status and its count
 of tries: `bravebot auth status` shows the sign-in or key in use and `bravebot doctor` shows the
@@ -2984,6 +3052,7 @@ planner.
 `verified-by: bravebot_agent::backend::what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
 `verified-by: bravebot_session::sessions::a_reply_stopped_at_a_ceiling_says_which_ceiling`
+`verified-by: bravebot_session::sessions::a_too_long_failure_says_the_limit_is_one_replys_and_not_the_context_window`
 `verified-by: bravebot_agent::backend::a_diagnosis_carries_which_failure_of_the_account_it_was`
 `verified-by: bravebot_agent::backend::a_failure_with_no_account_in_it_carries_no_account_value`
 `verified-by: bravebot_agent::chatgpt_compaction::a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence`
@@ -2992,6 +3061,27 @@ planner.
 `verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis`
 `verified-by: bravebot_aichat::client::a_refusal_that_names_the_account_keeps_the_status_and_the_wait_it_came_with`
 `verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_says_why_the_transport_failed_and_what_changes_it`
+`verified-by: bravebot_agent::conversation::the_note_names_exactly_the_settings_of_the_remedy`
+`verified-by: bravebot_agent::outcome::the_settings_named_follow_the_cause_the_place_and_whether_the_request_is_sent_again`
+`verified-by: bravebot_agent::outcome::a_gap_is_said_in_milliseconds_seconds_or_minutes_each_rounded_down`
+`verified-by: bravebot_agent::backend::a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable`
+`verified-by: bravebot_agent::backend::the_gap_in_force_is_the_stated_one_and_otherwise_the_egress_layers_own`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs folds a turn.error carrying the agent's line and a failureCause through the window's own reducer and draws the real row, holding that a reply that went quiet and one that did not begin are titled by their cause, and that a connection, no cause or an unknown name keep the category's title; bravebot_ui_bridge::failure_tests::the_window_is_sent_the_agents_line_for_a_transport_failure holds that the bridge sends the cause's closed name)`
+`verified-by: bravebot_net::lib::a_transport_failure_is_told_by_the_kind_of_error_the_transport_raised`
+`verified-by: bravebot_net::lib::a_body_that_went_quiet_is_worth_another_attempt`
+`verified-by: bravebot_net::egress::a_stated_gap_does_not_end_a_stream_from_this_machine_that_asks_to_be_waited_on`
+`verified-by: bravebot_agent::backend::a_reply_gone_quiet_past_a_stated_gap_is_diagnosed_with_that_gap`
+`verified-by: bravebot_aichat::client::a_gateway_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner`
+`verified-by: bravebot_session::sessions::a_transport_failure_says_its_cause_the_gap_in_force_and_the_setting_that_changes_it`
+`verified-by: bravebot_session::sessions::a_transport_failure_says_last_that_a_new_message_continues_the_turn`
+`verified-by: bravebot_ui_bridge::failure_tests::a_transport_failure_is_stored_with_the_terminals_line_naming_its_cause`
+`verified-by: bravebot_ui_bridge::failure_tests::the_window_is_sent_the_agents_line_for_a_transport_failure`
+`verified-by: bravebot_ui_bridge::failure_tests::the_window_is_sent_the_agents_line_for_a_reply_that_went_quiet_past_the_gap`
+`verified-by: bravebot_ui_bridge::failure_tests::the_window_is_sent_the_agents_line_for_a_reply_that_reached_its_output_limit`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs folds a turn.error carrying the agent's line through the window's own reducer and draws the real row, holding that the card's description is the line with each setting it names in a code element, that the window's own words for the category are not said beside it, that markup in the line or a setting name is drawn as characters, and that without a line the card says its category's words, which for a reply that reached its output limit name BRAVEBOT_OUTPUT_BUDGET and say the limit is not on the context window; ui/scripts/marking.test.mjs draws the card of a plan run that stopped with the line; make check-ui runs both)`
+`verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_which_part_of_a_request_a_delegate_s_transport_failure_ended`
+`verified-by: bravebot_agent::turn::delegate_end::how_a_delegate_ended_carries_the_cause_of_a_transport_failure`
 `verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
 `verified-by: bravebot_agent::turn::a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status`
 `verified-by: bravebot_agent::turn::a_refusal_counts_the_cache_probe_as_a_second_request`
@@ -3493,8 +3583,8 @@ the ones a `provider` block already named.
 A reply that reaches its ceiling having written something is returned as a reply, marked as having
 stopped short, with its reported usage. Its tool calls are not returned: a reply cut off carries
 none, whatever the service sent, so no call from it is made; the turn tells the planner why and
-asks once for less ([TURN-7](turns.md#TURN-7)). A reply that reaches the ceiling having written
-nothing is a failure, and the failure names the ceiling.
+asks again once for each kind of stop ([TURN-7](turns.md#TURN-7)). A reply that reaches the
+ceiling having written nothing is a failure, and the failure names the ceiling.
 
 Either way what the reply was doing when it stopped travels with it: the call it was part way
 through, where its last block was one, with how many bytes of its arguments had arrived, and
@@ -3658,7 +3748,8 @@ An argument that arrives this way is handed to the turn loop exactly as the mode
 does not parse is a failed call the planner is told about, and it never runs: nothing repairs it or
 closes it on the way to being dispatched. The conversation sent on the next round carries that call
 with an empty object for its arguments, this service taking nothing but an object there, beside the
-result saying it failed.
+result saying it failed. That result quotes what was received and says the call was not empty
+([TOOL-7](tools/tool-surface.md#TOOL-7)).
 
 **Why.** Without the ask the service holds an argument back until the model has finished writing it,
 so a `write_file` whose contents are a whole program is the tool's name and then silence for as long

@@ -2225,6 +2225,7 @@ fn a_rejected_request_is_said_with_the_configured_model_in_the_transcript() {
         conceded: Default::default(),
         backend: None,
         retry_setting: bravebot_agent::RetrySetting::None,
+        idle_gap: None,
         attempts: 1,
         cause: Box::new(bravebot_agent::backend::BackendError::from(
             bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {

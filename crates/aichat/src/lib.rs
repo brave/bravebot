@@ -74,6 +74,12 @@ pub enum ChatError {
     /// problem is that there was going to be more. Retried like a connection that died, because
     /// that is most often what it is.
     Incomplete,
+    /// The stream began and then went quiet for longer than the gap allowed between two pieces of
+    /// it, which the network layer told from the kind of error the transport raised.
+    ///
+    /// The reply stopping, as [`ChatError::Incomplete`] is, and retried like it, kept apart so the
+    /// failure can name the gap and the setting that changes it.
+    WentQuiet,
     /// The ChatGPT account's access token could not be had or was refused twice, or the serving host
     /// refused a request in a code that names the account
     /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
@@ -115,6 +121,10 @@ impl fmt::Display for ChatError {
             Self::Incomplete => {
                 f.write_str("the reply stopped before the server said it was finished")
             }
+            Self::WentQuiet => f.write_str(
+                "the reply went quiet for longer than the gap allowed before the server said it \
+                 was finished",
+            ),
             Self::Cancelled => f.write_str("the reply was stopped while it was being waited for"),
             Self::Reported { failure } => {
                 write!(f, "the service stopped the reply and reported {failure}")
@@ -1023,7 +1033,7 @@ impl<'a> AichatClient<'a> {
             let piece = match arriving.next(&self.call.pace) {
                 Arrived::Piece(piece) => piece,
                 Arrived::Ended => break,
-                Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
+                Arrived::StoppedPartWay(cause) => return Err(stopped_part_way(cause)),
                 Arrived::Failed(e) => return Err(e.into()),
                 Arrived::Cancelled => return Err(ChatError::Cancelled),
             };
@@ -1390,8 +1400,9 @@ pub enum Arrived {
     Piece(Labelled<Vec<u8>>),
     /// The body ended, or the reader is gone without saying so.
     Ended,
-    /// A read failed after some of the body had arrived.
-    StoppedPartWay,
+    /// A read failed after some of the body had arrived, and which part of the request the
+    /// transport said it ended, where it named one.
+    StoppedPartWay(Option<bravebot_net::TransportCause>),
     /// A read failed before any of the body arrived, or failed with something other than a
     /// transport error.
     Failed(EgressError),
@@ -1431,8 +1442,8 @@ impl Arriving {
                 // socket reported: the request got through and part of the answer is here.
                 // Reported as a connection failure, the turn said so to a person whose model had
                 // been writing for minutes.
-                Ok(Err(EgressError::Transport { .. })) if self.began => {
-                    return Arrived::StoppedPartWay;
+                Ok(Err(EgressError::Transport { cause, .. })) if self.began => {
+                    return Arrived::StoppedPartWay(cause);
                 }
                 // A reply cut at its deadline among them: asked for again, it runs as long.
                 Ok(Err(error)) => return Arrived::Failed(error),
@@ -1448,6 +1459,21 @@ impl Arriving {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Arrived::Ended,
             }
         }
+    }
+}
+
+/// What a streamed reply that began and then failed to arrive is reported as: one that went quiet
+/// past the gap where the transport said so, and one that stopped otherwise.
+///
+/// Chosen from the cause the network layer took from the kind of error the transport raised, and
+/// never from its text. A stream from this machine that asked to be waited on is held to no gap
+/// ([NET-10](../../../docs/specs/network-egress.md#NET-10)), so its transport never raises the
+/// gap's error and it is never reported as having gone quiet past one.
+pub fn stopped_part_way(cause: Option<bravebot_net::TransportCause>) -> ChatError {
+    match cause {
+        Some(bravebot_net::TransportCause::IdleGap) => ChatError::WentQuiet,
+        Some(bravebot_net::TransportCause::Connection | bravebot_net::TransportCause::Begin)
+        | None => ChatError::Incomplete,
     }
 }
 
@@ -1540,7 +1566,7 @@ fn worth_another_attempt(patience: Patience, attempt: u32, error: &ChatError) ->
         // A reply that stopped early is a request that did not complete, whatever the socket
         // thought. Sending it again is the same remedy, and the partial is thrown away for the
         // same reason: half a reply cannot be continued by a second stream.
-        ChatError::Incomplete => true,
+        ChatError::Incomplete | ChatError::WentQuiet => true,
         _ => false,
     }
 }
@@ -2809,6 +2835,7 @@ mod tests {
     /// way, and one that fails before anything arrived stays the failure it was. Every streaming
     /// client takes its body through [`Arriving::next`], so this pins each of its answers once.
     #[test]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
     fn a_body_read_in_the_background_says_what_arrived_and_whether_it_began() {
         type Read = Result<Option<Labelled<Vec<u8>>>, EgressError>;
 
@@ -2839,6 +2866,7 @@ mod tests {
                 url: "https://example.invalid".into(),
                 detail: "reset".into(),
                 transient: true,
+                cause: Some(bravebot_net::TransportCause::Connection),
             })
         }
         let going = Pace::new(Duration::ZERO);
@@ -2846,9 +2874,46 @@ mod tests {
         let (mut began, _keep) = arriving(vec![piece(), cut()], false);
         assert!(matches!(began.next(&going), Arrived::Piece(_)));
         assert!(
-            matches!(began.next(&going), Arrived::StoppedPartWay),
+            matches!(
+                began.next(&going),
+                Arrived::StoppedPartWay(Some(bravebot_net::TransportCause::Connection))
+            ),
             "a transport failure after a piece is a reply that stopped part way"
         );
+
+        // The gap running out after a piece is the reply stopping, with the gap as its cause, so
+        // the failure can name the gap and the setting that changes it.
+        let quiet = || {
+            Err(EgressError::Transport {
+                url: "https://example.invalid".into(),
+                detail: "the request timed out".into(),
+                transient: true,
+                cause: Some(bravebot_net::TransportCause::IdleGap),
+            })
+        };
+        let (mut went_quiet, _keep) = arriving(vec![piece(), quiet()], false);
+        assert!(matches!(went_quiet.next(&going), Arrived::Piece(_)));
+        assert!(
+            matches!(
+                went_quiet.next(&going),
+                Arrived::StoppedPartWay(Some(bravebot_net::TransportCause::IdleGap))
+            ),
+            "the gap was dropped from a reply that went quiet part way"
+        );
+        assert!(matches!(
+            stopped_part_way(Some(bravebot_net::TransportCause::IdleGap)),
+            ChatError::WentQuiet
+        ));
+        for cause in [
+            Some(bravebot_net::TransportCause::Connection),
+            Some(bravebot_net::TransportCause::Begin),
+            None,
+        ] {
+            assert!(
+                matches!(stopped_part_way(cause), ChatError::Incomplete),
+                "{cause:?} was told as the gap"
+            );
+        }
 
         let (mut never, _keep) = arriving(vec![cut()], false);
         assert!(

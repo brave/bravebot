@@ -783,6 +783,13 @@ pub enum Destination {
 pub enum AfterCeilingStop {
     /// Told the planner why and asked it once more.
     AskedAgain,
+    /// Told the planner why and asked it once more, that one request at the effort level `to` in
+    /// place of `from`, after a reply that thought until the ceiling. The words a level is sent
+    /// as, which a person chose off a list and are not content.
+    AskedAgainAtLowerEffort {
+        from: &'static str,
+        to: &'static str,
+    },
     /// Kept what the reply wrote as the turn's answer, which stops where the reply did.
     KeptTheText,
     /// Ended the turn on the stop, the reply having written nothing to keep.
@@ -5071,9 +5078,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             "no reasoning arrived"
         };
         let then = match then {
-            AfterCeilingStop::AskedAgain => "the planner was told why and asked again",
-            AfterCeilingStop::KeptTheText => "what it wrote is the answer, and the turn ends there",
-            AfterCeilingStop::Ended => "the turn ends on it, with nothing written",
+            AfterCeilingStop::AskedAgain => "the planner was told why and asked again".to_string(),
+            AfterCeilingStop::AskedAgainAtLowerEffort { from, to } => format!(
+                "the planner was told why and asked again at effort {to} in place of {from}, \
+                 for that one request"
+            ),
+            AfterCeilingStop::KeptTheText => {
+                "what it wrote is the answer, and the turn ends there".to_string()
+            }
+            AfterCeilingStop::Ended => "the turn ends on it, with nothing written".to_string(),
         };
         self.allow(
             "ceiling",
@@ -6663,7 +6676,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 rounds,
                 "it was stopped before it answered".to_string(),
             ),
-            Finish::Failed { took, rounds, why } => {
+            Finish::Failed {
+                took, rounds, why, ..
+            } => {
                 let spent_up = match out_of_tokens {
                     Some((budget, _)) => format!(", having spent its token budget of {budget}"),
                     None => String::new(),
@@ -25966,6 +25981,7 @@ five
                     took,
                     rounds: 9,
                     why: "unavailable",
+                    cause: None,
                 },
             );
             let said: Vec<String> = sink
@@ -26928,6 +26944,20 @@ five
                     took,
                     rounds: 37,
                     why: "unavailable",
+                    cause: None,
+                },
+            );
+            // Which part of the request a transport failure ended is told to the planner and the
+            // person, and the trail keeps the category alone.
+            turn.record_delegate_end_within(
+                id,
+                120,
+                None,
+                Finish::Failed {
+                    took,
+                    rounds: 37,
+                    why: "transport",
+                    cause: Some("idle-gap"),
                 },
             );
             turn.record_delegate_end_within(id, 120, None, Finish::Lost);
@@ -26952,6 +26982,7 @@ five
                     "d1: ended after 1563.0s and 12 of 120 rounds: it was stopped before it \
                      answered",
                     "d1: ended after 1563.0s and 37 of 120 rounds: it did not finish (unavailable)",
+                    "d1: ended after 1563.0s and 37 of 120 rounds: it did not finish (transport)",
                     "d1: ended without handing anything back, so how long it ran and how many of \
                      its 120 rounds it made are not known",
                 ]

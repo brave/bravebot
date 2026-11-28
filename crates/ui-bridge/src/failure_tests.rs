@@ -132,6 +132,7 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
         conceded: Default::default(),
         backend: None,
         retry_setting: bravebot_agent::RetrySetting::None,
+        idle_gap: None,
         cause: Box::new(BackendError::from(ChatError::Account(
             AccountFailure::Ended,
         ))),
@@ -298,9 +299,312 @@ fn a_refused_premium_key_is_sent_as_any_other_unauthorized_failure() {
     assert_eq!(marked["account"], Value::Null, "{marked}");
 }
 
+/// BACKEND-37, SESSION-23: the reason the desktop stores for a turn whose request failed in
+/// transport is the terminal's failure line, through the same `StoredOutcome::ended_by`, so it
+/// names the cause, the gap in force, the setting that changes it and that a new message continues,
+/// and holds nothing of the transport's own text.
+///
+/// The faults this rejects: the desktop wording a transport failure from its category alone, and
+/// the transport's detail or address reaching the stored reason.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn a_transport_failure_is_stored_with_the_terminals_line_naming_its_cause() {
+    use bravebot_session::sessions::{StoredOutcome, failure_line};
+    let failed = |cause, gap: Duration, setting| {
+        TurnError::from(BackendError::Attempted {
+            attempts: 2,
+            usage: None,
+            context_tokens: None,
+            conceded: Default::default(),
+            backend: None,
+            retry_setting: setting,
+            idle_gap: Some(gap),
+            cause: Box::new(BackendError::from(ChatError::Egress(
+                bravebot_net::EgressError::Transport {
+                    url: "https://PRIVATE-HOST.example.invalid/v1".to_string(),
+                    detail: "PRIVATE-DETAIL".to_string(),
+                    transient: true,
+                    cause: Some(cause),
+                },
+            ))),
+        })
+    };
+    for (error, says) in [
+        (
+            failed(
+                bravebot_net::TransportCause::IdleGap,
+                Duration::from_secs(300),
+                bravebot_agent::RetrySetting::Entry,
+            ),
+            [
+                "went quiet for longer than the 5 minute gap",
+                "`idleTimeoutMs`",
+            ],
+        ),
+        (
+            failed(
+                bravebot_net::TransportCause::Connection,
+                Duration::from_secs(300),
+                bravebot_agent::RetrySetting::Entry,
+            ),
+            ["could not connect", "`retryWindowMs`"],
+        ),
+    ] {
+        let stored = match StoredOutcome::ended_by(1, &error, Some("stub-model")) {
+            StoredOutcome::Failed { reason } => reason,
+            other => panic!("a failure was stored as {other:?}"),
+        };
+        let diagnosis = error.ending().diagnosis().expect("a failure");
+        assert_eq!(
+            stored,
+            failure_line(&error, diagnosis, Some("stub-model")),
+            "the desktop's reason is not the terminal's line"
+        );
+        for said in says {
+            assert!(stored.contains(said), "{stored}");
+        }
+        assert!(
+            stored.ends_with("A new message continues from what was already done"),
+            "{stored}"
+        );
+        assert!(
+            !stored.contains("PRIVATE"),
+            "the transport's words were stored: {stored}"
+        );
+    }
+}
+
+/// BACKEND-37: a window is sent the agent's own line for a request that did not get through, the
+/// line the terminal shows, made by the same function, so the desktop card says the cause, the gap
+/// in force, the setting that changes it and that a new message continues, as the terminal does. It
+/// is one sentence in sentence case with no backticks, as the card says a failure, and the setting
+/// names arrive beside it, in order, for the card to draw as code. Nothing the transport wrote is
+/// in either.
+///
+/// The faults this rejects: the bridge sending the category alone, which leaves the window's own
+/// table to word it; the terminal's line sent as it is, with `error:`, backticks and a sentence for
+/// each step; the setting names left for the window to find in the sentence; and the transport's
+/// detail or address reaching the window.
+#[test]
+fn the_window_is_sent_the_agents_line_for_a_transport_failure() {
+    let failed = |cause, setting| {
+        failed_with(BackendError::Attempted {
+            attempts: 3,
+            usage: None,
+            context_tokens: None,
+            conceded: Default::default(),
+            backend: None,
+            retry_setting: setting,
+            idle_gap: Some(Duration::from_secs(300)),
+            cause: Box::new(BackendError::from(ChatError::Egress(
+                bravebot_net::EgressError::Transport {
+                    url: "https://PRIVATE-HOST.example.invalid/v1".to_string(),
+                    detail: "PRIVATE-DETAIL".to_string(),
+                    transient: true,
+                    cause: Some(cause),
+                },
+            ))),
+        })
+    };
+    let quiet = failed(
+        bravebot_net::TransportCause::IdleGap,
+        bravebot_agent::RetrySetting::Entry,
+    );
+    assert_eq!(quiet["category"], "transport", "{quiet}");
+    assert_eq!(quiet["failureCause"], "idle-gap", "{quiet}");
+    assert_eq!(
+        quiet["failureMessage"],
+        "The reply went quiet for longer than the 5 minute gap allowed, after 3 attempts; raise \
+         idleTimeoutMs in the options of this provider entry to wait longer on a quiet reply, or \
+         maxRetries to send the request again more times; a new message continues from what was \
+         already done.",
+        "{quiet}"
+    );
+    assert_eq!(
+        quiet["failureCodes"],
+        json!(["idleTimeoutMs", "maxRetries"]),
+        "{quiet}"
+    );
+
+    let refused = failed(
+        bravebot_net::TransportCause::Connection,
+        bravebot_agent::RetrySetting::Entry,
+    );
+    let said = refused["failureMessage"].as_str().unwrap_or_default();
+    assert!(
+        said.starts_with("The request could not connect"),
+        "{refused}"
+    );
+    assert!(!said.contains("gap"), "{refused}");
+    assert_eq!(refused["failureCause"], "connection", "{refused}");
+    assert_eq!(
+        refused["failureCodes"],
+        json!(["retryWindowMs", "maxRetries"]),
+        "{refused}"
+    );
+
+    // A reply that did not begin has no setting that lengthens it, so none is named or sent.
+    let silent = failed(
+        bravebot_net::TransportCause::Begin,
+        bravebot_agent::RetrySetting::Entry,
+    );
+    assert_eq!(silent["failureCodes"], json!([]), "{silent}");
+    assert_eq!(silent["failureCause"], "begin", "{silent}");
+
+    for sent in [&quiet, &refused, &silent] {
+        let said = sent["failureMessage"].as_str().unwrap_or_default();
+        assert!(
+            said.ends_with("; a new message continues from what was already done."),
+            "{sent}"
+        );
+        assert_eq!(said.matches('.').count(), 1, "not one sentence: {sent}");
+        assert!(!said.contains('`') && !said.contains("error:"), "{sent}");
+        assert!(!sent.to_string().contains("PRIVATE"), "{sent}");
+    }
+
+    // Any other failure is worded by the window from its category.
+    let other = failed_with(ChatError::NoContent);
+    assert_eq!(other["failureMessage"], Value::Null, "{other}");
+    assert_eq!(other["failureCodes"], Value::Null, "{other}");
+}
+
+/// BACKEND-37: a reply that began and then went quiet past the gap is incomplete, not a transport
+/// failure, and the window is sent the agent's line for it all the same, naming the gap in force
+/// and the setting that changes it, with `idle-gap` as the cause the card is titled by. An
+/// incomplete reply that stopped for any other reason has no gap or setting to name, so it is sent
+/// neither and the window words it from its category.
+///
+/// The faults this rejects: the line and the cause sent only for the transport category, which
+/// leaves a reply that went quiet with the category's words and no setting; and the line or the
+/// cause sent for every incomplete reply, which names a gap that did not end it.
+#[test]
+fn the_window_is_sent_the_agents_line_for_a_reply_that_went_quiet_past_the_gap() {
+    let stopped = |cause: ChatError| {
+        failed_with(BackendError::Attempted {
+            attempts: 3,
+            usage: None,
+            context_tokens: None,
+            conceded: Default::default(),
+            backend: None,
+            retry_setting: bravebot_agent::RetrySetting::Entry,
+            idle_gap: Some(Duration::from_secs(300)),
+            cause: Box::new(BackendError::from(cause)),
+        })
+    };
+    let quiet = stopped(ChatError::WentQuiet);
+    assert_eq!(quiet["category"], "incomplete", "{quiet}");
+    assert_eq!(quiet["failureCause"], "idle-gap", "{quiet}");
+    let said = quiet["failureMessage"].as_str().unwrap_or_default();
+    assert!(
+        said.starts_with("The reply went quiet for longer than the 5 minute gap allowed"),
+        "{quiet}"
+    );
+    assert!(said.contains("idleTimeoutMs"), "{quiet}");
+    assert_eq!(
+        quiet["failureCodes"],
+        json!(["idleTimeoutMs", "maxRetries"]),
+        "{quiet}"
+    );
+
+    let dropped = stopped(ChatError::Incomplete);
+    assert_eq!(dropped["category"], "incomplete", "{dropped}");
+    assert_eq!(dropped["failureMessage"], Value::Null, "{dropped}");
+    assert_eq!(dropped["failureCause"], Value::Null, "{dropped}");
+}
+
+/// BACKEND-37, BACKEND-42: a window is sent the agent's own line for a reply that reached its output
+/// limit, so the desktop card names the limit, the call the reply was part way through,
+/// `BRAVEBOT_OUTPUT_BUDGET` as what raises it, that the limit is on one reply and not on the
+/// context window, so compaction does not change it, and what to do next, as the terminal does. The
+/// setting name arrives in `failureCodes`, so the card draws it as code. The tool's name is the
+/// request's own spelling of a tool it offered.
+///
+/// The faults this rejects: the bridge sending the category alone, which leaves the window to word
+/// the limit from a table that says less; the setting named only where the ceiling is known, or
+/// written without backticks, so it is not sent as a code; a variant of the line that leaves out
+/// the context window; and a line with no next step.
+#[test]
+fn the_window_is_sent_the_agents_line_for_a_reply_that_reached_its_output_limit() {
+    use bravebot_aichat::{CutOff, OpenCall};
+    let stopped = |call: Option<&str>, thought| {
+        failed_with(ChatError::TooLong(CutOff {
+            ceiling: 32_000,
+            call: call.map(|tool| OpenCall {
+                tool: Some(tool.to_string()),
+                arguments: 0,
+            }),
+            thought,
+        }))
+    };
+    let call = stopped(Some("write_file"), true);
+    assert_eq!(call["category"], "too-long", "{call}");
+    assert_eq!(
+        call["failureMessage"],
+        "The model reached its output limit of 32000 tokens, which BRAVEBOT_OUTPUT_BUDGET raises, \
+         part way through a call to write_file, so the call was not made; the limit is on one reply \
+         and not on the context window, so compaction does not change it; ask for the work in \
+         smaller parts, or raise the limit in the env block of ~/.bravebot/settings.json.",
+        "{call}"
+    );
+    assert_eq!(
+        call["failureCodes"],
+        json!(["BRAVEBOT_OUTPUT_BUDGET"]),
+        "{call}"
+    );
+
+    let thinking = stopped(None, true);
+    // A reply that stopped in no call and with no thinking says the same.
+    let neither = failure_fields(
+        &TurnError::from(BackendError::from(ChatError::TooLong(CutOff {
+            ceiling: 8_192,
+            call: None,
+            thought: false,
+        }))),
+        &configured(),
+        "stub-model",
+    );
+    for sent in [&call, &thinking, &neither] {
+        let said = sent["failureMessage"].as_str().unwrap_or_default();
+        assert!(said.contains("BRAVEBOT_OUTPUT_BUDGET"), "{sent}");
+        assert!(!said.contains('`'), "{sent}");
+        assert_eq!(
+            sent["failureCodes"],
+            json!(["BRAVEBOT_OUTPUT_BUDGET"]),
+            "{sent}"
+        );
+        assert!(
+            said.contains(
+                "the limit is on one reply and not on the context window, so compaction does not \
+                 change it"
+            ),
+            "{sent}"
+        );
+        assert!(
+            said.ends_with(
+                "; ask for the work in smaller parts, or raise the limit in the env block of \
+                 ~/.bravebot/settings.json."
+            ),
+            "{sent}"
+        );
+        assert!(
+            said.starts_with("The model reached its output limit"),
+            "{sent}"
+        );
+    }
+    assert!(
+        thinking["failureMessage"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("while it was still thinking"),
+        "{thinking}"
+    );
+}
+
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a
 /// reply, a request or a settings file held. The keys are `kind`, `message`, `category`, `attempts` and
-/// `status`, and the name, the sentence and the command of the account's failure.
+/// `status`, the name, the sentence and the command of the account's failure, and the agent's line
+/// and the setting names in it, which are `null` for a failure of the account.
 #[test]
 fn the_failure_sent_holds_only_fixed_names_and_counts() {
     let sent = failed_with(ChatError::Account(AccountFailure::Named {
@@ -323,12 +627,22 @@ fn the_failure_sent_holds_only_fixed_names_and_counts() {
             "accountMessage",
             "attempts",
             "category",
+            "failureCause",
+            "failureCodes",
+            "failureMessage",
             "kind",
             "message",
             "status"
         ],
         "{sent}"
     );
+    // The account's own sentence is the wording, so the agent's line is not sent beside it.
+    assert_eq!(sent["failureMessage"], Value::Null, "{sent}");
+    assert_eq!(sent["failureCause"], Value::Null, "{sent}");
+    assert_eq!(sent["failureCodes"], Value::Null, "{sent}");
+    // A failure of no account and no transport has no cause to title a card by either.
+    let other = failed_with(ChatError::NoContent);
+    assert_eq!(other["failureCause"], Value::Null, "{other}");
     // `message` is the category's name and not a sentence of the account's, which the window draws as `accountMessage`.
     assert_eq!(sent["message"], "refused", "{sent}");
 }

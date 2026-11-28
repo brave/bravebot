@@ -1671,6 +1671,7 @@ fn a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript() {
             conceded: Default::default(),
             backend: None,
             retry_setting: bravebot_agent::RetrySetting::None,
+            idle_gap: None,
             attempts: 2,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 ChatError::Account(failure),

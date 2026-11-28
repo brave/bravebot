@@ -223,7 +223,7 @@ export type Entry = (
   /** A manifest run that stopped: declined, stopped by the person, or failed. */
   | { kind: 'plan-ended'; id: string; ended: ManifestError }
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
-  | { kind: 'error'; id: string; text: string; category?: string | null; accountMessage?: string | null; accountCommand?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
+  | { kind: 'error'; id: string; text: string; category?: string | null; accountMessage?: string | null; accountCommand?: string | null; failureMessage?: string | null; failureCodes?: readonly string[] | null; failureCause?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
   /**
    * The driver's sentence that carries the work on under a goal (GOAL-7): a turn's prompt that the

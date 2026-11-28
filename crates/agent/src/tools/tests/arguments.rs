@@ -104,6 +104,17 @@ pub(super) fn with_tools_and_skills<R>(
     skills: &crate::skills::Catalogue,
     body: impl FnOnce(&mut Tools<'_>) -> R,
 ) -> R {
+    with_tools_offered(workspace, typed, skills, None, body)
+}
+
+/// [`with_tools_and_skills`] for a turn whose request offered these schemas.
+fn with_tools_offered<R>(
+    workspace: &Workspace,
+    typed: &[String],
+    skills: &crate::skills::Catalogue,
+    offered: Option<&[Tool]>,
+    body: impl FnOnce(&mut Tools<'_>) -> R,
+) -> R {
     let config = config();
     let egress = bravebot_net::Egress::new();
     let mut slots = SlotStore::new();
@@ -135,7 +146,7 @@ pub(super) fn with_tools_and_skills<R>(
         cache: None,
         delegated: false,
         confined_to: None,
-        offered: None,
+        offered,
         servers: None,
         mcp: None,
         jobs: &mut jobs,
@@ -3515,11 +3526,40 @@ fn a_skill_name_is_refused_once_the_context_has_met_something_untrusted() {
 /// string. It reaches the planner as a failed call and never runs. Repaired instead, by
 /// closing what was open, it would write a file the model never finished and report it
 /// written.
+///
+/// TOOL-3, BACKEND-44: the error says the call was not run, names the tool, quotes the text
+/// around the bad byte so the bad key shows, lists what the tool takes, and asks for the whole
+/// call again as valid JSON. The regressions it rejects are an error that is only the parser's
+/// message, with no tool name, no quote and no list of parameters, a rewording that quotes
+/// nothing or only the start of the text, and a parameter list drawn for a name that is not a
+/// built-in's.
 #[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
 fn a_call_whose_arguments_do_not_parse_fails_and_writes_nothing() {
     let scratch = Scratch::new("unparseable");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let dispatched = |arguments: &str| {
+    std::fs::write(scratch.path.join("fish.py"), "y\n").expect("a file to edit");
+    let mut offered = available(
+        Scheduling::ArrangingALook,
+        Arming::Allowed { free: 1 },
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    );
+    // A server's tool, offered under its wire name with a schema of its own.
+    offered.push(Tool::function(
+        "mcp__srv__tool",
+        "a server's tool",
+        json!({"type": "object", "properties": {"unit": {"type": "string"}}}),
+    ));
+    // A server's tool offered under a wire name with no `mcp__` prefix, which only the offer that
+    // holds it says is a server's.
+    offered.push(Tool::function(
+        "srv_lookup",
+        "a server's tool",
+        json!({"type": "object", "properties": {"unit": {"type": "string"}}}),
+    ));
+    let dispatched = |tool: &str, arguments: &str, mcp: Option<&'static crate::mcp::Offer>| {
         let mut sink = RecordingSink::new();
         let mut policy = Policy::begin(
             routing(),
@@ -3530,11 +3570,186 @@ fn a_call_whose_arguments_do_not_parse_fails_and_writes_nothing() {
         .expect("policy");
         let call: ToolCall = serde_json::from_value(json!({
             "id": "a",
-            "function": {"name": "write_file", "arguments": arguments}
+            "function": {"name": tool, "arguments": arguments}
         }))
         .expect("a call");
         let mut reporter = crate::report::RecordingReporter::default();
-        let output = with_tools(&workspace, |tools| {
+        let output = with_tools_offered(
+            &workspace,
+            &[],
+            &crate::skills::Catalogue::default(),
+            Some(&offered),
+            |tools| {
+                tools.mcp = mcp;
+                dispatch(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut reporter,
+                    &call,
+                )
+            },
+        );
+        (told(&mut policy, &output.text), reporter.finished)
+    };
+
+    // The baseline: the same call written whole lands, so the refusal below is about the
+    // arguments and not about the tool.
+    let (said, _) = dispatched(
+        "write_file",
+        r#"{"path":"whole.py","contents":"print('fish')\n"}"#,
+        None,
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("whole.py")).ok(),
+        Some("print('fish')\n".to_string()),
+        "{said}"
+    );
+
+    let (said, finished) = dispatched("write_file", r#"{"path":"cut.py","contents":"print("#, None);
+    assert!(
+        !scratch.path.join("cut.py").exists(),
+        "a call the model never finished wrote a file: {said}"
+    );
+    assert!(
+        said.starts_with("error: the write_file call was not run"),
+        "{said}"
+    );
+    assert!(
+        said.contains(r#"`{"path":"cut.py","contents":"print(`"#),
+        "{said}"
+    );
+    assert!(
+        finished.last().is_some_and(|activity| activity.failed),
+        "the call was not reported failed: {finished:?}"
+    );
+
+    // A `>` where the `:` after `new_text` belongs, behind enough text that the start of the
+    // arguments alone would not reach it.
+    let malformed = format!(
+        r#"{{"path":"fish.py","why":"{}","edits":[{{"new_text">"x","old_text":"y"}}]}}"#,
+        "w".repeat(80)
+    );
+    let (said, finished) = dispatched("edit_file", &malformed, None);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("fish.py")).ok(),
+        Some("y\n".to_string()),
+        "a call whose arguments did not parse edited the file: {said}"
+    );
+    assert!(
+        finished.last().is_some_and(|activity| activity.failed),
+        "the call was not reported failed: {finished:?}"
+    );
+    assert!(
+        said.starts_with("error: the edit_file call was not run, because its arguments were not valid JSON: expected `:`"),
+        "the error did not say the call was not run, name the tool, or keep the reason: {said}"
+    );
+    assert!(
+        said.contains(r#""new_text">"x""#),
+        "the error did not quote the text around the bad key: {said}"
+    );
+    assert!(
+        said.contains("\u{2026}") && !said.contains(&"w".repeat(41)),
+        "the quote was not cut short before the position: {said}"
+    );
+    assert!(
+        said.contains("It takes: ") && said.contains("path_ref") && said.contains("replace_all"),
+        "the error did not list what edit_file takes: {said}"
+    );
+    assert!(
+        said.ends_with("Send the whole call again, with its arguments written as valid JSON."),
+        "the error did not ask for the whole call again as valid JSON: {said}"
+    );
+    assert!(
+        said.contains(
+            "The conversation may show this call with empty arguments; those arguments were the \
+             text quoted here."
+        ),
+        "the error did not say the call held text the next request may not show: {said}"
+    );
+    assert!(
+        !said.contains('\n'),
+        "the error is more than one line: {said}"
+    );
+
+    // A server's tool is sent its arguments as the server describes them, so nothing is listed
+    // for it, and it is named by the wire name it was offered under.
+    let (said, _) = dispatched("mcp__srv__tool", r#"{"a">1}"#, None);
+    assert!(
+        said.starts_with("error: the mcp__srv__tool call was not run"),
+        "{said}"
+    );
+    assert!(said.contains(r#"`{"a">1}`"#), "{said}");
+    assert!(
+        !said.contains("It takes"),
+        "a server's tool was given a list: {said}"
+    );
+
+    // A server's tool offered under a wire name without the `mcp__` prefix is still a server's
+    // tool: the offer that holds it says so, and its schema's arguments are not listed.
+    let offer: &'static crate::mcp::Offer = Box::leak(Box::new(crate::mcp::offer_for_test(&[(
+        "srv_lookup",
+        "srv",
+        "lookup",
+    )])));
+    let (said, _) = dispatched("srv_lookup", r#"{"a">1}"#, Some(offer));
+    assert!(
+        said.starts_with("error: the srv_lookup call was not run"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("It takes"),
+        "a server's tool offered without the prefix was given a list: {said}"
+    );
+
+    // A name nothing was offered under is not repeated, and nothing is listed for it.
+    let (said, _) = dispatched("edit_fileX", r#"{"a">1}"#, None);
+    assert!(said.starts_with("error: a tool call was not run"), "{said}");
+    assert!(
+        !said.contains("edit_fileX"),
+        "the name as the call spelled it was repeated: {said}"
+    );
+    assert!(
+        !said.contains("It takes"),
+        "a name nothing was offered under was given a list: {said}"
+    );
+}
+
+/// LABEL-5: the text of a call whose arguments do not parse is the planner's own words, read
+/// through the same gate as any argument. From a context that has met untrusted content it is not
+/// repeated, the rest of the error is, and the refused read is in the trail. The regression it
+/// rejects is quoting the planner's text into a trusted result with no gate.
+///
+/// LABEL-8, TOOL-7: the tool's name as the call spelled it is the planner's words too, and the
+/// call names no tool this turn offered, so the error says "a tool call" and does not repeat the
+/// name. The regression it rejects is formatting the planner's spelling of the name into the
+/// trusted first sentence, which carries untrusted words in a context that has met untrusted
+/// content.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_text_of_an_unparsed_call_is_not_repeated_once_the_context_has_met_something_untrusted() {
+    let scratch = Scratch::new("unparseable-fallen");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink).resuming(Integrity::Untrusted);
+    let call: ToolCall = serde_json::from_value(json!({
+        "id": "a",
+        "function": {"name": "NAMESENTINEL", "arguments": r#"{"path":"a.py","contents">"SENTINEL"}"#}
+    }))
+    .expect("a call");
+    let mut reporter = crate::report::RecordingReporter::default();
+    let offered = available(
+        Scheduling::ArrangingALook,
+        Arming::Allowed { free: 1 },
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    );
+    let output = with_tools_offered(
+        &workspace,
+        &[],
+        &crate::skills::Catalogue::default(),
+        Some(&offered),
+        |tools| {
             dispatch(
                 &mut policy,
                 tools,
@@ -3542,31 +3757,116 @@ fn a_call_whose_arguments_do_not_parse_fails_and_writes_nothing() {
                 &mut reporter,
                 &call,
             )
-        });
-        (told(&mut policy, &output.text), reporter.finished)
+        },
+    );
+    let said = told(&mut policy, &output.text);
+    drop(policy);
+
+    assert!(said.starts_with("error: a tool call was not run"), "{said}");
+    assert!(
+        !said.contains("NAMESENTINEL"),
+        "the name as the call spelled it was repeated: {said}"
+    );
+    assert!(
+        !said.contains("SENTINEL"),
+        "the planner's text was quoted: {said}"
+    );
+    assert!(said.contains("is not repeated here"), "{said}");
+    assert!(
+        said.contains("may show this call with empty arguments; it was not empty"),
+        "{said}"
+    );
+    assert!(said.contains("Send the whole call again"), "{said}");
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            Event::GateBlocked { gate, detail, reason, .. }
+                if *gate == "argument"
+                    && (detail.contains("unoffered.arguments")
+                        || reason.contains("unoffered.arguments"))
+        )),
+        "the refused read was not recorded: {:?}",
+        sink.events()
+    );
+}
+
+/// LABEL-5, LABEL-8, TOOL-7: the quoted text is what the planner wrote, so the result that quotes
+/// it carries the label of the context it was written in. A trusted context that holds private
+/// content, which the gate still releases an argument from, gives a trusted private result; a
+/// clean one gives a trusted public result, which the planner is shown as it is shown any refusal.
+/// The regression it rejects is the quote lifted to `(T,pub)` with the rest of a refusal, which
+/// would let private words leave through a result labelled public.
+///
+/// LABEL-10: the person watching is told the first sentence and not the quote, since the note
+/// reaches a screen with no label. The regression it rejects is the note given the whole text,
+/// which sends the planner's private words to a screen unlabelled.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_text_of_an_unparsed_call_keeps_the_label_of_the_context_that_wrote_it() {
+    let scratch = Scratch::new("unparseable-held");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let labelled = |private: bool| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink);
+        if private {
+            policy = policy.holding(bravebot_core::label::Confidentiality::Private);
+        }
+        let call: ToolCall = serde_json::from_value(json!({
+            "id": "a",
+            "function": {"name": "write_file", "arguments": r#"{"path":"a.py","contents">"SENTINEL"}"#}
+        }))
+        .expect("a call");
+        let mut reporter = crate::report::RecordingReporter::default();
+        let offered = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let output = with_tools_offered(
+            &workspace,
+            &[],
+            &crate::skills::Catalogue::default(),
+            Some(&offered),
+            |tools| {
+                dispatch(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut reporter,
+                    &call,
+                )
+            },
+        );
+        (
+            output.text.label(),
+            told(&mut policy, &output.text),
+            reporter.finished,
+        )
     };
 
-    // The baseline: the same call written whole lands, so the refusal below is about the
-    // arguments and not about the tool.
-    let (said, _) = dispatched(r#"{"path":"whole.py","contents":"print('fish')\n"}"#);
+    let (label, said, finished) = labelled(true);
+    assert!(said.contains("SENTINEL"), "the text was not quoted: {said}");
     assert_eq!(
-        std::fs::read_to_string(scratch.path.join("whole.py")).ok(),
-        Some("print('fish')\n".to_string()),
-        "{said}"
+        label,
+        bravebot_core::label::Label::trusted_private(),
+        "the quote of a planner that was shown private content was labelled {label}: {said}"
+    );
+    let note = finished
+        .last()
+        .and_then(|activity| activity.note.clone())
+        .unwrap_or_default();
+    assert!(
+        note.starts_with("error: the write_file call was not run") && !note.contains("SENTINEL"),
+        "the screen was not told the first sentence alone: {note}"
     );
 
-    let (said, finished) = dispatched(r#"{"path":"fish.py","contents":"print("#);
-    assert!(
-        !scratch.path.join("fish.py").exists(),
-        "a call the model never finished wrote a file: {said}"
-    );
-    assert!(
-        said.starts_with("error: the arguments were not valid JSON"),
-        "{said}"
-    );
-    assert!(
-        finished.last().is_some_and(|activity| activity.failed),
-        "the call was not reported failed: {finished:?}"
+    let (label, said, _) = labelled(false);
+    assert!(said.contains("SENTINEL"), "the text was not quoted: {said}");
+    assert_eq!(
+        label,
+        bravebot_core::label::Label::trusted_public(),
+        "the quote of a clean context was labelled {label}: {said}"
     );
 }
 

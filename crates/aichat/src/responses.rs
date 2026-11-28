@@ -546,7 +546,7 @@ impl<'a> ResponsesClient<'a> {
             let piece = match arriving.next(&self.call.pace) {
                 Arrived::Piece(piece) => piece,
                 Arrived::Ended => break,
-                Arrived::StoppedPartWay => return Err(ChatError::Incomplete),
+                Arrived::StoppedPartWay(cause) => return Err(crate::stopped_part_way(cause)),
                 Arrived::Failed(error) => return Err(error.into()),
                 Arrived::Cancelled => return Err(ChatError::Cancelled),
             };

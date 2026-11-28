@@ -1610,6 +1610,12 @@ pub enum Finish {
         took: std::time::Duration,
         rounds: usize,
         why: &'static str,
+        /// The driver's fixed name for which part of a request the failure ended, where it knows:
+        /// the connection, the wait for the reply to begin, or the gap between two pieces of it.
+        /// Chosen from the kind of error the transport raised. Said to the planner and the
+        /// person beside the category, and not recorded in the trail, which keeps the category
+        /// alone (TRACE-8).
+        cause: Option<&'static str>,
     },
     /// Its thread ended without handing anything back, so neither its time nor its rounds are
     /// known.

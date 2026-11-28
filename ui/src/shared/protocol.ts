@@ -875,6 +875,24 @@ export interface TurnError {
    * names none. Beside the sentence so nothing reads the sentence to find them.
    */
   accountCommand?: string | null
+  /**
+   * The agent's own line for a failure it has one for beyond the account's, and `null` otherwise: the
+   * line the terminal shows, in sentence case with a full stop and no backticks, made from closed
+   * names and the person's own settings and holding nothing a reply said. Drawn as sent, as text,
+   * under the category's title.
+   */
+  failureMessage?: string | null
+  /**
+   * The words of `failureMessage` that are a setting's name, in the order the sentence holds them,
+   * drawn as code, and `null` where `failureMessage` is. Beside the sentence so nothing reads it.
+   */
+  failureCodes?: string[] | null
+  /**
+   * Which part of the request a transport failure ended, beside `failureMessage`: `connection`,
+   * `begin` or `idle-gap`, and `null` where no cause is known or the failure is of another kind. A
+   * closed name, so the card's title is chosen from it and never from the sentence.
+   */
+  failureCause?: string | null
   attempts?: number | null
   status?: number | null
   /** Where the output ceiling ended the turn, and `null` otherwise. */
@@ -1040,6 +1058,12 @@ export interface ManifestError {
   accountMessage?: string | null
   /** As on `TurnError`. */
   accountCommand?: string | null
+  /** As on `TurnError`. */
+  failureMessage?: string | null
+  /** As on `TurnError`. */
+  failureCodes?: string[] | null
+  /** As on `TurnError`. */
+  failureCause?: string | null
   attempts?: number | null
   status?: number | null
   /** Whether the person stopped it. A stopped run is not recorded. */

@@ -5,10 +5,11 @@ status: normative
 governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
+  - crates/core/src/excerpt.rs
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 257
+      - crates/agent/src/tools.rs: 256
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 29
@@ -17,7 +18,7 @@ guards:
       - crates/agent/src/tools/tests/reading_together.rs: 1
   - symbol: Produced::refused_with_a_note
     sites:
-      - crates/agent/src/tools.rs: 15
+      - crates/agent/src/tools.rs: 16
       - crates/agent/src/tools/recall.rs: 1
 documented-by: docs/website/docs/reference/tools.md
 ---
@@ -143,13 +144,64 @@ a turn arranging a look ([SCHED-4](schedule-next.md#SCHED-4)).
 `verified-by: bravebot_agent::turn::a_call_with_an_undeclared_argument_is_not_read_ahead`
 `verified-by: bravebot_agent::mcp::a_server_tool_is_sent_an_argument_its_schema_does_not_declare`
 
+<a id="TOOL-7"></a>
+### TOOL-7: a call whose arguments are not valid JSON is not run, and its error quotes what was received
+
+A call whose arguments do not parse as JSON is not run and is reported failed
+([BACKEND-44](../backends.md#BACKEND-44)). The error says the call was not run, names the tool, and
+keeps the parser's reason with its line and column. The tool is named by the driver's own string for
+it: the name of a schema offered this turn, or the wire name a server's tool was offered under,
+where the call's name is one of those. Where it is neither, the error says "a tool call" and does not
+repeat the name the call gave. It quotes a piece of the arguments as they were received: at most 40
+characters before the character the parser's position falls in and 20 from it, counted in characters
+so that none is split, with `…` at an end that was cut. Each control character, each character a
+terminal draws as nothing, and each backtick is written out, so the error is one line and the piece
+cannot end the backticks it is quoted in. A position one past the last byte, which is where a parser
+stops at the end of the input, is read as the end, and the piece is the last 40 characters. Where the
+position names no other character of the text, the piece is its first 60 characters. For a built-in
+tool the error lists the arguments the schema it was offered with declares, as [TOOL-3](#TOOL-3)
+does. A server's tool, and a name no schema was offered under, get no list. The error says that the
+conversation may show the call with empty arguments and that its arguments were the text quoted,
+because the next request carries an unparsed call with an empty object for its arguments on every
+wire that takes only an object there. It ends by asking for the whole call again, with its arguments
+written as valid JSON.
+
+The piece is the planner's own text, so it is read through `Policy::read_planner_argument`. Where the
+context has met untrusted content that gate refuses, the trail records the refusal, and the error
+says the call was not empty and that its text is not repeated. A result that quotes the piece is
+labelled as what the planner wrote ([LABEL-5](../labels.md#LABEL-5)), from the context, and not with
+the trusted public label a refusal has. The person watching is shown the first sentence alone, which
+holds no quote, because the line on a screen carries no label and the quote may be private.
+
+**Why.** A bare parser error does not say that the call did not run, which tool it was for, or where
+the mistake is, and on the wires that resend the call as `{}` the model reads its own call back as
+empty. The quote shows the bad key, and the cap keeps a long `write_file` body out of the
+conversation. The name a call gave is what the planner wrote, and in a context that has met
+untrusted content it is untrusted, so the error names a tool only with a string the driver holds.
+
+`verified-by: bravebot_agent::tools::tests::arguments::a_call_whose_arguments_do_not_parse_fails_and_writes_nothing`
+`verified-by: bravebot_agent::tools::tests::arguments::the_text_of_an_unparsed_call_is_not_repeated_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::tools::tests::arguments::the_text_of_an_unparsed_call_keeps_the_label_of_the_context_that_wrote_it`
+`verified-by: bravebot_agent::turn::a_call_that_did_not_parse_is_resent_whole_and_the_resend_runs`
+`verified-by: bravebot_core::excerpt::the_window_stays_inside_the_text_and_under_the_cap`
+`verified-by: bravebot_core::excerpt::a_column_in_bytes_is_read_as_the_character_it_falls_in`
+`verified-by: bravebot_core::excerpt::a_position_at_either_end_or_outside_the_text_quotes_whole_characters`
+`verified-by: bravebot_core::excerpt::a_long_text_is_cut_around_the_position`
+`verified-by: bravebot_core::excerpt::a_newline_or_a_control_character_is_written_out`
+`verified-by: bravebot_core::excerpt::a_position_at_the_end_quotes_the_end`
+`verified-by: bravebot_core::excerpt::the_byte_a_column_names_is_inside_the_text_or_none`
+`verified-by: bravebot_core::excerpt::a_backtick_is_written_out`
+
 <a id="TOOL-4"></a>
 ### TOOL-4: a refusal is worded by the driver
 
 The sentence a call fails or is refused with is written here. Its wording is this repository's, and
 the values in it are ones the driver may name: a routing argument a gate released, a reference the
-driver minted, a name out of a fixed set, and what this machine said about a call this process
-made. A sentence somebody on the other side of the call composed is not part of it, whether it
+driver minted, a name out of a fixed set, what this machine said about a call this process made, and
+a piece of the planner's own call text that `Policy::read_planner_argument` released. That gate
+releases it only from a context that has met nothing untrusted, which is what makes the piece
+trusted, and the result quoting it carries the label of that context ([TOOL-7](#TOOL-7)). A sentence
+somebody on the other side of the call composed is not part of it, whether it
 arrived as a server's error message, as a page, or as what a program printed, and however well it
 would explain the failure.
 

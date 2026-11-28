@@ -901,3 +901,27 @@ replace: if used > most || more > most - used { => if false {
 mutation: paging::within lets a page pass its bound by one byte
 file: crates/core/src/paging.rs
 replace: if used > most || more > most - used { => if used > most || more > most - used + 1 {
+
+mutation: excerpt::window starts at the first character however far the position is from it, so the piece has no bound before the position
+file: crates/core/src/excerpt.rs
+replace: let start = if at > BEFORE { at - BEFORE } else { 0 }; => let start = 0;
+
+mutation: excerpt::window ends AFTER characters past the position without asking whether the text goes that far, so the window reaches past the end
+file: crates/core/src/excerpt.rs
+replace: let end = if len - at > AFTER { at + AFTER } else { len }; => let end = at + AFTER;
+
+mutation: excerpt::window takes a position past the end as it is, so the count of characters after it underflows
+file: crates/core/src/excerpt.rs
+replace: let at = if at < len { at } else { len }; => let at = at;
+
+mutation: excerpt::window quotes the whole text where there is no position, however long it is
+file: crates/core/src/excerpt.rs
+replace: let end = if len < HEAD { len } else { HEAD }; => let end = len;
+
+mutation: excerpt::byte_at adds the column to the line start without asking whether the text goes that far, so the byte it names can be past the end
+file: crates/core/src/excerpt.rs
+replace: if line_start > len || offset > len - line_start { => if line_start > len {
+
+mutation: excerpt::ends_by asks only whether a character starts before the byte, so a character the byte falls inside is counted as ended
+file: crates/core/src/excerpt.rs
+replace: width <= byte && at <= byte - width => at <= byte

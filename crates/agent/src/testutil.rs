@@ -183,6 +183,123 @@ pub(crate) fn serving_host(answers: Vec<Answer>) -> Host {
     Host { endpoint, taken }
 }
 
+/// How a stand-in for an Anthropic Messages endpoint answers one request, as a streamed reply.
+#[derive(Clone, Copy)]
+pub(crate) enum MessagesAnswer {
+    /// A reply that thinks until the output ceiling and writes nothing else.
+    ThoughtToTheCeiling,
+    /// A reply that calls the tool named first with the JSON arguments second.
+    Calls(&'static str, &'static str),
+    /// A reply holding these words.
+    Words(&'static str),
+}
+
+/// A server standing in for an Anthropic Messages endpoint: it answers each request to
+/// `/messages` with the next of the answers it was given and keeps its body, and answers any other
+/// path with 404.
+pub(crate) struct MessagesHost {
+    /// The address to give an `anthropic` entry as its `baseURL`.
+    pub(crate) endpoint: String,
+    taken: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+}
+
+impl MessagesHost {
+    /// The body of each request to `/messages` taken so far, in order.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    pub(crate) fn bodies(&self) -> Vec<serde_json::Value> {
+        self.taken.lock().expect("the requests taken").clone()
+    }
+}
+
+/// Start a [`MessagesHost`] that answers its first requests to `/messages` with `answers`, in
+/// order, and stops listening once they are spent.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+pub(crate) fn messages_host(answers: Vec<MessagesAnswer>) -> MessagesHost {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let endpoint = format!(
+        "http://127.0.0.1:{}/v1",
+        listener.local_addr().expect("addr").port()
+    );
+    let taken = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&taken);
+    std::thread::spawn(move || {
+        let mut answers = answers.into_iter();
+        while let Ok((stream, _)) = listener.accept() {
+            let Some(request) = chatgpt_host::read_request(&stream) else {
+                continue;
+            };
+            if !request.path.ends_with("/messages") {
+                chatgpt_host::respond(&stream, 404, "text/plain", "");
+                continue;
+            }
+            let Some(answer) = answers.next() else {
+                return;
+            };
+            kept.lock()
+                .expect("the requests taken")
+                .push(serde_json::from_slice(&request.body).unwrap_or(serde_json::Value::Null));
+            chatgpt_host::respond(&stream, 200, "text/event-stream", &messages_events(answer));
+        }
+    });
+    MessagesHost { endpoint, taken }
+}
+
+/// The events of one streamed Messages reply, as Anthropic's reference writes them.
+fn messages_events(answer: MessagesAnswer) -> String {
+    use serde_json::json;
+    let event =
+        |name: &str, payload: serde_json::Value| format!("event: {name}\ndata: {payload}\n\n");
+    let (block, delta, stop, output) = match answer {
+        MessagesAnswer::ThoughtToTheCeiling => (
+            json!({"type": "thinking", "thinking": "", "signature": ""}),
+            json!({"type": "thinking_delta", "thinking": "planning"}),
+            "max_tokens",
+            32_000,
+        ),
+        MessagesAnswer::Calls(name, arguments) => (
+            json!({"type": "tool_use", "id": "toolu_1", "name": name, "input": {}}),
+            json!({"type": "input_json_delta", "partial_json": arguments}),
+            "tool_use",
+            5,
+        ),
+        MessagesAnswer::Words(words) => (
+            json!({"type": "text", "text": ""}),
+            json!({"type": "text_delta", "text": words}),
+            "end_turn",
+            5,
+        ),
+    };
+    [
+        event(
+            "message_start",
+            json!({"type": "message_start", "message": {
+                "id": "msg_1", "type": "message", "role": "assistant", "content": [],
+                "model": "claude-test", "stop_reason": null,
+                "usage": {"input_tokens": 10, "output_tokens": 1}}}),
+        ),
+        event(
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 0, "content_block": block}),
+        ),
+        event(
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0, "delta": delta}),
+        ),
+        event(
+            "content_block_stop",
+            json!({"type": "content_block_stop", "index": 0}),
+        ),
+        event(
+            "message_delta",
+            json!({"type": "message_delta",
+                "delta": {"stop_reason": stop, "stop_sequence": null},
+                "usage": {"output_tokens": output}}),
+        ),
+        event("message_stop", json!({"type": "message_stop"})),
+    ]
+    .concat()
+}
+
 /// How a stand-in for the xAI serving host answers one request.
 #[derive(Clone)]
 pub(crate) enum XaiAnswer {

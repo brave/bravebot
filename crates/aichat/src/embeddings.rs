@@ -376,6 +376,7 @@ pub fn list_models(
             url,
             detail: "the reply was larger than a reply is read to".to_string(),
             transient: false,
+            cause: None,
         }));
     }
     let label = response.body.label();
@@ -617,6 +618,7 @@ impl EmbeddingsClient {
                 url: url.to_string(),
                 detail: "the reply was larger than a reply is read to".to_string(),
                 transient: false,
+                cause: None,
             });
         }
         let label = response.body.label();
@@ -758,6 +760,7 @@ impl EmbedError {
             url: "fake".into(),
             detail: "refused".into(),
             transient: true,
+            cause: Some(bravebot_net::TransportCause::Connection),
         })
     }
 

@@ -2145,6 +2145,15 @@ impl Offer {
             .map(|tool| (tool.alias.as_str(), tool.drawn.name.as_str()))
     }
 
+    /// The wire name of the tool offered under `wire`, as this offer holds it, so a sentence can
+    /// name the tool with the driver's string rather than the caller's.
+    pub fn wire_name_of(&self, wire: &str) -> Option<&str> {
+        self.tools
+            .iter()
+            .find(|tool| tool.wire == wire)
+            .map(|tool| tool.wire.as_str())
+    }
+
     /// Each tool this offer holds, as a plan may name it (MANIFEST-15): the alias, the tool's word
     /// and the names of its arguments. A description is the server's prose and a plan needs none
     /// of it, so none is given.

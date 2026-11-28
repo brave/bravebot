@@ -354,19 +354,24 @@ on ordinary endings; file authority remains shared and child advice remains loca
 `verified-by: bravebot_agent::turn::the_person_is_told_nothing_when_an_empty_reply_is_asked_about`
 
 <a id="TURN-7"></a>
-### TURN-7: a reply the output ceiling stopped is told why and asked once for less
+### TURN-7: a reply the output ceiling stopped is told why and asked again once for each kind of stop
 
 When a reply reaches its output ceiling part way through a tool call, or before it wrote anything,
 the driver adds a line to the conversation naming the ceiling and what the reply was doing, and asks
 again. Text the reply wrote before the call is kept as its answer so far. The line says what to do
 instead: a file too big for one reply is written in smaller calls with the write tools the request
 offered; any other call is made again with less in it; a reply that thought until the ceiling is
-asked to act; and a turn with no tools left is asked for a shorter answer. The person is told the
-reply stopped and what it is being asked for. A second stop in a row ends the turn: as the failure
-naming the ceiling when nothing was written, and with its text when something was, the person told
-of any call it was writing that was not made. An answered request in between starts the count
-again. A stop wrote something, so it is not an empty reply ([TURN-6](#TURN-6)) and breaks a run of
-them.
+asked to act; and a turn with no tools left is asked for a shorter answer. A reply that thought
+until the ceiling is also told to write a large file in smaller calls, with the write tools the
+request offered, and where the turn asked for an effort level the request asking again goes out one
+level lower, the request after it at the turn's level again. The person is told the reply stopped
+and what it is being asked for, and of a lower level, both levels by name. Each kind of stop is
+asked about once in a run of them: a stop with no call open, which thought or wrote nothing, and a
+stop part way through a call. A second stop of a kind already asked about in the run ends the turn:
+as the failure naming the ceiling when nothing was written, and with its text when something was,
+the person told of any call it was writing that was not made. An answered request in between starts
+the count again. A stop wrote something, so it is not an empty reply ([TURN-6](#TURN-6)) and breaks
+a run of them.
 
 **The call it was writing is never made.** Its arguments stopped where the ceiling did, so running
 it would write half a file or run half a command. The backend returns no call from a reply the
@@ -381,8 +386,28 @@ file can be written in parts, it has a way through.
 with no call open, ends the turn with what it wrote, and the person is told it stopped short. Asked
 to carry on, a model tends to start the answer again from the top.
 
-**Once, for the reason an empty reply is asked about once** ([TURN-6](#TURN-6)): a model that runs
-out again after being told how to do the work in parts cannot do it in parts here.
+**Once for each kind, for the reason an empty reply is asked about once** ([TURN-6](#TURN-6)): a
+model that runs out again after being told how to do the work in parts cannot do it in parts here.
+The two kinds are counted apart because a reply told to think less tends to spend the next ceiling
+on the call it was planning, and that stop is the one the line about parts answers. Counting by kind,
+rather than asking whenever the kind differs from the stop before, keeps the run bounded: stops that
+alternate end the turn at the third, so a run costs at most two more requests.
+
+**One level lower, for one request.** A model that spends the ceiling thinking at a level tends to
+do it again at the same level, so the request asking again goes out at the level below the turn's:
+`medium` for `high`, `low` for `medium`, and `high` for both `xhigh` and `max`. `max` goes to `high`
+rather than to `xhigh` because nothing shows that a model taking `max` takes `xhigh`, and a refused
+level would be remembered for the process. The level is lowered and not dropped: on Anthropic and
+Bedrock a request with no level turns thinking off or leaves it to the model's default, which is a
+larger change than the stop asks for. A turn that asked for no level, or for the lowest, is sent
+what it would have been. So is a turn on the ChatGPT account, which is sent the level its session
+began with for the whole session ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)), and a turn on a
+model that is sent no level, because it refused the field or is the xAI account
+([BACKEND-22](backends.md#BACKEND-22), [XAI-16](xai-sign-in.md#XAI-16)). There the person is told
+the reply is asked again, with no level named. The lowered level is not one the service refused, so it is not
+remembered as refused ([BACKEND-22](backends.md#BACKEND-22)), and the level the turn and the
+session hold does not change. A lowered request that stops thinking again is the second stop of
+that kind, which ends the turn rather than lowering further.
 
 **Deciding on it reads nothing untrusted.** Where the reply stopped is the planner's own output
 ([LABEL-8](labels.md#LABEL-8)). The tool the line names is the request's own copy of the name,
@@ -391,8 +416,9 @@ reply made up is never repeated back to it.
 
 **Every stop is recorded.** The trail gets a line for each: the ceiling, the tool-calling round it
 landed on, the offered tool of the call that was open and how many bytes of its arguments had
-arrived, whether any reasoning arrived, and whether the turn asked again, kept the text as its
-answer, or ended. Counts and the request's own tool name, so the line carries no content
+arrived, whether any reasoning arrived, and whether the turn asked again, asked again at a lower
+effort level (naming both levels), kept the text as its answer, or ended. Counts, the request's own
+tool name and the words a level is chosen by, so the line carries no content
 ([TRACE-2](trace.md#TRACE-2)). A turn that went on past a stop leaves nothing else saying it
 happened, and one that ended on a stop is read back to ask what the ceiling was spent on, which is
 what says whether the work wanted splitting.
@@ -407,6 +433,15 @@ what says whether the work wanted splitting.
 `verified-by: bravebot_agent::turn::the_person_is_told_what_a_ceiling_stop_asked_for`
 `verified-by: bravebot_agent::turn::a_ceiling_stop_between_two_empty_replies_is_not_two_empty_replies_in_a_row`
 `verified-by: bravebot_agent::turn::the_trail_says_what_each_ceiling_stop_was_writing_and_what_the_turn_did`
+`verified-by: bravebot_agent::turn::a_thinking_stop_then_a_stop_in_a_call_is_asked_again_and_the_file_is_written`
+`verified-by: bravebot_agent::turn::alternating_stops_end_the_turn_at_the_third`
+`verified-by: bravebot_agent::turn::the_request_after_a_thinking_stop_carries_a_lower_level_and_the_next_one_the_turns_level`
+`verified-by: bravebot_agent::turn::a_thinking_stop_at_a_level_tells_the_person_and_the_trail_both_levels`
+`verified-by: bravebot_agent::turn::a_thinking_stop_on_a_model_sent_no_level_names_no_lower_level`
+`verified-by: bravebot_agent::turn::a_lowered_request_reaches_the_service_and_the_client_remembers_no_refusal`
+`verified-by: bravebot_agent::turn::a_thinking_stop_on_the_account_asks_again_at_the_sessions_level`
+`verified-by: bravebot_agent::turn::a_thinking_stop_then_a_stop_in_a_call_after_text_is_asked_again`
+`verified-by: bravebot_tui::app::tests::backends_effort::a_thinking_stop_leaves_the_panel_and_the_record_at_the_sessions_level`
 
 <a id="TURN-8"></a>
 ### TURN-8: a session that has spent its limit asks before the next request
@@ -793,7 +828,14 @@ When a turn ends as a failure ([TURN-5](#TURN-5)) after it has added messages to
 the driver adds one more after them, so the next prompt follows it. The note says that the turn
 failed and ended before it finished, that it did not pause, and that nothing is continuing it. It
 gives the failure's category and, where it is known, the number of requests sent for the call that
-failed. The backend, the model and the request fields a refused call left out ([BACKEND-37](backends.md#BACKEND-37))
+failed. A transport failure also gives which part of the request it ended (the connection, the wait
+for the reply to begin, or the gap between two pieces of the reply), the gap in force where the reply
+went quiet past it, and the settings a person changes it with where the backend has a place for them
+([BACKEND-37](backends.md#BACKEND-37)), and ends by saying that a new message from the person
+continues from what was already done. An incomplete reply that began and then went quiet past the gap
+gives the same cause, gap and settings. A request the client does not send again whatever its retry
+count says is given no retry count among the settings. The note and the person's failure line take
+the settings from one choice, so they name the same ones. The backend, the model and the request fields a refused call left out ([BACKEND-37](backends.md#BACKEND-37))
 are for the person alone and are not in the note, and neither is the next step that ends a rate-limited
 or refused failure. A turn that answered, a turn that failed before it added anything to the conversation, and
 a turn the person stopped add no note. A stop is the person's own pause, and the next prompt usually
@@ -802,7 +844,12 @@ continues the turn ([TURN-3](#TURN-3)).
 **The words are the driver's.** They are fixed, and the category and the request count are fields
 of the diagnosis ([BACKEND-37](backends.md#BACKEND-37)). The category is a fixed name and the count
 is the driver's own, so nothing the service sent is in the note: not its reply, its headers, its
-URL, its error text or the status of its reply. The category is what the driver made of that
+URL, its error text or the status of its reply. The cause of a transport failure is one of three
+fixed names the network layer chose from the kind of error the transport raised, the gap is the
+person's own setting or the network layer's default, and the setting names are fixed words chosen
+from the variant of the backend that sent the request, so none of them is anything the service
+sent either. The continuation sentence is fixed, and is said only where the note is written, which
+is only where the turn added something to the conversation to continue from. The category is what the driver made of that
 status, and it is all the planner is given of any other failure ([BACKEND-37](backends.md#BACKEND-37)
 says the same of a processor's). A failure that ended on the read of a file the person named with
 `@` is also given the category alone: the name the person is shown ([NAME-13](naming-files.md#NAME-13))
@@ -826,10 +873,12 @@ writes no record, so no later prompt follows its conversation.
 conversation. Nothing in the conversation says they stop because of a failure, so a planner asked
 "what happened?" cannot tell a failed turn from one it paused itself, and can answer that it will
 carry on. The failure is recorded for the person alone. A turn that added nothing leaves nothing
-for a note to refer to.
+for a note to refer to. A planner told only that a transport failure happened cannot answer a person
+who asks why, or say what would change it, so the note names the cause and the settings.
 
 **Known costs.** Each failed turn adds its own note and a later turn that succeeds does not remove
-it, so a session that fails repeatedly holds one for each failure. A note is about fifty tokens.
+it, so a session that fails repeatedly holds one for each failure. A note is about fifty tokens, and
+a transport failure's note about a hundred.
 
 `verified-by: bravebot_agent::turn::a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it`
 `verified-by: bravebot_agent::backend::the_fields_given_up_and_the_backend_reach_the_diagnosis_of_a_counted_failure`
@@ -839,6 +888,10 @@ it, so a session that fails repeatedly holds one for each failure. A note is abo
 `verified-by: bravebot_agent::turn::a_turn_that_compacted_and_then_failed_leaves_the_note_of_the_failure`
 `verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_is_sent_and_kept_and_is_not_drawn`
 `verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_says_why_the_transport_failed_and_what_changes_it`
+`verified-by: bravebot_agent::conversation::the_note_names_exactly_the_settings_of_the_remedy`
+`verified-by: bravebot_agent::turn::the_request_after_a_failed_connection_carries_the_cause_in_the_note`
+`verified-by: bravebot_agent::backend::a_reply_gone_quiet_past_a_stated_gap_is_diagnosed_with_that_gap`
 `verified-by: bravebot_tui::sessions::a_failed_turn_leaves_a_note_the_transcript_does_not_draw_and_a_resume_still_sends`
 `verified-by: bravebot_ui_bridge::history::a_failed_turn_leaves_the_planner_a_note_in_the_saved_conversation`
 `verified-by: bravebot_cli::running::a_session_in_lines_tells_the_planner_that_the_turn_before_it_failed`

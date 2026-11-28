@@ -91,6 +91,10 @@ pub enum BackendError {
         /// variant that sent them and never from a reply
         /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
         retry_setting: RetrySetting,
+        /// The gap between two pieces of a reply the backend that sent the requests allowed: the
+        /// figure the person stated for it, or the network layer's default. Set from the backend's
+        /// configuration and never from a reply.
+        idle_gap: Option<std::time::Duration>,
         cause: Box<BackendError>,
     },
 }
@@ -161,6 +165,7 @@ impl BackendError {
                 conceded,
                 backend,
                 retry_setting,
+                idle_gap,
                 cause,
             } => Self::Attempted {
                 attempts: attempts.saturating_add(earlier),
@@ -169,6 +174,7 @@ impl BackendError {
                 conceded,
                 backend,
                 retry_setting,
+                idle_gap,
                 cause,
             },
             other => other.counted(earlier, None, None),
@@ -189,6 +195,7 @@ impl BackendError {
             conceded: Conceded::default(),
             backend: None,
             retry_setting: RetrySetting::None,
+            idle_gap: None,
             cause: Box::new(self),
         }
     }
@@ -203,6 +210,7 @@ impl BackendError {
                 context_tokens,
                 backend,
                 retry_setting,
+                idle_gap,
                 cause,
                 ..
             } => Self::Attempted {
@@ -212,6 +220,7 @@ impl BackendError {
                 conceded: given_up,
                 backend,
                 retry_setting,
+                idle_gap,
                 cause,
             },
             other => other,
@@ -229,6 +238,7 @@ impl BackendError {
                 conceded,
                 cause,
                 retry_setting,
+                idle_gap,
                 ..
             } => Self::Attempted {
                 attempts,
@@ -237,6 +247,7 @@ impl BackendError {
                 conceded,
                 backend: Some(kind),
                 retry_setting,
+                idle_gap,
                 cause,
             },
             other => other,
@@ -254,6 +265,7 @@ impl BackendError {
                 context_tokens,
                 conceded,
                 backend,
+                idle_gap,
                 cause,
                 ..
             } => Self::Attempted {
@@ -263,6 +275,35 @@ impl BackendError {
                 conceded,
                 backend,
                 retry_setting: setting,
+                idle_gap,
+                cause,
+            },
+            other => other,
+        }
+    }
+
+    /// This failure marked with the gap between two pieces of a reply the backend that sent the
+    /// requests allowed, which is read from its configuration and never from a reply. A failure
+    /// that counted no requests is returned as it was.
+    pub(crate) fn with_idle_gap(self, gap: std::time::Duration) -> Self {
+        match self {
+            Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                backend,
+                retry_setting,
+                cause,
+                ..
+            } => Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                backend,
+                retry_setting,
+                idle_gap: Some(gap),
                 cause,
             },
             other => other,
@@ -286,6 +327,10 @@ impl BackendError {
     }
 
     /// Classify the error without copying response text, headers, or endpoint URLs.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm for each failure of each backend, in the closed list of categories"
+    )]
     pub fn diagnosis(&self) -> Diagnosis {
         let category = match self {
             Self::Attempted {
@@ -293,6 +338,7 @@ impl BackendError {
                 conceded,
                 backend,
                 retry_setting,
+                idle_gap,
                 cause,
                 ..
             } => {
@@ -301,6 +347,10 @@ impl BackendError {
                     .after(*attempts)
                     .with_conceded(*conceded)
                     .with_retry_setting(*retry_setting);
+                let diagnosis = match idle_gap {
+                    Some(gap) => diagnosis.with_idle_gap(*gap),
+                    None => diagnosis,
+                };
                 return match backend {
                     Some(kind) => diagnosis.on_backend(*kind),
                     None => diagnosis,
@@ -322,6 +372,13 @@ impl BackendError {
                 ChatError::Account(failure) => category_of_account(failure),
                 ChatError::Decode { .. } | ChatError::NoContent => Category::Undecodable,
                 ChatError::Incomplete => Category::Incomplete,
+                // A reply that began and then went quiet past the gap stopped, as a reply whose
+                // connection dropped does, and the gap is what ended it, which the network layer
+                // told from the kind of error the transport raised (BACKEND-37).
+                ChatError::WentQuiet => {
+                    return Diagnosis::of(Category::Incomplete)
+                        .with_cause(crate::outcome::TransportCause::IdleGap);
+                }
                 ChatError::Reported { failure } => match failure {
                     Failure::InvalidRequest
                     | Failure::RequestTooLarge
@@ -350,7 +407,20 @@ impl BackendError {
                 | BedrockError::Frame(_)
                 | BedrockError::NoContent
                 | BedrockError::ThoughtOnly => Category::Undecodable,
-                BedrockError::Incomplete | BedrockError::Stalled => Category::Incomplete,
+                BedrockError::Incomplete | BedrockError::Stalled { went_quiet: false } => {
+                    Category::Incomplete
+                }
+                BedrockError::WentQuiet => {
+                    return Diagnosis::of(Category::Incomplete)
+                        .with_cause(crate::outcome::TransportCause::IdleGap);
+                }
+                // The same silence, on a request whose arguments the service may have been holding
+                // back, which the client never sends again, so no retry count changes it.
+                BedrockError::Stalled { went_quiet: true } => {
+                    return Diagnosis::of(Category::Incomplete)
+                        .with_cause(crate::outcome::TransportCause::IdleGap)
+                        .not_sent_again();
+                }
                 BedrockError::Reported { kind } => match kind.as_str() {
                     "validationException" => Category::Refused,
                     "throttlingException" => Category::RateLimited,
@@ -649,8 +719,23 @@ fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
             Diagnosis::of(Category::Blocked)
         }
         EgressError::InvalidUrl { .. } => Diagnosis::of(Category::Unconfigured),
-        EgressError::Transport { .. }
-        | EgressError::TooManyRedirects { .. }
+        // Which part of the request ended is the kind of error the transport raised, chosen in the
+        // network layer, and never its text. A failure the network layer marked as not worth
+        // another attempt is sent once by every client, whatever its retry count says.
+        EgressError::Transport {
+            cause, transient, ..
+        } => {
+            let diagnosis = Diagnosis::of(Category::Transport);
+            let diagnosis = match cause {
+                Some(cause) => diagnosis.with_cause(*cause),
+                None => diagnosis,
+            };
+            match transient {
+                true => diagnosis,
+                false => diagnosis.not_sent_again(),
+            }
+        }
+        EgressError::TooManyRedirects { .. }
         | EgressError::MissingLocation { .. }
         // A withdrawn request is reported as a stop before it reaches here. Named so the match
         // stays exhaustive rather than because a caller sees it.
@@ -1504,6 +1589,24 @@ impl<'a> Backend<'a> {
         }
     }
 
+    /// The gap between two pieces of a reply this backend allows: the figure the person stated for
+    /// it (`options.idleTimeoutMs`, or `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` for an AWS account reached
+    /// through the tier variables), and the egress layer's default where they stated none. Read from
+    /// the configuration the backend was selected with, as each client reads it when it applies the
+    /// gap to a request.
+    fn idle_gap(&self) -> std::time::Duration {
+        let (stated, egress) = match self {
+            Self::Bedrock { config, egress, .. } => (config.patience().idle_timeout, egress),
+            Self::Gateway {
+                provider, egress, ..
+            } => (provider.patience.idle_timeout, egress),
+            Self::Aichat { egress, .. }
+            | Self::Account { egress, .. }
+            | Self::XaiAccount { egress, .. } => (None, egress),
+        };
+        stated.unwrap_or_else(|| egress.idle())
+    }
+
     /// Send a request and wait for the whole reply.
     pub fn complete<S: Sink>(
         &mut self,
@@ -1512,8 +1615,13 @@ impl<'a> Backend<'a> {
     ) -> Result<Completion, BackendError> {
         let kind = self.kind();
         let entry = self.retry_setting();
-        self.send(policy, request)
-            .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
+        let gap = self.idle_gap();
+        self.send(policy, request).map_err(|error| {
+            error
+                .sent_by(kind)
+                .with_retry_setting(entry)
+                .with_idle_gap(gap)
+        })
     }
 
     fn send<S: Sink>(
@@ -1595,8 +1703,14 @@ impl<'a> Backend<'a> {
     ) -> Result<Completion, BackendError> {
         let kind = self.kind();
         let entry = self.retry_setting();
+        let gap = self.idle_gap();
         self.send_streaming(policy, request, progress)
-            .map_err(|error| error.sent_by(kind).with_retry_setting(entry))
+            .map_err(|error| {
+                error
+                    .sent_by(kind)
+                    .with_retry_setting(entry)
+                    .with_idle_gap(gap)
+            })
     }
 
     fn send_streaming<S: Sink>(
@@ -4525,6 +4639,146 @@ mod tests {
         (outcome, received.recv().expect("the request arrived"))
     }
 
+    /// BACKEND-37, BACKEND-55: a reply that went quiet past the gap a `provider` entry states with
+    /// `idleTimeoutMs` is diagnosed as the gap running out, with the stated gap and not the egress
+    /// layer's own. The server answers its headers and then sends nothing, and the egress layer's
+    /// gap is five seconds, so only the entry's 300 ms separates the right figure from the wrong one.
+    ///
+    /// The faults this rejects: the gap taken from the egress layer's default instead of the entry,
+    /// and a reply gone quiet told as a connection that failed.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the stand-in ignores write errors"
+    )]
+    #[test]
+    fn a_reply_gone_quiet_past_a_stated_gap_is_diagnosed_with_that_gap() {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut line = String::new();
+                let mut length = 0usize;
+                while reader.read_line(&mut line).unwrap_or(0) > 0 && !line.trim().is_empty() {
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.trim().eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    line.clear();
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n",
+                );
+                let _ = stream.flush();
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        });
+        let endpoint = format!("http://127.0.0.1:{port}");
+        let config = with_providers(&format!(
+            r#"{{"provider": {{"gw": {{
+                "options": {{"baseURL": "{endpoint}/v1", "apiKey": "a-key",
+                    "maxRetries": 0, "idleTimeoutMs": 300}},
+                "models": {{"a-model": {{}}}}
+            }}}}}}"#
+        ));
+        let egress = Egress::with_timeouts(bravebot_net::Timeouts {
+            idle: std::time::Duration::from_secs(5),
+            reply: std::time::Duration::from_secs(30),
+            ..bravebot_net::Timeouts::default()
+        });
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = bravebot_core::policy::Policy::begin(
+            {
+                let mut routing = bravebot_core::policy::Routing::new();
+                routing.insert_trusted("task", "say hello");
+                routing
+            },
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        let request = ChatRequest::new(
+            "gw/a-model",
+            vec![bravebot_aichat::protocol::Message::user("hi")],
+        );
+
+        let failure = Backend::select(&config, &egress, "gw/a-model")
+            .complete(&mut policy, &request)
+            .expect_err("the reply went quiet");
+
+        let why = failure.diagnosis();
+        assert_eq!(why.category, Category::Transport, "{why:?}");
+        assert_eq!(
+            why.cause,
+            Some(crate::outcome::TransportCause::IdleGap),
+            "{why:?}"
+        );
+        assert_eq!(
+            why.idle_gap,
+            Some(std::time::Duration::from_millis(300)),
+            "the gap said was not the one the entry stated: {why:?}"
+        );
+        assert_eq!(why.retry_setting, RetrySetting::Entry, "{why:?}");
+    }
+
+    /// BACKEND-55: the gap a failure names is the one the backend applies: the figure a `provider`
+    /// entry states with `idleTimeoutMs`, and where it states none, the egress layer's own, which is
+    /// two minutes unless the egress was built with another. The Brave endpoint, which has no place
+    /// for a figure, has the egress layer's own.
+    ///
+    /// The faults this rejects: a fixed figure said where nothing was stated, and the egress layer's
+    /// default taken from `Timeouts::default` rather than from the egress that sent the request.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_gap_in_force_is_the_stated_one_and_otherwise_the_egress_layers_own() {
+        use std::time::Duration;
+        let config = with_providers(
+            r#"{"provider": {
+                "stated": {"options": {"baseURL": "https://stated.example/v1", "apiKey": "k",
+                    "idleTimeoutMs": 300}, "models": {"a-model": {}}},
+                "unstated": {"options": {"baseURL": "https://unstated.example/v1", "apiKey": "k"},
+                    "models": {"a-model": {}}}
+            }}"#,
+        );
+        let default = Egress::new();
+        let patient = Egress::with_timeouts(bravebot_net::Timeouts {
+            idle: Duration::from_secs(5),
+            ..bravebot_net::Timeouts::default()
+        });
+
+        assert_eq!(
+            Backend::select(&config, &default, "unstated/a-model").idle_gap(),
+            Duration::from_secs(120),
+            "nothing stated is the two-minute default"
+        );
+        assert_eq!(
+            Backend::select(&config, &patient, "unstated/a-model").idle_gap(),
+            Duration::from_secs(5),
+            "nothing stated is the gap of the egress that sends the request"
+        );
+        assert_eq!(
+            Backend::select(&config, &patient, "stated/a-model").idle_gap(),
+            Duration::from_millis(300),
+            "a stated gap is the gap"
+        );
+        let brave = Config::from_lookup(aichat_only).expect("config");
+        assert_eq!(
+            Backend::select(&brave, &default, &brave.default_model).idle_gap(),
+            Duration::from_secs(120),
+            "the Brave endpoint has the egress layer's own"
+        );
+    }
+
     /// BACKEND-72: an entry naming an Ollama SDK is sent Ollama's own `/api/chat`, whose
     /// `options.num_ctx` is the window the session budgets for, so a server started with its own
     /// smaller default allocates the window the conversation is kept within rather than dropping
@@ -5272,6 +5526,7 @@ mod tests {
                 conceded: _,
                 backend: _,
                 retry_setting: _,
+                idle_gap: _,
                 cause,
             } = &error
             else {
@@ -5319,6 +5574,7 @@ mod tests {
                 conceded: _,
                 backend: _,
                 retry_setting: _,
+                idle_gap: _,
                 cause,
             } = &error
             else {
@@ -5400,6 +5656,7 @@ mod tests {
                 conceded: _,
                 backend: _,
                 retry_setting: _,
+                idle_gap: _,
                 cause,
             } = &error
             else {
@@ -6006,6 +6263,7 @@ mod tests {
             url: "http://127.0.0.1:1/v1".to_string(),
             detail: "connection refused".to_string(),
             transient: true,
+            cause: Some(bravebot_net::TransportCause::Connection),
         };
         assert!(BackendError::from(ChatError::Egress(refused)).is_unreachable());
 
@@ -6013,6 +6271,7 @@ mod tests {
             url: "https://bedrock.example/invoke".to_string(),
             detail: "connection reset".to_string(),
             transient: true,
+            cause: Some(bravebot_net::TransportCause::Connection),
         };
         assert!(BackendError::from(BedrockError::Egress(dropped)).is_unreachable());
 
@@ -6022,6 +6281,7 @@ mod tests {
             url: "http://127.0.0.1:1/v1".to_string(),
             detail: "connection refused".to_string(),
             transient: true,
+            cause: Some(bravebot_net::TransportCause::Connection),
         };
         assert!(
             BackendError::from(ChatError::Egress(retried))
@@ -6052,11 +6312,40 @@ mod tests {
     /// network that was working, and a caller to reach again a service that was reached.
     #[test]
     fn a_reply_that_stopped_arriving_is_reported_as_unfinished_and_not_as_unreachable() {
-        for stopped in [BedrockError::Incomplete, BedrockError::Stalled] {
+        for stopped in [
+            BedrockError::Incomplete,
+            BedrockError::Stalled { went_quiet: false },
+            BedrockError::Stalled { went_quiet: true },
+            BedrockError::WentQuiet,
+        ] {
             let failure = BackendError::from(stopped).counted(1, None, None);
             assert_eq!(failure.diagnosis().category, Category::Incomplete);
             assert!(!failure.is_unreachable());
         }
+
+        // A reply that went quiet while the service may have been holding a tool's arguments back
+        // is never sent again, so its diagnosis says so, and the settings named for it are the
+        // gap's alone. One the client does send again names the retry count as well.
+        let stalled = BackendError::from(BedrockError::Stalled { went_quiet: true })
+            .counted(1, None, None)
+            .with_retry_setting(RetrySetting::Entry)
+            .diagnosis();
+        assert!(stalled.not_sent_again, "{stalled:?}");
+        assert_eq!(
+            stalled.transport_remedy(),
+            Some(crate::outcome::Remedy::EntryGap),
+            "{stalled:?}"
+        );
+        let quiet = BackendError::from(BedrockError::WentQuiet)
+            .counted(1, None, None)
+            .with_retry_setting(RetrySetting::Entry)
+            .diagnosis();
+        assert!(!quiet.not_sent_again, "{quiet:?}");
+        assert_eq!(
+            quiet.transport_remedy(),
+            Some(crate::outcome::Remedy::EntryGapOrRetries),
+            "{quiet:?}"
+        );
 
         // A reply still being written when its time ran out, on either backend.
         let out_of_time = || bravebot_net::EgressError::OutOfTime {
@@ -6092,6 +6381,7 @@ mod tests {
                 url: url(),
                 detail: "reset".to_string(),
                 transient: true,
+                cause: Some(bravebot_net::TransportCause::Connection),
             }),
             Category::Transport,
             "a connection that dropped or went silent"
@@ -6512,6 +6802,7 @@ mod tests {
             url: format!("https://service.example/v1?key={SECRET}"),
             detail: format!("connection reset while sending {SECRET}"),
             transient: true,
+            cause: Some(bravebot_net::TransportCause::Connection),
         }))
         .counted(3, None, None);
 

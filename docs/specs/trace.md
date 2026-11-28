@@ -445,6 +445,9 @@ ok      delegate: d2: ended after 1559.0s and 37 of 120 rounds: it did not finis
 
 The cause comes from which way the result came back, the run's round count and the failure's
 category. None of it is text a service or a tool produced, so the entry holds no content (TRACE-2).
+The entry keeps the category alone. Which part of a request a transport failure ended (the
+connection, the wait for the reply to begin, or the gap between two pieces of it) is said to the
+planner and in the person's note ([DELEGATE-26](delegation.md#DELEGATE-26)) and is not recorded.
 The note the person sees when the delegate finishes names the same cause. The planner is told only
 that the delegate did not finish, except for a rate-limited, unavailable, transport or incomplete
 ending, which it is told by name and with the sentence that starting the same delegate again meets

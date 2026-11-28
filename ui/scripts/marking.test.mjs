@@ -755,6 +755,11 @@ test('a run that failed on the ChatGPT account says the same sentence with the c
   const service = draw(ended({ kind: 'chat', category: 'transport', message: 'transport' }))
   assert.match(service, /The model service could not be reached/, service)
   assert.doesNotMatch(service, /<code>/, service)
+
+  // A run that failed in transport says the agent's line, with the settings it names as code.
+  const line = draw(ended({ kind: 'chat', category: 'transport', message: 'transport', failureMessage: 'The request could not connect; raise retryWindowMs or maxRetries in the options of this provider entry to keep trying a failed connection for longer; a new message continues from what was already done.', failureCodes: ['retryWindowMs', 'maxRetries'] }))
+  assert.match(line, /<p class="plan-detail">The request could not connect; raise <code>retryWindowMs<\/code> or <code>maxRetries<\/code> in the options/, line)
+  assert.match(line, /<strong>The model service could not be reached<\/strong>/, line)
 })
 
 /**

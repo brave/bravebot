@@ -51,3 +51,23 @@ survivor: Dividing delta down one round sooner still keeps the bias below 288 an
 in: crates/core/src/punycode.rs::adapt
 was: while delta > ((BASE - T_MIN) * T_MAX) / 2 {
 now: while delta >= ((BASE - T_MIN) * T_MAX) / 2 {
+
+survivor: A text exactly HEAD characters long gives HEAD either way, so the window is the same.
+in: crates/core/src/excerpt.rs::window
+was: let end = if len < HEAD { len } else { HEAD };
+now: let end = if len <= HEAD { len } else { HEAD };
+
+survivor: A position exactly at the end is kept as the end either way, so the window is the same.
+in: crates/core/src/excerpt.rs::window
+was: let at = if at < len { at } else { len };
+now: let at = if at <= len { at } else { len };
+
+survivor: A position exactly BEFORE characters in starts the window at 0 either way, since at - BEFORE is 0 there.
+in: crates/core/src/excerpt.rs::window
+was: let start = if at > BEFORE { at - BEFORE } else { 0 };
+now: let start = if at >= BEFORE { at - BEFORE } else { 0 };
+
+survivor: A position exactly AFTER characters from the end ends the window at len either way, since at + AFTER is len there.
+in: crates/core/src/excerpt.rs::window
+was: let end = if len - at > AFTER { at + AFTER } else { len };
+now: let end = if len - at >= AFTER { at + AFTER } else { len };

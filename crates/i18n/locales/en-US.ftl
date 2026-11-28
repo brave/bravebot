@@ -1187,6 +1187,10 @@ ceiling-stop-in-call = the model reached its output limit of { $tokens } tokens 
 ceiling-stop-in-a-call = the model reached its output limit of { $tokens } tokens while writing a tool call, so the call was not made; asking it to do the work in smaller parts
 ceiling-stop-thinking = the model reached its output limit of { $tokens } tokens while thinking, before it wrote anything; asking it again
 ceiling-stop-silent = the model reached its output limit of { $tokens } tokens before it wrote anything; asking it again
+# Said instead of ceiling-stop-thinking where the request asking again goes out at a lower effort
+# level than the turn's, for that one request. $level and $lower are the words a level is chosen
+# by (low, medium, high, xhigh, max), as /effort takes them.
+ceiling-stop-thinking-lower = the model reached its output limit of { $tokens } tokens while thinking, before it wrote anything; asking it again at effort { $lower } in place of { $level }, for one request
 # What a limit counts, as the noun the sentences below fill in.
 limit-unit-tokens = tokens
 limit-unit-credits = credits
@@ -4655,16 +4659,45 @@ failure-conceded-ceiling = the assumed reply limit (BRAVEBOT_OUTPUT_BUDGET)
 failure-conceded-arguments = streamed tool arguments
 failure-conceded-thinking = shown thinking
 failure-transport = the request did not get through
+# A transport failure by which part of the request it ended (BACKEND-37). Chosen from the kind of
+# error the transport raised, never from its text. The gap is the figure in force for the backend:
+# the one the person stated, or the default.
+failure-transport-connection = the request could not connect
+failure-transport-begin = the reply did not begin within the time it was given
+failure-transport-idle-milliseconds = the reply went quiet for longer than the { $milliseconds } millisecond gap allowed
+failure-transport-idle-seconds = the reply went quiet for longer than the { $seconds } second gap allowed
+failure-transport-idle-minutes = the reply went quiet for longer than the { $minutes } minute gap allowed
+# Said last after a transport failure, naming the settings that change it. The first two are for a
+# request to a provider entry, the last two for an AWS account reached through the tier variables,
+# which has no setting for the window a failed connection is tried again in. The setting names are
+# not a translator's to reword.
+failure-transport-connection-entry-next = Raise `retryWindowMs` or `maxRetries` in the options of this provider entry to keep trying a failed connection for longer
+failure-transport-idle-entry-next = Raise `idleTimeoutMs` in the options of this provider entry to wait longer on a quiet reply, or `maxRetries` to send the request again more times
+failure-transport-connection-variable-next = Raise `BRAVEBOT_BEDROCK_MAX_RETRIES` to try a failed connection more times
+failure-transport-idle-variable-next = Raise `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` to wait longer on a quiet reply, or `BRAVEBOT_BEDROCK_MAX_RETRIES` to send the request again more times
+# The same two, for a reply that went quiet on a request the client never sends again, so no retry
+# count changes it and only the gap is named.
+failure-transport-idle-entry-gap-next = Raise `idleTimeoutMs` in the options of this provider entry to wait longer on a quiet reply. This request is not sent again, so the retry count does not change it
+failure-transport-idle-variable-gap-next = Raise `BRAVEBOT_BEDROCK_IDLE_TIMEOUT_MS` to wait longer on a quiet reply. This request is not sent again, so the retry count does not change it
+# Said last after a transport failure. What the turn did stays in the conversation and nothing carries
+# the turn on, so the next message the person sends starts from there (TURN-13).
+failure-transport-continue = A new message continues from what was already done
 failure-incomplete = the reply stopped before it was finished
 failure-undecodable = the reply could not be read
 # A failure the service reported that this build has no name for (BACKEND-37). Said with the next
 # step of failure-refused-next, and holds nothing the service wrote.
 failure-unrecognised = the service answered with a failure this build does not recognise
-failure-too-long = the model reached its output limit
-failure-too-long-at = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises
-failure-too-long-in-call = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, part way through a call to { $tool }, so the call was not made
-failure-too-long-in-a-call = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, part way through a tool call, so the call was not made
-failure-too-long-thinking = the model reached its output limit of { $tokens } tokens, which BRAVEBOT_OUTPUT_BUDGET raises, while it was still thinking
+# A reply that spent its output ceiling (BACKEND-37, BACKEND-42). Each line says the limit is on one
+# reply and not on the context window, since a person who reads it as the context filling up expects
+# compaction to have prevented it.
+failure-too-long = the model reached its output limit, which `BRAVEBOT_OUTPUT_BUDGET` raises; the limit is on one reply and not on the context window, so compaction does not change it
+failure-too-long-at = the model reached its output limit of { $tokens } tokens, which `BRAVEBOT_OUTPUT_BUDGET` raises; the limit is on one reply and not on the context window, so compaction does not change it
+failure-too-long-in-call = the model reached its output limit of { $tokens } tokens, which `BRAVEBOT_OUTPUT_BUDGET` raises, part way through a call to { $tool }, so the call was not made; the limit is on one reply and not on the context window, so compaction does not change it
+failure-too-long-in-a-call = the model reached its output limit of { $tokens } tokens, which `BRAVEBOT_OUTPUT_BUDGET` raises, part way through a tool call, so the call was not made; the limit is on one reply and not on the context window, so compaction does not change it
+failure-too-long-thinking = the model reached its output limit of { $tokens } tokens, which `BRAVEBOT_OUTPUT_BUDGET` raises, while it was still thinking; the limit is on one reply and not on the context window, so compaction does not change it
+# Said last after a too-long failure, in the terminal and in the desktop window. The setting name
+# in the lines above is not a translator's to reword.
+failure-too-long-next = Ask for the work in smaller parts, or raise the limit in the env block of ~/.bravebot/settings.json
 failure-unconfigured = nothing here was configured to send the request
 failure-blocked = a gate here would not let the request out
 failure-workspace = the workspace could not be used
@@ -4676,6 +4709,9 @@ failure-with-attempts = { $what }, after { $attempts } attempts
 # Said after the status and the count of an unauthorized failure, so the commands come last. The
 # first is for every credential but the premium key, and the second for a request that carried it.
 failure-with-next = { $what }. { $next }
+# The same steps joined into one sentence, for the desktop window's error card, which says a failure
+# in one sentence. The step begins in lower case here.
+failure-with-next-in-one = { $what }; { $next }
 failure-unauthorized-next = Run `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` to see the endpoint
 failure-premium-key-next = Run `bravebot auth login brave` to replace the premium key, or `bravebot auth logout brave` to send requests to the free endpoint instead. `bravebot auth status` shows the key in use
 # Said last after a rate limit. The first is for a request to a provider entry, which can state
