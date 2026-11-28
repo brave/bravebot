@@ -533,6 +533,7 @@ fr:skill-eval-with
 fr:skill-eval-without
 fr:skill-from-plugin
 fr:skill-model-unconfigured
+fr:skill-named-without-its-slash
 fr:status-mcp-servers-unread-manifest
 fr:status-sandbox-mode
 fr:status-server-openshell

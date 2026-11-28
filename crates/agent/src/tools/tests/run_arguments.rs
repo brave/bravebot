@@ -205,7 +205,10 @@ fn only_a_managed_closed_network_refuses_an_unconfined_request() {
 /// reference to feed it ([RUN-3]), which is a source rather than a second way to say what
 /// runs, `read` asks for what it printed in the same result ([RUN-22]), `scopes` names what
 /// the line is lent beyond the profile, from a fixed menu (SANDBOX-26), and `unconfined` asks for
-/// the line to start with no profile (SANDBOX-29).
+/// the line to start with no profile (SANDBOX-29). The `scopes` entry says that a stage with a
+/// `NAME=value` in front of its program gets none of the names, so a planner learns it before it
+/// writes such a line (SANDBOX-26). The regression it rejects is an entry that says only that the
+/// names are added to every stage.
 ///
 /// [RUN-3]: ../../../docs/specs/tools/run.md
 /// [RUN-22]: ../../../docs/specs/tools/run.md
@@ -245,6 +248,14 @@ fn run_takes_one_command_line_and_nothing_else() {
     assert_eq!(
         properties["scopes"]["items"]["enum"],
         serde_json::json!(bravebot_sandbox::scope::Requested::MENU)
+    );
+    let scopes = properties["scopes"]["description"].as_str().unwrap();
+    assert!(
+        scopes.contains(
+            "A stage with a NAME=value assignment in front of its program gets none of them, \
+             and a line where every stage has one is refused."
+        ),
+        "{scopes}"
     );
     assert_eq!(properties["command"]["type"], "string");
     assert_eq!(properties["background"]["type"], "boolean");

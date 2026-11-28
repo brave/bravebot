@@ -4524,6 +4524,51 @@ fn a_stage_with_an_assignment_gets_no_requested_scope() {
     );
 }
 
+/// SANDBOX-26: a request no stage is given, because every stage has an assignment in front of
+/// its program, is told apart from one a stage is given, and a line where one stage was given
+/// the request and an assigned stage was not carries the fixed sentence after a failure. The
+/// sentence quotes nothing of the line and names `git -c`, not `env`.
+///
+/// The regressions it rejects: a line refused because one stage of it has an assignment, though
+/// another stage was given the request; a request that a session with no home drops for that reason
+/// taken for this one; and a failure sentence silent about the assigned stage, so the planner
+/// retries with another scope.
+#[test]
+fn a_request_an_assigned_stage_is_not_given_is_named_to_the_planner() {
+    let mut assigned = step("/usr/bin/git", &["commit", "-m", "t"]);
+    assigned.environment = vec![("GIT_CONFIG_COUNT".to_string(), "1".to_string())];
+    let plain = step("/bin/cat", &[]);
+    let quiet = confinement(&["/work/project"]).with_mode(SandboxMode::Strict);
+    let asked = quiet
+        .clone()
+        .with_requested(&[Requested::Scope(Scope::Signing)]);
+
+    assert!(asked.request_reaches_no_stage(&[&assigned]));
+    assert!(asked.request_reaches_no_stage(&[&assigned, &assigned]));
+    assert!(!asked.request_reaches_no_stage(&[&assigned, &plain]));
+    assert!(!asked.request_reaches_no_stage(&[&plain]));
+    assert!(!quiet.request_reaches_no_stage(&[&assigned]));
+    let homeless = Confinement::new(
+        Prelude::Linux,
+        PathBuf::from("/tmp"),
+        None,
+        vec![PathBuf::from("/work/project")],
+        None,
+    )
+    .with_requested(&[Requested::Scope(Scope::Signing)]);
+    assert!(!homeless.request_reaches_no_stage(&[&assigned]));
+
+    let told = "A name in 'scopes' was not added to a stage of this line that has a NAME=value \
+                assignment in front of its program.";
+    let said = asked.profile(&[&assigned, &plain]);
+    assert!(said.contains(told), "{said}");
+    assert!(said.contains("`git -c name=value`"), "{said}");
+    assert!(!said.contains("GIT_CONFIG_COUNT"), "{said}");
+    assert!(!said.contains("env "), "{said}");
+    assert!(!asked.profile(&[&plain]).contains(told));
+    assert!(!quiet.profile(&[&assigned, &plain]).contains(told));
+}
+
 /// SANDBOX-26: a requested scope keeps a closed network for its stage, as a carried one does,
 /// a requested toolchain keeps it as one that fetches, and the trail names the stage and the
 /// fixed reason. The control is the same stage with no request, which has no network.

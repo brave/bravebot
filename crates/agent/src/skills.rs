@@ -805,24 +805,7 @@ impl Catalogue {
     /// supplied: the caller passes the person's own line and nothing else
     /// ([`crate::turn::Task::typed_by_a_person`] says which lines those are).
     pub fn named_in(&self, line: &str) -> Vec<Skill> {
-        const BEFORE: &[char] = &[
-            '(', '[', '{', '<', '"', '\'', '`', '\u{201c}', '\u{2018}', '\u{ab}',
-        ];
-        const AFTER: &[char] = &[
-            ')', ']', '}', '>', '"', '\'', '`', '.', ',', ';', ':', '!', '?', '\u{201d}',
-            '\u{2019}', '\u{bb}', '\u{2026}',
-        ];
-        // Each word once as written and once without its surroundings, so a name that itself ends in
-        // punctuation is still named as it is spelt.
-        let words: Vec<[&str; 2]> = line
-            .split_whitespace()
-            .map(|word| {
-                [
-                    word,
-                    word.trim_start_matches(BEFORE).trim_end_matches(AFTER),
-                ]
-            })
-            .collect();
+        let words = Self::words_of(line);
         self.entries
             .iter()
             .filter(|skill| skill.person_only)
@@ -831,6 +814,56 @@ impl Catalogue {
                 words.iter().any(|word| word.contains(&needle.as_str()))
             })
             .cloned()
+            .collect()
+    }
+
+    /// The person-only skills a line the person typed names by the bare name and not as `/name`, in
+    /// the order they were found, so the person can be told the skill loads only as `/name`
+    /// (SKILL-20).
+    ///
+    /// The words are split and trimmed as [`Catalogue::named_in`] splits and trims them, and a word
+    /// equals the name exactly, so `Name`, a prefix and a longer name select nothing. A skill the same
+    /// line names as `/name` is left out, since that line loads it. A name holding a space or a
+    /// control character is left out, since nobody can type it as `/name`. What this selects loads
+    /// nothing and reaches the planner by no route.
+    pub fn named_bare_in(&self, line: &str) -> Vec<Skill> {
+        let words = Self::words_of(line);
+        self.entries
+            .iter()
+            .filter(|skill| skill.person_only)
+            .filter(|skill| {
+                !skill
+                    .name
+                    .chars()
+                    .any(|c| c.is_whitespace() || c.is_control())
+            })
+            .filter(|skill| {
+                let slashed = format!("/{}", skill.name);
+                words.iter().any(|word| word.contains(&skill.name.as_str()))
+                    && !words.iter().any(|word| word.contains(&slashed.as_str()))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Each word of a line once as written and once without the quotes, brackets and sentence
+    /// punctuation around it, so a name that itself ends in punctuation is still named as it is
+    /// spelt. The one split [`Catalogue::named_in`] and [`Catalogue::named_bare_in`] share.
+    fn words_of(line: &str) -> Vec<[&str; 2]> {
+        const BEFORE: &[char] = &[
+            '(', '[', '{', '<', '"', '\'', '`', '\u{201c}', '\u{2018}', '\u{ab}',
+        ];
+        const AFTER: &[char] = &[
+            ')', ']', '}', '>', '"', '\'', '`', '.', ',', ';', ':', '!', '?', '\u{201d}',
+            '\u{2019}', '\u{bb}', '\u{2026}',
+        ];
+        line.split_whitespace()
+            .map(|word| {
+                [
+                    word,
+                    word.trim_start_matches(BEFORE).trim_end_matches(AFTER),
+                ]
+            })
             .collect()
     }
 

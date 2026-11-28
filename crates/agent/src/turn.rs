@@ -3042,6 +3042,14 @@ where
         true => catalogue.named_in(&task.prompt),
         false => Vec::new(),
     };
+    // A kept skill the same line names by its bare name, which loads nothing, so the person is told it
+    // loads only as /name. Taken from the same line under the same condition, and said to the person
+    // alone, so nothing of the skill reaches the planner by it (SKILL-20). Kept until the mode below
+    // is known, since a skill in force as the mode is in the system prompt and draws no note.
+    let named_bare = match task.typed_by_a_person() {
+        true => catalogue.named_bare_in(&task.prompt),
+        false => Vec::new(),
+    };
     // The skill `/mode` keeps applied, read again here so a skill whose file moved, or whose project
     // the map no longer vouches for, is not applied on the strength of an earlier turn. Taken from
     // the set the driver enumerated by its whole name and shown through the gate any skill's body
@@ -3060,6 +3068,12 @@ where
             )));
         }
     }
+    // The skill the mode applied is compared by the catalogue's name for it, which the driver
+    // enumerated, and no text of the line decides it.
+    let named_bare: Vec<_> = named_bare
+        .into_iter()
+        .filter(|skill| !matches!(&skill_mode, Some((name, _)) if *name == skill.name))
+        .collect();
     let catalogue = match named {
         Some(named) => catalogue.only(named),
         None => catalogue,
@@ -3536,6 +3550,11 @@ where
             (&skill.name, &skill.runs_as),
             pinned_by.as_deref(),
         );
+    }
+    for skill in &named_bare {
+        let said = t!(skill_named_without_its_slash, skill = skill.name.as_str()).to_string();
+        reporter.notice(said.clone());
+        notices.push(crate::skills::Notice::from_message(said));
     }
 
     // A plain prompt can begin with an internal-note prefix that recounting omits.

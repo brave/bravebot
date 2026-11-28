@@ -613,6 +613,18 @@ and `effort` apply from the first round, since it is in force before the first r
 skill the planner loads. The trail records the skill by name with the size of what went, and the
 person is told it was loaded, since no tool call is drawn for it ([SKILL-11](#SKILL-11)).
 
+**Named without the slash.** Where a prompt a person typed holds a word equal to the bare name of a
+skill kept from the planner, split, trimmed and matched exactly as a `/name` is, and the prompt does
+not also name that skill as `/name`, the person is told before the first request that the skill
+loads only when they type `/name`. The skill is not loaded and the turn goes on. The note goes to
+the person alone, so nothing of the skill, its name included, reaches the planner by it. A skill
+whose name holds a space or a control character draws no note, since `/name` cannot be typed for it.
+A skill in force as the mode `/mode` keeps applied draws no note, since it is in the system prompt
+of the turn ([SKILL-21](#SKILL-21)).
+The turn gives the note on each line that names the skill. The terminal client does not show again a
+note it has already shown in the session, until `/clear`, as for every notice. The desktop app shows
+the turn's notices when the turn ends.
+
 **Under a definition.** An addressed definition's `skills` line limits what its planner may load. It
 does not stop a skill the person names in their own line, which is supplied as in any other turn.
 
@@ -633,8 +645,9 @@ same key under the same name.
 
 **What it does not do.** The costs of this design are listed under Known costs: a line typed while a
 turn runs, the files beside a skill in a later turn, a loop's repeated line, a name inside a line that
-says not to run it, and a name that cannot be typed. A definition's
-`skills` line that names such a skill offers it to no delegate, and says so when the session starts.
+says not to run it, a name that cannot be typed, and a common word that is also a kept skill's name.
+A definition's `skills` line that names such a skill offers it to no delegate, and says so when the
+session starts.
 
 `verified-by: bravebot_agent::skills::only_a_true_value_keeps_a_skill_from_the_planner`
 `verified-by: bravebot_agent::skills::a_value_that_is_neither_true_nor_false_keeps_the_skill_from_the_planner_and_is_reported`
@@ -644,6 +657,14 @@ says not to run it, and a name that cannot be typed. A definition's
 `verified-by: bravebot_agent::skills::a_catalogue_of_kept_skills_alone_advertises_nothing`
 `verified-by: bravebot_agent::preamble::a_catalogue_holding_only_a_skill_kept_from_the_planner_has_no_section_of_skills`
 `verified-by: bravebot_agent::skills::a_line_names_a_kept_skill_only_by_its_whole_name_after_a_slash`
+`verified-by: bravebot_agent::skills::a_line_names_a_kept_skill_bare_only_by_its_whole_typeable_name`
+`verified-by: bravebot_agent::turn::a_kept_skill_named_without_its_slash_is_not_loaded_and_the_person_is_told_to_type_it`
+`verified-by: bravebot_agent::turn::a_kept_skill_the_line_also_names_with_its_slash_draws_no_note_to_type_it`
+`verified-by: bravebot_agent::turn::the_note_to_type_a_kept_skill_with_its_slash_is_said_before_the_turn_answers`
+`verified-by: bravebot_agent::turn::every_line_that_names_a_kept_skill_bare_draws_the_note`
+`verified-by: bravebot_agent::turn::a_kept_skill_in_force_as_the_mode_draws_no_note_when_a_line_names_it_bare`
+`verified-by: bravebot_agent::turn::a_kept_skill_named_bare_is_neither_found_nor_loaded_by_the_planner_that_looks_for_it`
+`verified-by: bravebot_agent::turn::a_delegate_task_that_names_a_kept_skill_bare_draws_no_note_and_loads_nothing`
 `verified-by: bravebot_agent::skills::a_trailing_comment_is_not_part_of_the_value`
 `verified-by: bravebot_agent::turn::a_skill_the_person_named_cannot_also_be_loaded_by_the_planner`
 `verified-by: bravebot_agent::turn::every_skill_a_line_names_is_supplied_and_no_other`
@@ -721,9 +742,23 @@ a project was vouched for from outliving the vouching.
   needs a file beside it asks the person to name the skill again. A project's skill has no such limit,
   since the trust map decides each of its files.
 
-- **A kept skill whose name holds a space or a control character is never loaded.** No word of a
-  line can equal such a name, so the key leaves the skill with nobody able to load it, and the box
-  does not offer it either ([CMD-9](commands.md#CMD-9)).
+- **A kept skill whose name holds a space or a control character cannot be named by typing.** A
+  line is split into words at whitespace, so no word of it equals a name holding a space. No key
+  types a control character into the box, so a person cannot type a name holding one; a line holds
+  one only where it came by another route, such as a paste. The key therefore leaves the skill with
+  nobody able to load it by typing its name, and the box does not offer it either
+  ([CMD-9](commands.md#CMD-9)).
+
+- **A word of a line that equals a kept skill's name draws the note to type `/name`, whatever the
+  line meant by it.** Where a skill kept from the planner is named `deploy`, the line "deploy the
+  branch" tells the person that the skill loads only when they type `/deploy` ([SKILL-20](#SKILL-20)),
+  although the line did not ask for the skill. The driver compares words with names and reads no
+  sentence, so it does not tell the two uses apart. The note loads nothing and the turn goes on. A
+  person who does not want the note gives the skill a name that is not a common word.
+
+- **In the desktop app the note to type `/name` arrives after the turn has run.** The desktop app
+  shows the turn's notices when the turn ends, so a person there cannot stop the turn on the note
+  and send the line again before the planner has spent its rounds ([SKILL-20](#SKILL-20)).
 
 - **Each turn that names the skill supplies it again.** A loop resends the line the person typed, so
   one that names a skill carries a copy of its instructions for every tick until a compaction sends

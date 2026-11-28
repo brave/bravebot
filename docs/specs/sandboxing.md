@@ -2321,6 +2321,20 @@ and whatever the step printed, and are said once for a line with several such st
 said on Linux or Windows, in a result whose steps all exited zero, under the mode `off`, or on a
 turn that confines no run.
 
+Where the planner asked for a name in `scopes` and a stage of the line has a `NAME=value` in front
+of its program, the sentence after a failed step also says, before the fixed text on credential
+locations, that a name in `scopes` was not added to a stage of this line that has such an
+assignment, and that git configuration is passed as `git -c name=value` instead of `GIT_CONFIG_*`
+assignments, or the assignment is dropped ([SANDBOX-26](#SANDBOX-26)). It does not name
+`env NAME=value <program>`. The words are fixed, quote nothing of the line and are the same for
+every failure. They are chosen from the menu names asked for, whether the session names a home and
+whether a compiled step has an assignment in front of it. A line that asked for nothing, and a
+session with no home, are told none of it. A line where every stage has such an assignment does
+not reach this sentence, since it is refused before it runs ([SANDBOX-26](#SANDBOX-26)).
+
+`verified-by: bravebot_agent::confine::tests::a_request_an_assigned_stage_is_not_given_is_named_to_the_planner`
+`verified-by: bravebot_agent::tools::tests::confinement::a_failed_line_with_an_assigned_stage_tells_the_planner_its_request_skipped_that_stage`
+
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
 cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from
 a fault in the machine, so it chases causes that do not apply and sends the person to run
@@ -3873,7 +3887,7 @@ because the path it names is the one the person was protecting.
 `verified-by: bravebot_agent::confine::a_bypass_stage_cannot_rename_the_directory_above_a_listed_refusal`
 
 <a id="SANDBOX-26"></a>
-### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time
+### SANDBOX-26: a `run` call may ask for a credential scope, a toolchain list or loopback by name, and the person is asked every time a stage would be given the request
 
 `run` takes an optional `scopes`: an array of names from the fixed menu `remote`, `signing`, `aws`,
 `kubernetes`, `docker`, `cargo`, `node`, `python`, `go`, `maven`, `gradle`, `gh`, `jk`, `loopback` and `ssh-key`. It is
@@ -3896,7 +3910,8 @@ the scope or toolchain list of the same name, with the rows, the egress under a 
 ([SANDBOX-20](#SANDBOX-20)) and the ssh agent socket that scope has when a stage's argv names it
 (`remote` and `signing` both have one), and the places the environment moves its tool's configuration to
 ([SANDBOX-16](#SANDBOX-16)), each named in the prompt with its variable. It is added to every stage
-of the line that has no `NAME=value` in front of it. A name outside the menu, compared exactly, is an error and nothing runs: `root`,
+of the line that has no `NAME=value` in front of it, and a line where every stage has one is refused
+(below). The `scopes` entry of the tool says both. A name outside the menu, compared exactly, is an error and nothing runs: `root`,
 `Remote` and the empty string are not requests for less.
 
 - Asked about every time. A line that asks is put to a person before any vouched entry, remembered
@@ -3904,6 +3919,8 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   each was added to. It offers no `a` or `r`, records no entry and vouches for no program, since an
   entry is a program, its arguments and a tree, and holds none of what the line was lent. The only
   answers that last past the line are the two that remember the scope as reach ([SANDBOX-27](#SANDBOX-27)).
+  The one exception is a line where every stage has a `NAME=value` in front of its program: it is
+  refused before anyone is asked, since no stage would be given any name it asked for.
 - What it prints is not trusted on a vouch's account: a line that asked for a scope has its output
   quarantined as an unvouched line's is ([RUN-4](tools/run.md#RUN-4)).
 - Accepted in `strict`, `read-only` and `workspace-write` ([SANDBOX-22](#SANDBOX-22)). `workspace-write` reads the machine
@@ -3925,12 +3942,25 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
   stays as it is; the two are written from the one list, so neither can name a cause the other does
   not. A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
   approves it, as it approves any run.
-- A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
-  carried one. A person's deny rules still beat the rows it adds ([SANDBOX-25](#SANDBOX-25)).
+- A stage with a `NAME=value` in front of it gets no requested scope, toolchain list, `loopback`
+  or `ssh-key`, for the reason it gets no carried scope. A person's deny rules still beat the rows a
+  request adds ([SANDBOX-25](#SANDBOX-25)).
+- A line where every stage has a `NAME=value` in front of its program, in a session that accepts
+  the request, is refused before the person is asked, whichever names it asked for. The planner
+  reads one fixed sentence: that a name in `scopes` is not added to such a stage, that every stage
+  of this line has one, so the line did not run, and that git configuration is passed as
+  `git -c name=value` instead of `GIT_CONFIG_*` assignments, or the assignment is dropped. It
+  quotes nothing of the line. It does not name `env NAME=value <program>`. The decision reads the
+  compiled steps and the menu words, and no output. A line where some stage has no `NAME=value` in
+  front of it runs as any other line that asked, and the sentence after a failed step says that a
+  stage with one was not given the request ([SANDBOX-19](#SANDBOX-19)).
 - The trail records the names and the stage each was added to under `requested_scopes`, built from
   menu words and stage numbers and nothing the plan chose. The credential scopes a person kept at an
   earlier prompt that a stage is lent are recorded apart, under the gate `kept_scopes`, so the trail
-  never says the planner asked for what a person kept ([SANDBOX-27](#SANDBOX-27)). The desktop sends
+  never says the planner asked for what a person kept ([SANDBOX-27](#SANDBOX-27)). A line refused
+  because every stage has a `NAME=value` in front of its program records a refusal under `sandbox`
+  naming `scopes` and that cause ([TRACE-1](trace.md#TRACE-1)), and the person watching is told the
+  same cause in a note. The desktop sends
   the names as `requestedScopes`, beside the confinement it draws, and offers no standing answer for
   such a line, nor for a line lent a kept scope.
 - A delegate's `run` has the same argument, the same refusals and the same question.
@@ -3961,6 +3991,9 @@ connect, and that it is not asked for from a line that has network access
 `verified-by: bravebot_agent::confine::tests::a_requested_scope_lifts_its_own_directory_for_a_stage_that_names_none`
 `verified-by: bravebot_agent::confine::tests::a_requested_toolchain_brings_its_caches`
 `verified-by: bravebot_agent::confine::tests::a_stage_with_an_assignment_gets_no_requested_scope`
+`verified-by: bravebot_agent::tools::tests::confinement::a_request_no_stage_would_be_given_is_refused_before_the_person_is_asked`
+`verified-by: bravebot_agent::confine::tests::a_request_an_assigned_stage_is_not_given_is_named_to_the_planner`
+`verified-by: bravebot_core::policy::a_refused_run_request_names_its_argument_and_every_cause_that_held`
 `verified-by: bravebot_agent::confine::tests::a_requested_scope_or_toolchain_keeps_a_closed_network_for_its_stage`
 `verified-by: bravebot_agent::confine::tests::a_requested_gh_lends_its_cache_and_keeps_a_closed_network_closed`
 `verified-by: bravebot_agent::confine::tests::a_requested_loopback_lends_loopback_and_no_network`

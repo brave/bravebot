@@ -4498,6 +4498,8 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // reason: the person answered, and what they are told back has to say that their answer did
     // not land rather than reading as the file simply being quarantined.
     let mut approval_outlived = false;
+    // Whether that answer was a mode's, so nobody was asked and the result says so.
+    let mut nobody_asked = false;
 
     // The extension and `stat` of a name decide whether the question is put only where the name is
     // the planner's own words. The name behind a reference came out of a directory nobody vouched
@@ -4619,6 +4621,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         }
         if decision == Decision::Approve {
             approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_stamp, answered_by);
+            nobody_asked = answered_by.is_some();
             // A record that outlived the yes would take it back on the next turn (MEMORY-5).
             if !approval_outlived {
                 crate::memory::trusted_again(
@@ -4644,7 +4647,20 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // A yes that arrived too late is said so, rather than left to read as a file nobody was asked
     // about. The bytes the answer was about are gone, so the only thing to do with the answer is
     // throw it away, and the person who gave it is owed the reason: reading again puts the question
-    // again, about what the file holds now.
+    // again, about what the file holds now. Where a mode answered, nobody was asked, and only a
+    // write to the path or a decision about it throws the answer away (TRUST-4), so the result says
+    // that instead.
+    if approval_outlived && nobody_asked {
+        return priced(confirmed(
+            format!(
+                "The permission mode answered the offer to vouch for {shown_path}, so nobody was \
+                 asked. {shown_path} was written, or a decision about it or a directory above it \
+                 was made, since this read began, so nothing was trusted. Read it again if you \
+                 still need it."
+            ),
+            format!("{shown_path} changed since the read began"),
+        ));
+    }
     if approval_outlived {
         return priced(confirmed(
             format!(
@@ -10963,6 +10979,16 @@ const NOT_ACCEPTING_REQUESTS: &str = "refused: this session does not accept a re
      credential scope or toolchain list. Run the line without 'scopes', and say what it needs \
      for the person to add.";
 
+/// What a request says that would be added to no stage, because every stage of the line has an
+/// assignment in front of its program (SANDBOX-26). Fixed words: nothing of the line is quoted, so
+/// the planner is told the cause and the working forms and reads no name or value it wrote back as
+/// the driver's. `env` in front of the program is not named.
+const REQUEST_REACHES_NO_STAGE: &str = "refused: a name in 'scopes' is not added to a stage that \
+     has a NAME=value assignment in front of its program, and every stage of this line has one, \
+     so the request would add nothing and the line did not run. Pass git configuration as \
+     `git -c name=value` instead of GIT_CONFIG_* assignments, or drop the assignment, and run the \
+     line again.";
+
 /// What a refused request to run one line with no sandbox says, whatever refused it: the planner
 /// learns that the line did not run and not which setting withheld it. It does not name the
 /// argument: the planner learns that from the `run` description (SANDBOX-29).
@@ -11471,6 +11497,19 @@ fn settle_the_confinement<S: Sink>(
         return Err(Box::new(Produced::refused_with_a_note(
             NOT_ACCEPTING_REQUESTS,
             format!("refused, 'scopes' is not accepted: {causes}"),
+        )));
+    }
+    // A request no stage would be given, because every stage has an assignment in front of its
+    // program, is refused before the person is asked, since the person would be asked about a
+    // request that adds nothing. Decided from the compiled steps and the menu words (SANDBOX-26).
+    if confinement
+        .as_ref()
+        .is_some_and(|confinement| confinement.request_reaches_no_stage(&plan.steps()))
+    {
+        let causes = policy.refuse_run_request("scopes", &[RunRequestCause::EveryStageAssigned]);
+        return Err(Box::new(Produced::refused_with_a_note(
+            REQUEST_REACHES_NO_STAGE,
+            format!("refused, 'scopes' adds nothing to this line: {causes}"),
         )));
     }
     // Accepted after a line has failed with the sandbox on, or for a line whose own redirection

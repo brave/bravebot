@@ -9,10 +9,14 @@ use bravebot_core::file_authority::FileAuthority;
 use bravebot_core::policy::{ReleasePlan, Routing};
 
 /// Answers a vouch question yes, after starting a `run` line on the first question when it
-/// holds an authority to start one on. Counts the questions it was asked. Every other
-/// question is Unattended's.
+/// holds an authority to start one on, and after distrusting `note.txt` on the first question
+/// when it holds an authority to do that on. Says the answer was `mode`'s, where that is set,
+/// as a permission mode answering for the user does. Counts the questions it was asked. Every
+/// other question is Unattended's.
 struct SaysYes {
     starts_a_program_on: Option<FileAuthority>,
+    distrusts_the_note_on: Option<FileAuthority>,
+    mode: Option<&'static str>,
     asked: usize,
 }
 
@@ -22,7 +26,16 @@ impl Confirmer for SaysYes {
         if let Some(authority) = self.starts_a_program_on.take() {
             authority.note_program_started();
         }
+        if let Some(authority) = self.distrusts_the_note_on.take() {
+            authority.publish("note.txt", bravebot_core::label::Integrity::Untrusted);
+        }
         Decision::Approve
+    }
+    fn confirm_vouch_noting_the_mode(
+        &mut self,
+        request: &VouchRequest,
+    ) -> (Decision, Option<&'static str>) {
+        (self.confirm_vouch(request), self.mode)
     }
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         Unattended.confirm_write(request)
@@ -80,11 +93,33 @@ impl Confirmer for SaysYes {
     }
 }
 
+/// What happens while the first vouch question is open.
+#[derive(Clone, Copy)]
+enum Meanwhile {
+    Nothing,
+    AProgramStarts,
+    TheNoteIsDistrusted,
+}
+
 /// Reads `note.txt`, which nobody vouched for, `reads` times in one turn with a person who
 /// answers yes, in bypass so that no confined check is made. Returns what the planner was
 /// told by each read, whether the file is still quarantined afterwards, and how many times
 /// the person was asked, and the trail.
 fn read_note(starts_a_program: bool, reads: usize) -> (Vec<String>, bool, usize, String) {
+    let meanwhile = match starts_a_program {
+        true => Meanwhile::AProgramStarts,
+        false => Meanwhile::Nothing,
+    };
+    read_note_answered_by(None, meanwhile, reads)
+}
+
+/// [`read_note`], with the answer said to be `mode`'s where that is set, and `meanwhile`
+/// happening while the first question is open.
+fn read_note_answered_by(
+    mode: Option<&'static str>,
+    meanwhile: Meanwhile,
+    reads: usize,
+) -> (Vec<String>, bool, usize, String) {
     let scratch = Scratch::new("vouch-after-program");
     std::fs::write(scratch.path.join("note.txt"), "a line\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -99,7 +134,11 @@ fn read_note(starts_a_program: bool, reads: usize) -> (Vec<String>, bool, usize,
     )
     .expect("policy");
     let mut person = SaysYes {
-        starts_a_program_on: starts_a_program.then(|| policy.file_authority()),
+        starts_a_program_on: matches!(meanwhile, Meanwhile::AProgramStarts)
+            .then(|| policy.file_authority()),
+        distrusts_the_note_on: matches!(meanwhile, Meanwhile::TheNoteIsDistrusted)
+            .then(|| policy.file_authority()),
+        mode,
         asked: 0,
     };
     let call: ToolCall = serde_json::from_value(json!({
@@ -144,6 +183,80 @@ fn read_note(starts_a_program: bool, reads: usize) -> (Vec<String>, bool, usize,
 fn read_while(starts_a_program: bool) -> (String, bool, usize) {
     let (mut said, still_quarantined, asked, _) = read_note(starts_a_program, 1);
     (said.remove(0), still_quarantined, asked)
+}
+
+/// The regression it rejects: a `run` line another delegate started voiding a vouch a mode
+/// answered. Nobody read a preview, so no program can have rewritten what somebody was shown,
+/// and under bypass with delegates running commands a read that compared the whole stamp would
+/// fail on every retry. `a_yes_is_not_spent_when_a_program_started_while_the_person_was_asked`
+/// is the control: it answers in bypass with no mode named, so it also rejects deciding who
+/// answered from the mode read before the question instead of from the answer (MODE-8).
+#[test]
+fn a_yes_the_mode_gave_is_spent_when_a_program_started_while_the_question_was_open() {
+    let (said, still_quarantined, asked, trail) =
+        read_note_answered_by(Some("bypass"), Meanwhile::AProgramStarts, 1);
+    let said = &said[0];
+    assert_eq!(asked, 1, "{said}");
+    assert!(
+        !still_quarantined,
+        "a mode's yes was thrown away for a program started beside it: {said}"
+    );
+    assert!(
+        !said.contains("changed while the user was being asked about it"),
+        "the planner was told a person was asked: {said}"
+    );
+    assert!(
+        trail.contains("bypass mode answered the offer to vouch"),
+        "the trail does not credit the mode: {trail}"
+    );
+}
+
+/// The regression it rejects: a mode's answer spent after the path's own revision moved, which
+/// TRUST-4 forbids whoever answered, and a refusal that tells the planner a person was asked
+/// when a mode answered. The result says nobody was asked, that the file was written or decided
+/// about since the read began, and to read it again, and says nothing about a command starting,
+/// which does not void a mode's answer (TRUST-4). The second read rejects keeping the path
+/// marked as asked about after a mode's answer was thrown away: it has to offer the path again.
+#[test]
+fn a_yes_the_mode_gave_is_not_spent_on_a_file_whose_revision_moved_while_the_question_was_open() {
+    let (said, still_quarantined, asked, _) =
+        read_note_answered_by(Some("bypass"), Meanwhile::TheNoteIsDistrusted, 1);
+    let (said_twice, _, asked_twice, _) =
+        read_note_answered_by(Some("bypass"), Meanwhile::TheNoteIsDistrusted, 2);
+    assert_eq!(
+        asked_twice, 2,
+        "the second read did not offer the path again: {}",
+        said_twice[1]
+    );
+    let said = &said[0];
+    assert_eq!(asked, 1, "{said}");
+    assert!(
+        still_quarantined,
+        "a mode's yes was spent on a file written after it was asked about: {said}"
+    );
+    assert!(
+        !said.contains("being asked"),
+        "the planner was told a person was asked: {said}"
+    );
+    assert!(
+        said.contains("nobody was asked"),
+        "the planner was not told nobody was asked: {said}"
+    );
+    assert!(
+        said.contains(
+            "was written, or a decision about it or a directory above it was made, since this \
+             read began"
+        ),
+        "the planner was not told why the answer was thrown away: {said}"
+    );
+    assert!(
+        said.contains("Read it again"),
+        "the planner was not told to read it again: {said}"
+    );
+    assert!(
+        !said.contains("command"),
+        "the planner was told a command voided the answer: {said}"
+    );
 }
 
 /// The regression it rejects: `read_file` passing the vouch only the path's revision, or

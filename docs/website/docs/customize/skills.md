@@ -153,7 +153,8 @@ session tells you the skill was loaded, since no tool call is drawn for it.
 
 Only a word of your own line that is `/release` names the skill, with any quotes, brackets or sentence
 punctuation around it, so `run /release.` and `run (/release)` work and `/Release`, `/releases` and
-`release` do not. A task a delegate was given, a line bravebot composed itself and text inside a file
+`release` do not. Naming the skill without the slash loads nothing, and you are told to type
+`/release`. A task a delegate was given, a line bravebot composed itself and text inside a file
 or a tool result never name one, and a delegate is never offered such a skill, even where its
 definition's `skills` line names it.
 

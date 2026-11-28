@@ -178,7 +178,8 @@ A `run` call that asks for no sandbox (`unconfined`) or for a credential scope (
 refused gets a blocked `sandbox` line naming the argument and every cause that held. The planner is
 told one sentence that names no setting, so this line is where to read which one withheld the
 request: the sandbox mode, a workspace you have not trusted, a managed closed network, a delegate,
-or for `scopes` a platform with no sandbox or a session with no profile directory. Under sandbox mode
+or for `scopes` a platform with no sandbox, a session with no profile directory, or a line where
+every stage has a `NAME=value` in front of its program. Under sandbox mode
 `off` and in a turn that confines none of its runs, a request is accepted and ignored, so it gets no
 blocked line. A credential scope you kept at an earlier prompt that a later line is lent is recorded apart, under `kept_scopes`, so the trail never says the planner asked for what you kept.
 

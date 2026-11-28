@@ -360,6 +360,11 @@ The same holds for a line a stage of which is lent a credential scope a person k
 prompt ([SANDBOX-27](../sandboxing.md#SANDBOX-27)): it is asked about whatever answers the same line
 without the scope, and no answer to it is kept.
 The same holds for a line whose call asks to run with no sandbox ([SANDBOX-29](../sandboxing.md#SANDBOX-29)).
+In a session that accepts the request, a line that asks for a name in `scopes` and has a
+`NAME=value` in front of the program of every stage is refused before anyone is asked, since no
+stage would be given the name ([SANDBOX-26](../sandboxing.md#SANDBOX-26)). Under the mode `off`, and
+in a turn that confines none of its runs, the request is accepted and dropped in a trusted
+workspace, and the line is asked about as a line that asked for nothing is.
 
 **Why.** An unprompted write is worse than an unwanted prompt, so nothing that could be wrong about
 a write may answer the question. The middle two are the same authority the first road has, exercised
@@ -378,6 +383,8 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_core::policy::a_line_reading_an_unvouched_path_still_asks`
 `verified-by: bravebot_core::policy::one_step_nothing_can_account_for_makes_the_whole_line_opaque`
 `verified-by: bravebot_core::policy::a_vouched_line_that_asks_for_a_scope_is_asked_about_anyway`
+`verified-by: bravebot_agent::tools::tests::confinement::a_request_no_stage_would_be_given_is_refused_before_the_person_is_asked`
+`verified-by: bravebot_agent::tools::tests::confinement::a_request_where_no_profile_applies_is_accepted_and_dropped`
 `verified-by: bravebot_core::policy::a_line_lent_a_kept_scope_is_asked_about_whatever_covers_the_line_without_it`
 `verified-by: bravebot_agent::turn::a_kept_credential_scope_asks_about_a_later_vouched_line_and_quarantines_its_output`
 `verified-by: bravebot_core::policy::a_held_line_in_a_directory_whose_yes_said_so_does_not_ask`
