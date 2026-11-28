@@ -719,6 +719,13 @@ count, except that a run stopped at a limit (CLI-38) reports the rounds it made,
 The object takes the reply's place on stdout and nothing else goes there. Progress, the message and
 the trail stay on stderr, exactly as they are without the flag.
 
+Where the run failed because the service would not accept the credentials (a 401 or a 403), the
+message, and the line on stderr after the identifier, is the sentence the terminal shows for that
+failure ([BACKEND-37](backends.md#BACKEND-37)): that the credentials were not accepted, the status,
+and the commands that show the sign-in or key in use and the endpoint, or the commands that replace
+the premium key or send requests to the free endpoint where the request carried it. It holds no
+address and none of the service's words.
+
 It carries a schema number. Within one number a field may be added, and never removed, renamed or
 given a different meaning, so a caller reading the fields it knows keeps working. `structured`
 (CLI-28) is such a field: the reply as a JSON value when the run was given `--output-schema`, and
@@ -758,6 +765,8 @@ what may change, every field is either frozen by accident or broken without warn
 `verified-by: bravebot_cli::main::an_mcp_call_nobody_could_be_asked_about_counts_for_the_status_and_is_listed_once`
 `verified-by: bravebot_cli::running::an_unapproved_run_line_is_listed_once_not_twice`
 `verified-by: bravebot_cli::running::a_run_that_has_spent_max_tokens_sends_no_further_request_and_ends_on_status_eight`
+`verified-by: bravebot_cli::running::a_refused_credential_is_reported_by_the_one_shot_run_as_the_terminal_says_it`
+`verified-by: bravebot_cli::main::a_refused_premium_key_is_worded_with_the_commands_that_replace_it`
 
 <a id="CLI-13"></a>
 ### CLI-13: `--settings` names a file that outranks every layer found

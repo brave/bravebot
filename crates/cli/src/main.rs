@@ -2351,7 +2351,8 @@ fn report_a_failed_turn(
     };
     // A failure can name a path, a model or a definition a checkout chose, so the copy on stderr
     // is drawn (LAYER-3). The result object below keeps the text as it is.
-    let stopped = fail(ending, progress::printable_lines(&error.to_string()));
+    let message = failure_message(error);
+    let stopped = fail(ending, progress::printable_lines(&message));
     say_notices(&mut std::io::stderr().lock(), reporter.notices());
     // The trail, where `--trace` asked for one, was written as the gates ran.
     if let Some(attempt) = attempt {
@@ -2360,7 +2361,7 @@ fn report_a_failed_turn(
     if as_json {
         say_the_result(&what_ran(
             ending,
-            &error.to_string(),
+            &message,
             error
                 .limit_reached()
                 .map_or(0, bravebot_agent::turn::LimitReached::rounds),
@@ -2371,6 +2372,34 @@ fn report_a_failed_turn(
         ));
     }
     stopped
+}
+
+/// The sentence a failed turn is reported with, on stderr and as the result object's `message`.
+///
+/// A service that refused the credentials (a 401 or a 403) is said as the terminal says it: that the
+/// credentials were not accepted, with the commands that replace or drop the premium key where the
+/// request carried it (BACKEND-37). The error's own text for it is the address and the status, which
+/// names no credential and no command, and an address can hold one. The sentence still says the
+/// status, as `(HTTP 401)`. Every other failure keeps the error's own text, which for a missing
+/// gateway key or a refused flag says more than its category does.
+fn failure_message(error: &bravebot_agent::TurnError) -> String {
+    match error.ending() {
+        bravebot_agent::Ending::Failed(diagnosis)
+            if diagnosis.category == bravebot_agent::Category::Unauthorized
+                && diagnosis.status.is_some()
+                && diagnosis.account.is_none() =>
+        {
+            // No model and no cut-off: only a refused request names a model, and only a reply
+            // that spent its ceiling has a cut-off.
+            bravebot_session::sessions::failure_words(
+                diagnosis,
+                None,
+                None,
+                bravebot_session::sessions::Joined::Sentences,
+            )
+        }
+        _ => error.to_string(),
+    }
 }
 
 /// The calls that build a one-shot run's task off the settings, and the sandbox and vetting state
@@ -4559,6 +4588,57 @@ mod tests {
             refused,
             "a cancelled turn with no question is not a refusal"
         );
+    }
+
+    /// CLI-12, BACKEND-37: the message of a run whose credentials were refused is the sentence the
+    /// terminal shows, and for a request that carried the premium key it names the commands that
+    /// replace the key or send requests to the free endpoint. A premium host has to be one of Brave's,
+    /// so no run against a local service can carry the key, and the variant that marks it is built
+    /// here. Every other failure keeps the error's own text.
+    ///
+    /// The regressions it rejects are a refused premium key worded with the generic commands, the
+    /// premium commands worded for a refusal of any other credential, the address left in the
+    /// message, and a failure that is not a refused credential worded as one.
+    #[test]
+    fn a_refused_premium_key_is_worded_with_the_commands_that_replace_it() {
+        use bravebot_agent::backend::BackendError;
+        let refusal = |status: u16| {
+            BackendError::Aichat(
+                bravebot_net::EgressError::Status {
+                    url: "https://premium.example.invalid/v1/chat/completions".to_string(),
+                    status,
+                    retry_after: None,
+                    body: None,
+                }
+                .into(),
+            )
+        };
+        for status in [401, 403] {
+            let carried = failure_message(&bravebot_agent::TurnError::Chat(
+                BackendError::PremiumKey(Box::new(refusal(status))),
+            ));
+            assert_eq!(
+                carried,
+                format!(
+                    "the service would not accept the credentials (HTTP {status}). Run \
+                     `bravebot auth login brave` to replace the premium key, or `bravebot auth \
+                     logout brave` to send requests to the free endpoint instead. `bravebot auth \
+                     status` shows the key in use"
+                )
+            );
+            let other = failure_message(&bravebot_agent::TurnError::Chat(refusal(status)));
+            assert!(other.contains("`bravebot auth status` to see"), "{other}");
+            assert!(!other.contains("auth login brave"), "{other}");
+            for said in [&carried, &other] {
+                assert!(!said.contains("example.invalid"), "{said}");
+                assert!(!said.contains("returned HTTP"), "{said}");
+            }
+        }
+        // Not a refused credential: the message is the error's own text.
+        let unavailable = bravebot_agent::TurnError::Chat(refusal(503));
+        assert_eq!(failure_message(&unavailable), unavailable.to_string());
+        let cancelled = bravebot_agent::TurnError::Cancelled { attempts: None };
+        assert_eq!(failure_message(&cancelled), "cancelled");
     }
 
     fn a_question(text: &str) -> bravebot_core::ask::Asking {
