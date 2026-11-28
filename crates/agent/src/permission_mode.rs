@@ -109,6 +109,13 @@ impl PermissionMode {
         self == Self::Bypass
     }
 
+    /// Whether an offer to vouch for a file is answered yes without drawing a prompt (MODE-4).
+    /// [`Unasked::vouch`] answers from this, and [`LiveMode::answers_a_vouch`] says from it
+    /// whether a run nobody watches can have the offer answered.
+    pub fn answers_a_vouch_unasked(self) -> bool {
+        self == Self::Bypass
+    }
+
     /// Whether this request's prompt is answered yes without being drawn.
     ///
     /// A line that asked to start with no sandbox is the exception: the permission mode never
@@ -482,6 +489,14 @@ impl LiveMode {
     pub fn answers_requests(&self) -> bool {
         !self.nobody_to_ask || self.get().answers_a_run_unasked()
     }
+
+    /// Whether an offer to vouch for a file that `read_file` makes can be answered in this run:
+    /// there is somebody to ask, or the mode is the one that answers the offer unasked
+    /// ([`Unasked::vouch`]). Where nobody can be asked otherwise, the confirmer refuses the offer
+    /// (CLI-1), so a sentence that sends the planner to it points at a refusal.
+    pub fn answers_a_vouch(&self) -> bool {
+        !self.nobody_to_ask || self.get().answers_a_vouch_unasked()
+    }
 }
 
 impl Default for LiveMode {
@@ -697,13 +712,8 @@ impl Unasked {
     /// The answer and the name of the mode that gave it. See [`Confining::confirm_vouch`].
     pub fn vouch(&self) -> Option<(Decision, &'static str)> {
         let mode = self.mode.get();
-        match mode {
-            PermissionMode::Bypass => Some((Decision::Approve, mode.name())),
-            PermissionMode::Ask
-            | PermissionMode::AcceptEdits
-            | PermissionMode::Plan
-            | PermissionMode::Auto => None,
-        }
+        mode.answers_a_vouch_unasked()
+            .then(|| (Decision::Approve, mode.name()))
     }
 
     /// The answer and the name of the mode that gave it. See [`Confining::confirm_exposing_read`].
@@ -2335,6 +2345,35 @@ mod tests {
                 (Decision::Reject, None),
                 "{mode:?} approved an offer to vouch its confirmer refused"
             );
+        }
+    }
+
+    /// CLI-1, MODE-4: an offer to vouch can be answered in every mode where somebody can be asked,
+    /// and where nobody can be, only in bypass, which answers it unasked. Each answer is checked
+    /// against what the confirmer of that run gives the offer. The regressions it rejects are an
+    /// answer keyed on the mode alone (false for an attended run that asks) and one keyed on
+    /// whether somebody can be asked alone (false for an unattended run in bypass, whose offer is
+    /// approved).
+    #[test]
+    fn an_offer_to_vouch_can_be_answered_where_somebody_is_asked_or_the_mode_answers_it() {
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Bypass,
+            PermissionMode::Auto,
+        ] {
+            assert!(LiveMode::new(mode).answers_a_vouch(), "{mode:?}, attended");
+            let unattended = LiveMode::unattended(mode);
+            let mut refusing = Unattended;
+            let mut confining = Confining::new(&mut refusing, unattended.clone(), false);
+            let approved = confining.confirm_vouch(&a_vouch(Verdict::Safe)) == Decision::Approve;
+            assert_eq!(
+                unattended.answers_a_vouch(),
+                approved,
+                "{mode:?}, unattended"
+            );
+            assert_eq!(approved, mode == PermissionMode::Bypass, "{mode:?}");
         }
     }
 

@@ -484,6 +484,32 @@ pub(super) fn read_would_release(
     }
 }
 
+/// What a quarantined `search` result says to a run offered `read_file` and not `vet_content`,
+/// which a delegate is: a `read_file` of a path it types offers to vouch for the file (TRUST-8),
+/// which is the one way such a run has to read it. Where nobody can be asked and the mode does not
+/// answer the offer (CLI-1) the offer is refused, so nothing is said, and a run offered
+/// `vet_content` is told of `read: true` or of `vet_content` instead.
+///
+/// Decided from the tool's name, the offered list and whether the offer can be answered, which the
+/// turn reads once from the mode when it starts, never from what the result holds. It names no
+/// mode, because a person and the bypass mode both answer the offer.
+pub(super) fn read_file_would_vouch(
+    tool: &str,
+    beside: Beside,
+    vouch_answerable: bool,
+) -> &'static str {
+    if tool == "search"
+        && beside.holds(Named::ReadFile)
+        && !beside.holds(Named::VetContent)
+        && vouch_answerable
+    {
+        "\n\nTo read a file yourself, give read_file its path: read_file offers to vouch for a file \
+         nobody vouched for, and shows you what it holds where the offer is accepted."
+    } else {
+        ""
+    }
+}
+
 /// Where git ran in a directory whose repository `read_git` opens: the output of git log or show
 /// is what `read_git` answers with nobody asked, and for any other program, or a repository it
 /// declines, the sentence is noise. `ran_git` is decided by the caller and not when the line ran,
@@ -1138,6 +1164,32 @@ mod tests {
         .into_iter()
         .filter(|(name, _)| names.contains(name))
         .fold(Beside::every(), |beside, (_, named)| beside.without(named))
+    }
+
+    /// SEARCH-2, DELEGATE-12, D3 of #4722: a search in a run offered read_file and not
+    /// vet_content, which a delegate is, is told that read_file of a path offers to vouch for the
+    /// file, and nothing is said where any one of the three conditions fails. The faults it rejects
+    /// are the sentence keyed on one or two of the three facts: said to a run that holds
+    /// vet_content (which has read: true and vet_content), to one with no read_file (TOOL-6), to one
+    /// where nobody can answer the offer to vouch (the offer is refused), or for a tool that is not
+    /// search.
+    #[test]
+    fn a_search_names_read_file_only_where_it_is_the_one_route_and_can_be_answered() {
+        let delegate = Beside::every().without(Named::VetContent);
+        let said = read_file_would_vouch("search", delegate, true);
+        assert!(said.contains("give read_file its path"), "{said}");
+        assert!(said.contains("offers to vouch for a file"), "{said}");
+        assert!(!said.contains("vet_content"), "{said}");
+        assert!(!said.contains("bypass"), "{said}");
+        assert_eq!(read_file_would_vouch("search", Beside::every(), true), "");
+        assert_eq!(
+            read_file_would_vouch("search", delegate.without(Named::ReadFile), true),
+            ""
+        );
+        assert_eq!(read_file_would_vouch("search", delegate, false), "");
+        for tool in ["list_files", "read_file", "run", "fetch_url"] {
+            assert_eq!(read_file_would_vouch(tool, delegate, true), "", "{tool}");
+        }
     }
 
     /// R31: a list that holds every tool reads what it always read, for every mode, record state,

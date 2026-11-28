@@ -1552,6 +1552,9 @@ pub struct Policy<'sink, S: Sink> {
     /// Whether nobody can be asked in this run, a one-shot command or a pipeline (CLI-1), so a
     /// refusal for a path outside the workspace names no directory to open and no file to drop.
     nobody_to_ask: bool,
+    /// Whether an offer to vouch that `read_file` makes can be answered in this run: somebody can
+    /// be asked, or the mode answers it unasked. Copied onto each reference made here.
+    vouch_answerable: bool,
     /// The names this run's definition, and every one above it, allowed it to start, where any
     /// named some (DELEGATE-30). The set a turn resolves is narrowed to these wherever it is
     /// installed, and a delegate it starts carries them on, so a child cannot start what the file
@@ -1728,6 +1731,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             reading_offered: true,
             reading_files_offered: true,
             nobody_to_ask: false,
+            vouch_answerable: true,
             spawns: None,
             write_limits: Vec::new(),
             spawned: 0,
@@ -2885,6 +2889,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             reading_offered: self.reading_offered,
             reading_files_offered: self.reading_files_offered,
             nobody_to_ask: self.nobody_to_ask,
+            vouch_answerable: self.vouch_answerable,
             spawns: self.spawns.clone(),
             write_limits: self.write_limits.clone(),
             spawned: self.spawned,
@@ -3692,6 +3697,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.nobody_to_ask
     }
 
+    /// Say that an offer to vouch that `read_file` makes cannot be answered in this run: nobody
+    /// can be asked and the mode does not answer it (CLI-1), so a reference made from here on does
+    /// not send the planner to it. Told by the turn when its list is settled, as
+    /// [`Policy::without_vetting`] is. [`Policy::nobody_to_ask`] is a separate fact: an unattended
+    /// run in bypass has nobody to ask and still has the offer answered, by the mode.
+    pub fn without_an_answer_to_a_vouch(&mut self) {
+        self.vouch_answerable = false;
+    }
+
+    /// Whether an offer to vouch that `read_file` makes can be answered in this run, which text
+    /// that sends the planner to that offer reads.
+    pub fn vouch_is_answerable(&self) -> bool {
+        self.vouch_answerable
+    }
+
     /// Whether a reference the run holds can be given to a processor: the run is offered
     /// `spawn_processor`. Text that tells the planner what to do with a reference reads this where
     /// it is written by hand.
@@ -3716,7 +3736,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     /// A reference made now, marked as sending nobody to a tool the run is not offered:
-    /// `vet_content`, `spawn_processor`, `write_file` or `read_output`.
+    /// `vet_content`, `spawn_processor`, `write_file` or `read_output`, nor to an offer to vouch in
+    /// a run where nobody can answer it.
     fn made_here(&self, reference: crate::reference::Reference) -> crate::reference::Reference {
         let reference = if self.vetting_offered {
             reference
@@ -3738,10 +3759,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         } else {
             reference.without_reading()
         };
-        if self.reading_files_offered {
+        let reference = if self.reading_files_offered {
             reference
         } else {
             reference.without_read_file()
+        };
+        if self.vouch_answerable {
+            reference
+        } else {
+            reference.without_an_answer_to_a_vouch()
         }
     }
 

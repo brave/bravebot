@@ -167,7 +167,10 @@ fn a_resumed_session_tells_the_planner_on_its_first_turn_only() {
     record.work.count(false, true, true);
 
     let mut resumed = State::resumed(&project, &record, TrustStore::new(&project)).unwrap();
-    let said = resumed.open_loops.for_the_planner();
+    let said = resumed
+        .open_loops
+        .for_the_planner()
+        .and_then(|loops| loops.to_the_planner());
     assert!(
         said.as_deref()
             .is_some_and(|said| said.contains("the last command failed")),
@@ -278,7 +281,10 @@ fn a_written_file_not_committed_is_told_on_the_next_turn_and_on_resume() {
     drop(state);
     let record = bravebot_session::sessions::load(&project, &id).unwrap();
     let mut resumed = State::resumed(&project, &record, TrustStore::new(&project)).unwrap();
-    let said = resumed.open_loops.for_the_planner();
+    let said = resumed
+        .open_loops
+        .for_the_planner()
+        .and_then(|loops| loops.to_the_planner());
     assert!(
         said.as_deref()
             .is_some_and(|said| said.contains("1 file not committed")),
@@ -374,7 +380,13 @@ fn a_kept_checkout_taken_back_on_resume_is_told_to_the_planner() {
         &crate::settings::layers(Some(&project), None),
     );
 
-    let said = open.state.lock().unwrap().open_loops.for_the_planner();
+    let said = open
+        .state
+        .lock()
+        .unwrap()
+        .open_loops
+        .for_the_planner()
+        .and_then(|loops| loops.to_the_planner());
     assert!(
         said.as_deref()
             .is_some_and(|said| said.contains("1 kept checkout")),
@@ -420,7 +432,8 @@ fn undoing_a_turn_tells_the_planner_of_the_loops_left_open() {
         .lock()
         .unwrap()
         .open_loops
-        .for_the_planner();
+        .for_the_planner()
+        .and_then(|loops| loops.to_the_planner());
     // Nothing told reads as empty, which the first assertion rejects.
     let said = said.unwrap_or_default();
     assert!(

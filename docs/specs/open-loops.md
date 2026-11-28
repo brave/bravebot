@@ -135,6 +135,10 @@ When the set of open loops has changed since the planner was last told, the next
 
 It is fixed text with counts and the job names bravebot minted ([RUN-15](tools/run.md#RUN-15)). It holds no path, no command and no todo text. It asks nothing and requires nothing: the planner may decide a loop no longer matters.
 
+The running jobs it names are the ones still running when the message is sent, in the turn's first round after the finishes of jobs that ended between turns are told ([CMDLINE-14](tools/command-line.md#CMDLINE-14)). A job whose finish is told in that round is not named as running, and where it was the only open loop no message is sent.
+
+The record of what the planner was told keeps the set the last turn ended with, so where a job ended between turns the next turn after can repeat the message about the other loops once.
+
 In the desktop app, undoing a turn tells the planner again: the next turn begins with the loops the session now leaves open, whether or not they changed, because the rewound conversation may no longer hold the message it was last told. Undoing the only turn leaves nothing open, so nothing is told.
 
 **Why at the start, not the end.** At the end of a turn the planner has stopped. At the start of the next one it is deciding what to do, and the message survives compaction because it is sent fresh.
@@ -142,6 +146,8 @@ In the desktop app, undoing a turn tells the planner again: the next turn begins
 **Why the planner's loops only as work.** The person's loops are named so the planner does not try to commit or apply a checkout on its own. Telling it about them as its work would invite exactly that.
 
 `verified-by: bravebot_agent::turn::the_next_turn_begins_with_the_open_loops_that_changed`
+`verified-by: bravebot_agent::turn::a_job_whose_finish_is_told_is_not_named_as_running_in_the_open_loops`
+`verified-by: bravebot_tui::kept_jobs_tests::a_job_that_exited_between_turns_is_not_named_as_running_to_the_planner`
 `verified-by: bravebot_tui::state::open_loops::loops_the_planner_was_already_told_about_are_not_repeated`
 `verified-by: bravebot_agent::open_loops::the_planners_message_is_fixed_text_and_counts`
 `verified-by: bravebot_ui_bridge::open_loops_tests::a_desktop_turn_tells_the_planner_of_open_loops_once_per_changed_set`

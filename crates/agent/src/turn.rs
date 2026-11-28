@@ -2696,7 +2696,7 @@ struct State<'s> {
     jobs: &'s mut tools::Jobs,
     told_of_kept_jobs: bool,
     /// What earlier turns left open, until the first round tells the planner (OPEN-4).
-    open_loops: Option<String>,
+    open_loops: Option<crate::open_loops::Loops>,
     run_directory: tools::RunDirectory,
     confined_failures: tools::ConfinedFailures,
     /// The slots a check said `unsafe` about this turn, which `read_output` and `vet_content` do
@@ -3231,6 +3231,12 @@ where
     }
     if task.permission_mode.nobody_to_ask() {
         policy.without_anybody_to_ask();
+    }
+    // Whether the offer to vouch that read_file makes can be answered: somebody can be asked, or
+    // the mode answers it unasked. Read once here, and the listing and the search result both
+    // read this one value from the policy.
+    if !task.permission_mode.answers_a_vouch() {
+        policy.without_an_answer_to_a_vouch();
     }
     if !offers_read_output {
         policy.without_reading();
@@ -5316,9 +5322,19 @@ where
                                 .bytes
                                 .is_some_and(|bytes| bytes != 0 && bytes <= output_cap),
                         );
+                        // A run offered read_file and not vet_content, which a delegate is, has
+                        // read_file's offer to vouch as its one way to read a file a search found,
+                        // and is told so where the offer can be answered. The sentence is decided
+                        // from the tool's name, the offered list and the policy's answer to
+                        // whether the offer can be answered, which the listing also reads.
+                        let read_by_name = sentences::read_file_would_vouch(
+                            &output.tool,
+                            plan.beside,
+                            policy.vouch_is_answerable(),
+                        );
                         let composed = |described: &str, advice: &str| {
                             format!(
-                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{timed_out}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{read_instead}{history}",
+                                "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{described}{looked}{capped}{timed_out}{linked}{unmatched}{left_out}{respelled}{advice}{not_returned}{read_instead}{read_by_name}{history}",
                                 output.tool,
                             )
                         };
@@ -10122,8 +10138,15 @@ mod tests {
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn telling_the_open_loops_opens_the_turn_and_keeps_the_unbuilt_changes_line() {
         use ceiling::*;
-        const SAID: &str = "Open from earlier in this session: changes not built.";
+        const SAID: &str = "Open from earlier in this session: changes not built since the last write. \
+                            Yours to act on if they still matter.";
         const UNBUILT: &str = "no command was run, so none of it has been built or tested";
+        let unbuilt = || {
+            Some(crate::open_loops::Loops {
+                unbuilt_changes: true,
+                ..Default::default()
+            })
+        };
         let replies = || {
             vec![
                 said(
@@ -10135,7 +10158,7 @@ mod tests {
             ]
         };
 
-        let telling = Task::new("write it").telling_open_loops(Some(SAID.to_string()));
+        let telling = Task::new("write it").telling_open_loops(unbuilt());
         let (outcome, reporter, bodies, scratch, _) =
             traced_with("open-loops-told-not-shown", &telling, replies());
         outcome.expect("the turn ends");
@@ -10151,7 +10174,7 @@ mod tests {
             reporter.narration
         );
 
-        let showing = Task::new("write it").with_open_loops(Some(SAID.to_string()));
+        let showing = Task::new("write it").with_open_loops(unbuilt());
         let (outcome, reporter, bodies, _, _) =
             traced_with("open-loops-told-and-shown", &showing, replies());
         outcome.expect("the turn ends");
@@ -10160,6 +10183,166 @@ mod tests {
             !reporter.narration.iter().any(|line| line.contains(UNBUILT)),
             "{:?}",
             reporter.narration
+        );
+    }
+
+    /// One turn of `task` against `replies`, in a workspace a person trusts, which must end without
+    /// an error, and the requests it sent.
+    #[cfg(unix)]
+    fn a_turn_keeping_jobs(
+        workspace: &Workspace,
+        task: &Task,
+        replies: Vec<Result<bravebot_aichat::Completion, crate::backend::BackendError>>,
+    ) -> Vec<String> {
+        let config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+            _ => None,
+        })
+        .unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        crate::backend::scripted::script(replies);
+        let outcome = resume(
+            &config,
+            &Egress::new(),
+            workspace,
+            task,
+            &mut Conversation::new(),
+            &mut crate::confirm::ApproveRuns,
+            &mut crate::report::RecordingReporter::default(),
+            &mut bravebot_core::event::RecordingSink::new(),
+            trust,
+            TrustedPrograms::new(),
+            None,
+            &Cancel::new(),
+        )
+        .outcome;
+        let asked = crate::backend::scripted::asked();
+        crate::backend::scripted::clear();
+        outcome.unwrap();
+        asked
+    }
+
+    /// The first request of a second turn handed `loops`, after a first turn that started `job:1`
+    /// and left it running, and, where `exits`, after the job's steps have exited.
+    #[cfg(unix)]
+    fn the_second_turns_first_request(
+        name: &str,
+        exits: bool,
+        loops: crate::open_loops::Loops,
+    ) -> String {
+        use ceiling::said;
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = crate::testutil::scratch_dir(name);
+        std::fs::remove_dir_all(&scratch).ok();
+        std::fs::create_dir_all(&scratch).unwrap();
+        let script = scratch.join("wait-for-go");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ni=0\nwhile [ ! -e go ] && [ \"$i\" -lt 600 ]; do\n  i=$((i + 1))\n  sleep 0.05\ndone\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let workspace = Workspace::new(&scratch).unwrap();
+        let jobs = tools::SessionJobs::new();
+
+        a_turn_keeping_jobs(
+            &workspace,
+            &Task::new("start it").keeping_jobs(jobs.clone()),
+            vec![
+                said(
+                    "",
+                    &[("run", r#"{"command":"./wait-for-go","background":true}"#)],
+                    None,
+                ),
+                said("started", &[], None),
+            ],
+        );
+        assert_eq!(
+            jobs.lock().running_now().len(),
+            1,
+            "{name}: the job did not outlive the first turn"
+        );
+        if exits {
+            std::fs::write(scratch.join("go"), "").unwrap();
+            let until = std::time::Instant::now() + Duration::from_secs(20);
+            while !jobs.lock().running_now().is_empty() {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "{name}: the job never exited"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let task = Task::new("anything")
+            .keeping_jobs(jobs.clone())
+            .with_open_loops(Some(loops));
+        let asked = a_turn_keeping_jobs(&workspace, &task, vec![said("noted", &[], None)]);
+        asked.into_iter().next().unwrap_or_default()
+    }
+
+    /// OPEN-4, RUN-15, CMDLINE-14. A kept job that exited between turns is told as finished at the
+    /// next turn's first round, and the open-loops message of that round does not name it as still
+    /// running. Where it was the only open loop, no open-loops message is sent. A job still running
+    /// is named. The regressions it rejects: the message built from the set the last turn ended
+    /// with, which names the finished job as running, and a message that leaves every job out.
+    #[cfg(unix)]
+    #[test]
+    fn a_job_whose_finish_is_told_is_not_named_as_running_in_the_open_loops() {
+        use crate::open_loops::Loops;
+        let second_turn = the_second_turns_first_request;
+        let running = || Loops {
+            running_jobs: vec!["job:1".to_string()],
+            ..Loops::default()
+        };
+        let finished = "The background job you started as job:1 has finished.";
+        let named = "1 job is still running: job:1";
+
+        let alone = second_turn("open-loops-finished-job-alone", true, running());
+        assert!(alone.contains(finished), "the finish was not told: {alone}");
+        assert!(
+            !alone.contains(named),
+            "the finished job was named as running: {alone}"
+        );
+        assert!(
+            !alone.contains("Open from earlier"),
+            "an open-loops message was sent with nothing left open: {alone}"
+        );
+
+        let failed = || Loops {
+            failed_command: true,
+            ..running()
+        };
+        let beside = second_turn("open-loops-finished-job-beside", true, failed());
+        assert!(
+            beside.contains(finished),
+            "the finish was not told: {beside}"
+        );
+        assert!(
+            beside.contains(
+                "Open from earlier in this session: the last command failed. Yours to act on if \
+                 they still matter."
+            ),
+            "the loop still open was not told: {beside}"
+        );
+        assert!(
+            !beside.contains(named),
+            "the finished job was named as running: {beside}"
+        );
+
+        let still = second_turn("open-loops-running-job", false, failed());
+        assert!(
+            !still.contains(finished),
+            "a running job was told as finished: {still}"
+        );
+        assert!(
+            still.contains(&format!(
+                "Open from earlier in this session: the last command failed. Yours to act on if \
+                 they still matter. {named}."
+            )),
+            "the job still running was not named: {still}"
         );
     }
 

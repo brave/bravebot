@@ -788,10 +788,30 @@ request would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), within the re
 started with ([MODE-9](permission-modes.md#MODE-9)). Under `strict` and on Windows, where programs
 ask for each path, a delegate's program that writes outside the session's directories still fails.
 
+A delegate is offered no `read` on `search` or `list_files`. That argument releases a result through
+`vet_content`'s path, and a delegate is not offered `vet_content` because a release would put bytes
+into a context nobody at the keyboard is watching ([VET-2](tools/vet-content.md#VET-2),
+[VET-6](tools/vet-content.md#VET-6)). It reads a file a quarantined walk found through `read_file`
+instead, naming a listing entry's reference as `path_ref` or a path it types. That read offers to
+vouch for a file nobody vouched for ([TRUST-8](trust-map.md#TRUST-8)). The offer is the policy's
+and not a question of the delegate's own, and it is answered against the mode the delegate was lent
+([MODE-9](permission-modes.md#MODE-9)), which in bypass vouches without asking anybody. The
+delegate's quarantined listing and search say so where it holds `read_file`
+([LIST-2](tools/list-files.md#LIST-2), [SEARCH-2](tools/search.md#SEARCH-2)) and the offer can
+be answered, by a person or by the mode. They say nothing of it where nobody can be asked and the
+mode does not answer the offer ([CLI-1](cli.md#CLI-1)), since there the offer is refused. An
+unattended run in bypass has nobody to ask, and its mode still answers the offer.
+
 `verified-by: bravebot_agent::tools::tests::delegate_offers::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_ask_a_person`
 `verified-by: bravebot_agent::turn::a_delegate_naming_ask_user_or_todo_write_reaches_neither_the_person_nor_the_screen`
 `verified-by: bravebot_agent::tools::tests::tool_descriptions::the_planner_is_told_a_delegate_cannot_call_vet_content_ask_the_user_or_fetch`
+`verified-by: bravebot_agent::turn::a_delegate_is_told_read_file_offers_to_vouch_for_a_file_its_walk_found`
+`verified-by: bravebot_agent::turn::a_delegate_whose_offer_to_vouch_nobody_answers_is_not_told_read_file_offers_one`
+`verified-by: bravebot_agent::turn::a_delegate_of_an_attended_run_that_asks_is_told_read_file_offers_to_vouch`
+`verified-by: bravebot_agent::turn::a_delegate_of_an_unattended_run_in_bypass_is_told_read_file_offers_to_vouch`
+`verified-by: bravebot_agent::permission_mode::an_offer_to_vouch_can_be_answered_where_somebody_is_asked_or_the_mode_answers_it`
+`verified-by: bravebot_agent::turn::under_bypass_a_delegates_read_of_a_file_outside_the_workspace_is_vouched_and_shown`
 
 <a id="DELEGATE-13"></a>
 ### DELEGATE-13: one trail records both runs

@@ -1291,6 +1291,7 @@ the job names the driver minted.
 `verified-by: bravebot_tui::state::clearing_the_session_empties_the_job_list_and_goes_on_keeping_jobs`
 `verified-by: bravebot_tui::kept_jobs_tests::clearing_the_session_ends_the_program_a_kept_job_was_running`
 `verified-by: bravebot_tui::kept_jobs_tests::the_clear_command_ends_the_program_a_kept_job_was_running`
+`verified-by: bravebot_agent::turn::a_job_whose_finish_is_told_is_not_named_as_running_in_the_open_loops`
 `verified-by: bravebot_tui::app::tests::remainder::an_incognito_session_keeps_no_jobs_between_turns`
 `verified-by: bravebot_agent::turn::a_background_server_is_still_running_when_the_next_call_is_made`
 `verified-by: bravebot_agent::turn::a_background_command_must_be_one_pipeline`
