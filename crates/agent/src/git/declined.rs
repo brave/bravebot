@@ -47,6 +47,11 @@ pub enum Declined {
         is: &'static str,
     },
     TagsTakeNoPath,
+    /// An argument given to a query that does not take it, which would otherwise be dropped.
+    NotTaken {
+        argument: &'static str,
+        query: Query,
+    },
     PairIsForDiff(String),
     NoMergeBase(String),
     UntrustedTree,
@@ -185,6 +190,11 @@ impl Declined {
             Declined::TagsTakeNoPath => "tags lists the repository's tags and takes no path; to \
                  find the commits that changed a file, use log with the path."
                 .to_owned(),
+            Declined::NotTaken { argument, query } => format!(
+                "{argument} is for {}, and {} takes none.",
+                Query::takers(argument),
+                query.word()
+            ),
             Declined::PairIsForDiff(revision) => format!(
                 "{revision} names two revisions, which only diff takes; for a range of commits \
                  write A..B."
@@ -270,6 +280,7 @@ impl Declined {
             | Declined::LinesAreForShow(_)
             | Declined::LinesAreForAFile { .. }
             | Declined::TagsTakeNoPath
+            | Declined::NotTaken { .. }
             | Declined::PairIsForDiff(_)
             | Declined::NoMergeBase(_)
             | Declined::StatusTakesNoRevision => None,

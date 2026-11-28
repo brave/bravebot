@@ -251,11 +251,14 @@ two or two where it takes one, is told which query takes it. A status given a re
 use diff. A pattern given to anything but search, a search given none, an empty one or one that is
 not a regular expression, and a list of tags given a path are each refused by name. `offset` or
 `limit` given to anything but a show of a file at a revision is refused by name, and so is either
-one given to a show of a commit, a tag, a directory or a submodule.
+one given to a show of a commit, a tag, a directory or a submodule. So is `count` or `skip` given to
+a query other than log, tags and search, and `messages`, `since` or `until` given to a query other
+than log. A `skip` of 0 and a `messages` of false are what leaving them out means, so they are not
+refused.
 
 **Why.** A guess answers a question the planner did not ask as though it had. `HEAD^@` read as the
 forms this reader knows is `HEAD^`, so it would come back as a confident answer to something else.
-A pattern or a path dropped without a word is the same guess: a log with its pattern dropped is every commit, read as the ones that matched.
+A pattern or a path dropped without a word is the same guess: a log with its pattern dropped is every commit, read as the ones that matched. So is a `show` with its `count` dropped, which prints the one commit it always prints and reads as a page of five.
 
 `verified-by: bravebot_agent::tools::tests::arguments::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
@@ -266,6 +269,7 @@ A pattern or a path dropped without a word is the same guess: a log with its pat
 `verified-by: bravebot_agent::git::a_pattern_is_for_search_alone_and_tags_take_no_path`
 `verified-by: bravebot_agent::git::offset_and_limit_are_for_a_show_of_a_file_alone`
 `verified-by: bravebot_agent::turn::read_git_shows_the_lines_of_a_file_a_call_asks_for`
+`verified-by: bravebot_agent::tools::tests::arguments::an_argument_a_query_does_not_take_is_refused_by_name`
 
 <a id="GIT-6"></a>
 ### GIT-6: `since` and `until` are whole days in UTC

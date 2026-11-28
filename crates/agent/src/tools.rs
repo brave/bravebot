@@ -16915,6 +16915,25 @@ fn read_git<S: Sink, C: Confirmer>(
         .and_then(Value::as_u64)
         .map(|n| usize::try_from(n).unwrap_or(usize::MAX));
 
+    // An argument given to a query that does not take it is refused by name, since dropping it
+    // would answer a question the planner did not ask (GIT-5). `skip` of 0 and `messages` of
+    // false are what an absent argument means, so they drop nothing and are not refused.
+    let given = |key: &str| arguments.get(key).is_some_and(|value| !value.is_null());
+    let untaken = [
+        ("count", given("count")),
+        ("skip", given("skip") && skip != 0),
+        ("messages", messages),
+        ("since", since.is_some()),
+        ("until", until.is_some()),
+    ];
+    let untaken: Vec<&'static str> = untaken
+        .into_iter()
+        .filter_map(|(key, given)| given.then_some(key))
+        .collect();
+    if let Err(declined) = query.refuse_untaken(&untaken) {
+        return Produced::problem(format!("error: {}", declined.describe(&shown)));
+    }
+
     // A deny rule over the file a question names covers asking about its history too, and is said
     // the way every other read says it, before anything under `.git` is opened.
     let inside = |relative: &str| crate::workspace::in_repository(&shown, relative);
