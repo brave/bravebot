@@ -15421,10 +15421,17 @@ fn a_read_of_an_empty_file_still_carries_a_token() {
     );
 }
 
-/// The 16 hex characters after each "change token " in a request body.
+/// The 16 hex characters after each "change token " in a request body. A tool description that
+/// says "change token" followed by prose is not a token and is skipped.
 fn tokens_in(body: &str) -> Vec<String> {
     body.match_indices("change token ")
-        .map(|(at, found)| body[at + found.len()..].chars().take(16).collect())
+        .map(|(at, found)| {
+            body[at + found.len()..]
+                .chars()
+                .take(16)
+                .collect::<String>()
+        })
+        .filter(|token| token.len() == 16 && token.chars().all(|c| c.is_ascii_hexdigit()))
         .collect()
 }
 
@@ -16836,13 +16843,14 @@ fn the_model_can_narrow_a_listing_by_glob() {
     let mut sink = RecordingSink::new();
 
     let task = Task::new("list the rust files");
-    turns::run(
+    turns::run_with_trust(
         &config,
         &egress,
         &workspace,
         &task,
         &mut bravebot_agent::confirm::Unattended,
         &mut sink,
+        trusting_the_workspace(),
     )
     .expect("turn runs");
 
@@ -35127,7 +35135,14 @@ fn a_question_closed_on_the_clock_comes_back_as_no_answer_beside_the_rest() {
         "{second}"
     );
     assert!(second.contains("may be away"), "{second}");
-    assert!(!second.contains("declined"), "{second}");
+    // Only the answer is checked: read_git's description says a `.git` file is declined, and
+    // that is not the question's answer.
+    let answer = second
+        .split("No answer was given in the time allowed")
+        .nth(1)
+        .and_then(|rest| rest.split("\"tools\"").next())
+        .unwrap_or_default();
+    assert!(!answer.contains("declined"), "{second}");
 }
 
 /// ASK-10: the line a front end draws under the call is read by a person returning to the session,
@@ -38785,8 +38800,8 @@ fn the_read_output_description_says_what_reading_all_of_a_long_output_costs() {
     for (tag, mode) in [("ro-cost-ask", Ask), ("ro-cost-bypass", Bypass)] {
         let description = the_read_output_description(tag, mode, false);
         assert!(
-            description.contains("it returns all of it")
-                && description.contains("about a token for every four bytes")
+            description.contains("comes back whole")
+                && description.contains("about a token per four bytes")
                 && description.contains("stdin_ref")
                 && description.contains("tail or grep"),
             "{tag}: the description does not say what reading all of a long output costs or how \
@@ -38921,7 +38936,7 @@ fn the_vet_content_description_says_who_answers_for_the_session() {
     }
     for fetch in &fetches {
         assert!(
-            fetch.contains("vet_content is the question to ask")
+            fetch.contains("To read the page yourself, ask vet_content.")
                 && !fetch.contains("has it checked")
                 && !fetch.contains("asks the user to show"),
             "fetch_url claims how vet_content is answered: {fetch}"
@@ -40576,7 +40591,7 @@ fn a_turn_tells_the_planner_which_variables_run_removes() {
         "`SERVICES_KEY_AICHAT`",
         "`BRAVE_SERVICES_KEY_ID`",
         "`BACKTRACE_SUBMIT_URL`",
-        "says nothing about whether the person has set it",
+        "says nothing about whether the person set it",
     ] {
         assert!(
             first.contains(stated),
@@ -44556,7 +44571,7 @@ fn a_real_pgrep_refused_by_the_macos_profile_is_told_to_be_the_sandbox_and_to_pr
 
     let description = run_description(&first);
     assert!(
-        description.contains("look for its debugging port"),
+        description.contains("probe its debugging port"),
         "{description}"
     );
 }
@@ -61423,11 +61438,11 @@ fn an_addressed_reader_reads_a_read_git_that_names_no_run() {
         "a reader was offered a way to run a program: {request}"
     );
     assert!(
-        request.contains("no tool on your list reads that history instead"),
+        request.contains("elsewhere no tool on your list reads that history"),
         "the turn was not told that nothing else reads the history: {request}"
     );
     assert!(
-        !request.contains("elsewhere it says so and you use run"),
+        !request.contains("elsewhere use run"),
         "the turn was sent to a tool it was not offered: {request}"
     );
 }
@@ -61470,11 +61485,11 @@ fn an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run() {
         "the definition did not keep ask_user and drop run: {request}"
     );
     assert!(
-        request.contains("look with list_files, search or read_file instead"),
+        request.contains("look with list_files, search or read_file first"),
         "ask_user was not written for a turn without run: {request}"
     );
     assert!(
-        !request.contains("search, read_file or run instead"),
+        !request.contains("search, read_file or run first"),
         "ask_user sent the turn to a tool it was not offered: {request}"
     );
 }
@@ -70871,12 +70886,9 @@ fn the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_
         );
         assert!(
             answer.contains(
-                "Checkouts share remote-tracking refs and tags with your working directory and \
-                 with each other, so a git fetch in one updates them in all of them, and two \
-                 fetches at the same time can fail. Where delegates need a fetch, run it once \
-                 yourself before starting them rather than asking each to. Checkouts also share \
-                 one stash, so changes git stash sets aside in one can be popped in any of them. \
-                 Do not ask a delegate in a checkout to use git stash."
+                "Checkouts share refs, tags and the stash with your working directory and each \
+                 other, so run a fetch they need once yourself before starting them, and do not \
+                 have a delegate in one use git stash."
             ),
             "the answer to {spawned} in a checkout does not say the checkouts share refs and a \
              stash: {answer}"
@@ -70894,7 +70906,7 @@ fn the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_
         "the spawn without a checkout was not answered: {answer}"
     );
     assert!(
-        !answer.contains("remote-tracking refs") && !answer.contains("git stash"),
+        !answer.contains("Checkouts share") && !answer.contains("git stash"),
         "a spawn that made no checkout was told about a checkout's refs or stash: {answer}"
     );
     assert!(
@@ -72345,9 +72357,11 @@ fn a_delegate_in_a_checkout_reads_the_working_directorys_instructions() {
         !body.contains("HAVE-A-DELEGATE-FOLLOW-RULES")
             && body.contains("working in a checkout of commit")
     });
+    // Named in the first message with the task, not in the system prompt the delegates of one
+    // call share (DELEGATE-35).
     assert!(
         told.all(|body| body.contains(&format!(
-            "Working directory: {}/checkouts/",
+            "of the project, at {}/checkouts/",
             home.path.canonicalize().unwrap().display()
         ))),
         "the delegate in the checkout was not told its own working directory"
@@ -73351,6 +73365,196 @@ fn one_call_can_fan_a_task_out_over_several_delegates() {
             "the delegate for {entry} was not told the shared half of the task"
         );
     }
+}
+
+/// The first request of each delegate of `call`, with the marker of the entry it was given.
+///
+/// A delegate's first request is the one whose conversation holds the task and nothing after it:
+/// the system prompt, then the task message, then the driver's notices.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn first_requests_of_a_fan_out(
+    bodies: &[String],
+    planner: &str,
+    entries: &[&'static str],
+) -> Vec<(&'static str, serde_json::Value)> {
+    entries
+        .iter()
+        .map(|entry| {
+            let first = bodies
+                .iter()
+                .filter(|body| body.contains(entry) && !body.contains(planner))
+                .map(|body| serde_json::from_str::<serde_json::Value>(body).expect("JSON"))
+                .min_by_key(|sent| sent["messages"].as_array().map_or(0, Vec::len))
+                .unwrap_or_else(|| panic!("no delegate was asked about {entry}"));
+            (*entry, first)
+        })
+        .collect()
+}
+
+/// DELEGATE-35. Two delegates of the same kind started by one call send byte-identical tools and
+/// system prompts, and the part of the task that differs is in the first user message. A service's
+/// prompt cache matches a request from its first byte, in the order tools, system prompt,
+/// messages, so anything per-delegate in the first two ends the shared prefix there and each
+/// delegate writes the whole prompt into the cache again.
+///
+/// Rejects: an entry, an id or a checkout path in the tools or the system prompt.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+fn delegates_of_one_call_send_the_same_tools_and_system_prompt() {
+    let scratch = Scratch::new("delegate-shared-prefix");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "FAN-OUT-THE-PREFIX",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"SHARED-HALF","each":["ENTRY-NORTH","ENTRY-SOUTH"]}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("both answered"),
+                reply_with("both answered"),
+            ],
+        ),
+        ("ENTRY-NORTH", vec![reply_with("north is done")]),
+        ("ENTRY-SOUTH", vec![reply_with("south is done")]),
+    ]);
+    let config = config_for(&endpoint);
+    let mut reporter = Watched::default();
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("FAN-OUT-THE-PREFIX"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let bodies = every_request(&received);
+    let firsts = first_requests_of_a_fan_out(
+        &bodies,
+        "FAN-OUT-THE-PREFIX",
+        &["ENTRY-NORTH", "ENTRY-SOUTH"],
+    );
+    let [(_, north), (_, south)] = &firsts[..] else {
+        panic!("two delegates were not asked: {firsts:?}");
+    };
+    assert_eq!(
+        north["tools"].to_string(),
+        south["tools"].to_string(),
+        "two delegates of one call were offered different tools"
+    );
+    assert_eq!(
+        north["messages"][0].to_string(),
+        south["messages"][0].to_string(),
+        "two delegates of one call were sent different system prompts"
+    );
+    for (entry, first) in &firsts {
+        let system = first["messages"][0].to_string();
+        assert!(
+            !system.contains("ENTRY-") && !system.contains("SHARED-HALF"),
+            "the task reached the system prompt of the delegate for {entry}"
+        );
+        let task = message_words(&first["messages"][1]);
+        assert!(
+            task.contains(entry) && task.contains("SHARED-HALF"),
+            "the delegate for {entry} was not given its task in its first user message: {task}"
+        );
+    }
+}
+
+/// DELEGATE-35, CHECKOUT-7. Two workers in checkouts of their own, started by one call, send the
+/// same tools and system prompt, and each is told its own checkout's path in its first user
+/// message. The paths differ, so either one in the system prompt ends the prefix the two share.
+///
+/// Rejects: the checkout notice or the working directory's path left in the system prompt.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+#[expect(clippy::string_slice, reason = "the offset is where find matched")]
+fn delegates_in_checkouts_of_one_call_are_told_their_checkout_in_the_first_message() {
+    let scratch = Scratch::new("checkout-shared-prefix");
+    let home = Scratch::new("checkout-shared-prefix-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "FAN-OUT-INTO-CHECKOUTS",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"SHARED-HALF","each":["LANE-EAST","LANE-WEST"],"isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("both answered"),
+                reply_with("both answered"),
+            ],
+        ),
+        ("LANE-EAST", vec![reply_with("east is done")]),
+        ("LANE-WEST", vec![reply_with("west is done")]),
+    ]);
+    let (asked, _) = run_in_a_repository(
+        &workspace,
+        &home.path,
+        &endpoint,
+        &received,
+        "FAN-OUT-INTO-CHECKOUTS",
+    );
+
+    let firsts = first_requests_of_a_fan_out(
+        &asked,
+        "FAN-OUT-INTO-CHECKOUTS",
+        &["LANE-EAST", "LANE-WEST"],
+    );
+    let [(_, east), (_, west)] = &firsts[..] else {
+        panic!("two delegates were not asked: {firsts:?}");
+    };
+    assert_eq!(
+        east["tools"].to_string(),
+        west["tools"].to_string(),
+        "two workers of one call were offered different tools"
+    );
+    assert_eq!(
+        east["messages"][0].to_string(),
+        west["messages"][0].to_string(),
+        "two workers in checkouts of one call were sent different system prompts"
+    );
+    let checkouts = format!("{}/checkouts/", home.path.canonicalize().unwrap().display());
+    let mut paths = Vec::new();
+    for (entry, first) in &firsts {
+        let system = first["messages"][0].to_string();
+        assert!(
+            !system.contains(&checkouts) && !system.contains("working in a checkout of commit"),
+            "the system prompt of the delegate for {entry} names its checkout"
+        );
+        let task = message_words(&first["messages"][1]);
+        assert!(
+            task.contains(entry) && task.contains("working in a checkout of commit"),
+            "the delegate for {entry} was not told its checkout with its task: {task}"
+        );
+        let at = task.find(&checkouts).unwrap_or_else(|| {
+            panic!("the delegate for {entry} was not told its checkout's path: {task}")
+        });
+        paths.push(
+            task[at..]
+                .split(". ")
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+        );
+    }
+    assert_ne!(
+        paths[0], paths[1],
+        "the two delegates were told the same checkout"
+    );
 }
 
 /// AGENT-5: each delegate of a fan-out holds its own copy of the command approvals the person has
@@ -83565,10 +83769,10 @@ fn newest_tool_result_text(request: &str) -> String {
 /// What the description of `run` says to do with output that comes back as a reference.
 fn what_run_says_of_a_reference(request: &str) -> String {
     let run = description_in(request, "run");
-    let from = "otherwise it comes back as a reference, like a file you may not read";
+    let from = "else a reference";
     let start = run.find(from).expect("the sentence about the output");
     let end = run[start..]
-        .find(" Do use it to compile")
+        .find(" Before asking whether a browser")
         .expect("the end of the sentence")
         + start;
     run[start..end].to_string()
@@ -99474,9 +99678,9 @@ fn in_auto_a_line_that_only_connects_to_a_local_port_needs_no_loopback_and_one_t
         let first = &run.rounds[0];
         let described = run_description(first);
         for said in [
-            "look for its debugging port",
-            "only from a line that has no network access",
-            "so do not ask for it there",
+            "probe its debugging port",
+            "only from a line with no network access",
+            "it adds nothing to a line that has network access",
         ] {
             assert!(described.contains(said), "{said:?} is not in {described}");
         }
@@ -99490,8 +99694,8 @@ fn in_auto_a_line_that_only_connects_to_a_local_port_needs_no_loopback_and_one_t
         );
         let scopes = run_scopes_description(first);
         for said in [
-            "only from a line that has no network access",
-            "so do not ask for it there",
+            "only from a line with no network access",
+            "it adds nothing to a line that has network access",
             "On Linux and Windows `loopback` changes nothing",
         ] {
             assert!(scopes.contains(said), "{said:?} is not in {scopes}");
@@ -99532,7 +99736,7 @@ fn a_planner_that_follows_the_run_description_probes_the_debugging_port_and_make
     let planner = move |request: &str| {
         round += 1;
         let described = run_description(request);
-        let told_to_probe = described.contains("look for its debugging port")
+        let told_to_probe = described.contains("probe its debugging port")
             && described.contains("Ask about quitting or relaunching a browser only after");
         Some(Some(match (round, told_to_probe) {
             (1, true) => tool_request_2("run", &probe),

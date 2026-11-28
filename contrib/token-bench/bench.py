@@ -476,9 +476,9 @@ def _resume_turns(gap):
 
 
 # delegate_nested: the value is in a file that only the delegate two levels down is told to read.
-# The result object lists every `spawn_agent` call of the run, whichever level made it, so two
-# calls are the least a nested delegate leaves (DELEGATE-7 allows three levels below the turn). Two
-# sibling delegates also make two calls and a call in `--json` carries no depth, so the floor counts
+# The result object's `delegates` counts every delegate the run started, whichever level started
+# it, so two is the least a nested delegate leaves (DELEGATE-7 allows three levels below the turn).
+# Two sibling delegates also count two and the object carries no depth, so the floor counts
 # delegates only and the nesting rests on the prompt wording.
 NESTED_KEY = _digest("nested-key")
 NESTED_PROMPT = (
@@ -744,8 +744,11 @@ def parse_claude(stdout):
 def parse_bravebot(stdout):
     """bravebot `--json`. `total` is prompt plus output, so the prompt is what is left of it.
 
-    The totals already include what every delegate spent. `delegates` counts the `spawn_agent`
-    calls the turn made that were not refused, `loaded` lists the `load_skill` targets of the
+    The totals already include what every delegate spent. `delegates` is the result object's
+    `delegates` field, the number of delegates the run started at every level as the driver
+    counted them (CLI-12), which counts each delegate one `spawn_agent` call starts with `each`. A
+    bravebot that predates the field leaves it out, and then `delegates` counts the `spawn_agent`
+    calls that were not refused, one each. `loaded` lists the `load_skill` targets of the
     calls that were not refused, `by_tool` counts the calls that were not refused for each tool,
     and `reads` lists the targets of the `read_file` calls in order. A goal run and a manifest run
     write the same object (main.rs passes `reporter.calls()` into the report for both, and
@@ -765,7 +768,9 @@ def parse_bravebot(stdout):
         requests=result.get("steps", 0) + 1,
     )
     calls = result.get("calls", [])
-    delegates = sum(1 for c in calls if c.get("tool") == "spawn_agent" and not c.get("refused"))
+    delegates = result.get("delegates")
+    if delegates is None:
+        delegates = sum(1 for c in calls if c.get("tool") == "spawn_agent" and not c.get("refused"))
     loaded = [c.get("target") for c in calls if c.get("tool") == "load_skill" and not c.get("refused")]
     by_tool = {}
     for c in calls:
@@ -2127,6 +2132,16 @@ BRAVEBOT_DELEGATE_SAMPLE = json.dumps({
               {"tool": "read_file", "target": "a.txt", "refused": False}]})
 
 
+# What `--json` says for a run whose one `spawn_agent` call started four delegates with `each`: one
+# call in the list and `delegates` 4, the driver's count of the delegates it started (CLI-12).
+BRAVEBOT_FANOUT_SAMPLE = json.dumps({
+    "schema": 1, "ok": True, "status": 0, "reply": "a-b-c-d", "session": "b-6", "steps": 2,
+    "tokens": {"total": 90000, "output": 400, "context": 20000,
+               "cache_read": 50000, "cache_written": 30000},
+    "calls": [{"tool": "spawn_agent", "target": "reader", "refused": False}],
+    "delegates": 4})
+
+
 BRAVEBOT_SKILL_SAMPLE = json.dumps({
     "schema": 1, "ok": True, "status": 0, "reply": SKILL_WORD, "session": "b-3", "steps": 2,
     "tokens": {"total": 52000, "output": 90, "context": 26000,
@@ -3220,12 +3235,20 @@ def selftest():
     assert brave.usage.prompt == 69763 and brave.tool_calls == 2 and brave.usage.requests == 2
 
     # A delegate counts when the call was not refused. The tokens are the run's totals, which
-    # already hold what the delegates spent, so nothing is added for them here.
+    # already hold what the delegates spent, so nothing is added for them here. The sample has no
+    # `delegates` field, so the count falls back to one per `spawn_agent` call.
     brave, _ = parse_bravebot(BRAVEBOT_DELEGATE_SAMPLE)
     assert brave.delegates == 2 and brave.tool_calls == 4, brave
     assert brave.usage.prompt == 90000 - 400 and brave.usage.cache_read == 50000, brave
     assert parse_bravebot(BRAVEBOT_SAMPLE)[0].delegates == 0
     assert parse_claude(CLAUDE_SAMPLE)[0].delegates is None
+    # Where the object has `delegates`, that is the count, not the one `spawn_agent` call. A
+    # field of 0 is read as 0 and not as absent.
+    fan, _ = parse_bravebot(BRAVEBOT_FANOUT_SAMPLE)
+    assert fan.delegates == 4 and fan.tool_calls == 1, fan
+    no_delegates = json.loads(BRAVEBOT_DELEGATE_SAMPLE)
+    no_delegates["delegates"] = 0
+    assert parse_bravebot(json.dumps(no_delegates))[0].delegates == 0
 
     # codex: a resumed turn reports the thread's running total, so the second turn's cost is the
     # difference. Reading it raw would charge the second turn for the first as well.
@@ -3350,6 +3373,10 @@ def selftest():
     assert not turn_ok(fan_turn, TurnResult(Usage(), answer, 0, delegates=0), None)
     assert turn_ok(fan_turn, TurnResult(Usage(), answer, 0, delegates=None), None)
     assert not turn_ok(fan_turn, TurnResult(Usage(), "wrong", 0, delegates=4), None)
+    # The run issue #4709 is about: one `spawn_agent` call that started four delegates passes
+    # when the object says `delegates` 4.
+    assert turn_ok(fan_turn, parse_bravebot(json.dumps(
+        dict(json.loads(BRAVEBOT_FANOUT_SAMPLE), reply=answer)))[0], None)
     assert len({_part_key(n) for n in range(1, 5)}) == 4
     scratch = pathlib.Path(tempfile.mkdtemp())
     try:

@@ -66,9 +66,11 @@ fn list_files_names_every_directory_its_walk_skips() {
         );
     }
     assert!(described.contains(".claude/worktrees"));
-    // LIST-6: and that it does not enter a symbolic link, which it counts and does not name.
+    // LIST-6: and that it does not enter a symbolic link, which it counts and does not name,
+    // and that the directory a link points to is listed by its own name.
     assert!(
-        described.contains("symbolic link") && described.contains("says how many"),
+        described.contains("Symbolic links are counted, not entered")
+            && described.contains("list the directory one points to by its own name"),
         "list_files does not say links are not entered: {described}"
     );
     // LIST-3, LIST-4: and that a walk stops at a time limit and how to narrow it.
@@ -83,7 +85,8 @@ fn list_files_names_every_directory_its_walk_skips() {
         .function
         .description;
     assert!(
-        searched.contains("symbolic link") && searched.contains("says how many"),
+        searched.contains("Symbolic links are counted, not entered")
+            && searched.contains("search the directory one points to by its own name"),
         "search does not say links are not entered: {searched}"
     );
 }
@@ -113,10 +116,18 @@ fn both_glob_arguments_describe_the_matcher_the_same_way() {
             .as_str()
             .unwrap_or_else(|| panic!("{tool}.{property} is described"))
             .to_string();
-        let at = described.find("Supports").unwrap_or_else(|| {
+        let at = described.find("glob with").unwrap_or_else(|| {
             panic!("{tool}.{property} does not say what it supports: {described}")
         });
-        described[at..].to_string()
+        #[expect(clippy::panic, reason = "a test fails by panicking")]
+        #[expect(
+            clippy::string_slice,
+            reason = "the offset is where find matched in the same string"
+        )]
+        let end = described[at..].find(", e.g.").unwrap_or_else(|| {
+            panic!("{tool}.{property} gives no example after its syntax: {described}")
+        }) + at;
+        described[at..end].to_string()
     };
 
     let mut expanded = crate::glob::expand("**/*.{rs,toml}");
@@ -128,7 +139,7 @@ fn both_glob_arguments_describe_the_matcher_the_same_way() {
     );
     let listing = syntax("list_files", "pattern");
     assert!(
-        listing.contains("** and brace groups"),
+        listing.contains("** and braces"),
         "list_files withholds the brace groups the matcher expands: {listing}"
     );
     assert_eq!(

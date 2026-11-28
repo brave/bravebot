@@ -239,6 +239,7 @@ it was, so there is nothing for it to widen. [DELEGATE-6](../delegation.md#DELEG
 round bound out of the call because a larger figure would be authority; a smaller one is not.
 
 `verified-by: bravebot_agent::tools::tests::delegate_offers::a_budget_that_is_not_a_count_of_tokens_is_refused`
+`verified-by: bravebot_agent::tools::tests::delegate_offers::the_budget_description_says_a_figure_buys_requests_and_not_tokens_of_reading`
 `verified-by: bravebot_core::policy::a_call_budget_can_only_lower_the_definitions`
 `verified-by: bravebot_core::policy::a_private_budget_cannot_direct_a_delegate`
 `verified-by: bravebot_core::policy::each_delegate_of_a_fan_out_carries_the_figure`

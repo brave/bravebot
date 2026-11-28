@@ -32,7 +32,7 @@ use crate::{
     reply_bound, worth_another_attempt,
 };
 use bravebot_config::provider::{Patience, Provider};
-use bravebot_config::{CacheTtl, Config, Secret};
+use bravebot_config::{CacheLifetimes, Config, Secret};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
@@ -114,14 +114,16 @@ impl Driven for AnthropicClient<'_> {
     /// giving it up there would record a refusal nobody saw. The ceiling only where it was the
     /// assumed one, a figure somebody stated being their statement about the model and quietly
     /// sending less cutting replies short that they said could run. The lifetime only while
-    /// breakpoints are sent and a lifetime was chosen.
+    /// breakpoints are sent and one of them states a lifetime, which with no setting is the hour
+    /// on the tools and the system prompt.
     fn refused(&self, request: &ChatRequest, concession: Concession, error: &ChatError) -> bool {
         refuses_the_body(error)
             && match concession {
                 Concession::Effort => request.effort.is_some(),
                 Concession::Ceiling => self.stated_ceiling().is_none(),
                 Concession::CacheTtl => {
-                    !self.call.refusals.caching && self.cache_ttl_asked().is_some()
+                    !self.call.refusals.caching
+                        && self.messages_for(request, false).states_a_lifetime()
                 }
                 Concession::Breakpoints => true,
                 Concession::ArgumentsAsWritten => self.streams_arguments(request, true),
@@ -248,12 +250,14 @@ impl<'a> AnthropicClient<'a> {
         Concession::ArgumentsAsWritten,
     ];
 
-    /// The cache lifetime a request asks for: the one the settings chose, for a model that has not
-    /// refused it.
-    fn cache_ttl_asked(&self) -> Option<CacheTtl> {
-        self.config
-            .prompt_cache_ttl
-            .filter(|_| !self.call.refusals.cache_ttl)
+    /// The cache lifetimes a request asks for: the ones the settings make, an hour on the tools and
+    /// the system prompt where they chose none, for a model that has not refused a lifetime.
+    fn cache_ttl_asked(&self) -> CacheLifetimes {
+        if self.call.refusals.cache_ttl {
+            CacheLifetimes::NONE
+        } else {
+            CacheLifetimes::for_setting(self.config.prompt_cache_ttl)
+        }
     }
 
     /// Whether this request asks for tool arguments as they are written.

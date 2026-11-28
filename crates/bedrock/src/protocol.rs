@@ -518,34 +518,58 @@ impl ConverseRequest {
         self
     }
 
-    /// The same request with every breakpoint asking the service to keep its prefix for `ttl`.
+    /// The same request with each breakpoint asking the service to keep its prefix for the
+    /// lifetime `lifetimes` gives it: the tools' and the system prompt's for `prefix`, the
+    /// conversation's for `conversation`.
     ///
     /// Not every model reads a lifetime, and one that does not refuses the request, so this is
-    /// something a refusal is worth trying without before the breakpoints are given up. `None`
-    /// leaves each breakpoint as the service's default.
-    pub fn with_cache_ttl(mut self, ttl: Option<bravebot_config::CacheTtl>) -> Self {
-        let Some(ttl) = ttl else {
-            return self;
+    /// something a refusal is worth trying without before the breakpoints are given up. A `None`
+    /// leaves those breakpoints at the service's default, and no breakpoint is added.
+    pub fn with_cache_ttl(mut self, lifetimes: bravebot_config::CacheLifetimes) -> Self {
+        let point = |ttl: Option<bravebot_config::CacheTtl>| match ttl {
+            Some(ttl) => CachePoint::lasting(ttl),
+            None => CachePoint::new(),
         };
-        let point = CachePoint::lasting(ttl);
+        let prefix = point(lifetimes.prefix);
+        let conversation = point(lifetimes.conversation);
         for entry in self.tool_config.iter_mut().flat_map(|c| &mut c.tools) {
             if let ToolEntry::CachePoint(held) = entry {
-                *held = point;
+                *held = prefix;
             }
         }
         for block in self.system.iter_mut().flatten() {
             if let SystemBlock::CachePoint(held) = block {
-                *held = point;
+                *held = prefix;
             }
         }
         for message in &mut self.messages {
             for block in &mut message.content {
                 if let Block::CachePoint(held) = block {
-                    *held = point;
+                    *held = conversation;
                 }
             }
         }
         self
+    }
+
+    /// Whether any breakpoint this request carries states a lifetime, which is what a refusal of a
+    /// lifetime could be about.
+    pub fn states_a_lifetime(&self) -> bool {
+        let lasting = |point: &CachePoint| point.ttl.is_some();
+        self.tool_config
+            .iter()
+            .flat_map(|c| &c.tools)
+            .any(|entry| matches!(entry, ToolEntry::CachePoint(p) if lasting(p)))
+            || self
+                .system
+                .iter()
+                .flatten()
+                .any(|block| matches!(block, SystemBlock::CachePoint(p) if lasting(p)))
+            || self
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(|block| matches!(block, Block::CachePoint(p) if lasting(p)))
     }
 
     /// The same request without the breakpoint on the end of its conversation, the prompt's kept.
@@ -1857,7 +1881,7 @@ mod tests {
         assert_eq!(reply.stop_reason.as_deref(), Some("end_turn"));
     }
 
-    /// Every breakpoint carries the lifetime asked for, the tools', the prompt's and the
+    /// Every breakpoint carries the lifetime a person chose, the tools', the prompt's and the
     /// conversation's alike, and each lifetime is its own word, so a request cannot pass by sending
     /// the same one for all.
     #[test]
@@ -1868,7 +1892,7 @@ mod tests {
                 &[Message::system("be helpful"), Message::user("hello")],
                 Some(&tools),
             )
-            .with_cache_ttl(Some(ttl));
+            .with_cache_ttl(bravebot_config::CacheLifetimes::for_setting(Some(ttl)));
             let body = serde_json::to_value(&request).expect("a body");
             let point = serde_json::json!({"type": "default", "ttl": ttl.wire()});
             assert_eq!(
@@ -1883,14 +1907,40 @@ mod tests {
         }
     }
 
-    /// Nothing chosen, nothing sent: the request is the one that went before the setting existed.
+    /// With no lifetime chosen, the tools' and the prompt's breakpoints ask for an hour and the
+    /// conversation's asks for nothing. Rejects an hour on the conversation as well, which raises
+    /// the write rate of every round, and an hour on only one of the two prefix breakpoints.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_default_asks_an_hour_for_the_tools_and_the_prompt_and_nothing_for_the_conversation() {
+        let tools = vec![Tool::function("read_file", "Read a file", json!({}))];
+        let request = request_from(
+            &[Message::system("be helpful"), Message::user("hello")],
+            Some(&tools),
+        )
+        .with_cache_ttl(bravebot_config::CacheLifetimes::for_setting(None));
+        let body = serde_json::to_value(&request).expect("a body");
+        let hour = serde_json::json!({"type": "default", "ttl": "1h"});
+        assert_eq!(
+            body["toolConfig"]["tools"][1]["cachePoint"], hour,
+            "the tools"
+        );
+        assert_eq!(body["system"][1]["cachePoint"], hour, "the prompt");
+        assert_eq!(
+            body["messages"][0]["content"][1]["cachePoint"],
+            serde_json::json!({"type": "default"}),
+            "the end of the conversation"
+        );
+    }
+
+    /// A request whose lifetime was refused states none on any breakpoint.
     #[test]
     fn no_lifetime_is_sent_where_none_was_chosen() {
         let request = request_from(
             &[Message::system("be helpful"), Message::user("hello")],
             None,
         )
-        .with_cache_ttl(None);
+        .with_cache_ttl(bravebot_config::CacheLifetimes::NONE);
         let body = serde_json::to_string(&request).expect("a body");
         assert!(
             body.contains(r#"{"cachePoint":{"type":"default"}}"#),

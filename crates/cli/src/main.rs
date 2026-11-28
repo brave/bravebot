@@ -1989,6 +1989,7 @@ fn run_and_report(
                         cache_written: outcome.cached.written_tokens,
                     },
                     calls: reporter.calls(),
+                    delegates: reporter.delegates(),
                     refusals: &with_declined(refusals(sink.recorded()), &declined),
                     notices: &outcome.notices,
                     structured: structured.as_deref(),
@@ -2366,7 +2367,10 @@ fn report_a_failed_turn(
                 .limit_reached()
                 .map_or(0, bravebot_agent::turn::LimitReached::rounds),
             reporter.spent(),
-            reporter.calls(),
+            finish::Ran {
+                calls: reporter.calls(),
+                delegates: reporter.delegates(),
+            },
             &with_declined(refusals(sink.recorded()), declined),
             reporter.notices(),
         ));
@@ -3483,7 +3487,7 @@ mod tests {
             "BB1001: nothing answered",
             0,
             Default::default(),
-            &[],
+            Default::default(),
             &[],
             &["hook turn-finished: /usr/bin/fmt could not be started".to_string()],
         );

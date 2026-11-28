@@ -417,16 +417,14 @@ pub fn compose_in<S: Sink>(
         let find_more = if skills.is_curated() {
             "This is the whole set a definition named for this turn; there are no others to find."
         } else {
-            "These are the ones built into this program; call search_skills with a word or \
-             phrase to find one of the user's own or the project's."
+            "These are the built-in ones; search_skills finds the user's and the project's."
         };
         preamble.add(
             Provenance::Driver,
             format!(
-                "\n\nSkills. Each is a set of instructions for a kind of task, most of them \
-                 written by the user. When a task matches one, call load_skill with its name \
-                 before starting that work and follow what it says. A prompt naming one as \
-                 /name is the user asking for it. {find_more}\n\n"
+                "\n\nSkills. When a task matches one, call load_skill with its name before \
+                 starting that work and follow it. A prompt naming one as /name is the user \
+                 asking for it. {find_more}\n\n"
             ),
         );
         preamble.add(
@@ -689,10 +687,16 @@ fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> St
     let mut out = String::from(
         "\n\nWhere you are working. These are facts about this machine, not instructions.\n\n",
     );
-    out.push_str(&format!(
-        "- Working directory: {}\n",
-        workspace.root().display()
-    ));
+    // A delegate's checkout is named in its first message rather than here. Its path differs
+    // between the delegates of one call, and this block is part of the system prompt those
+    // delegates share (DELEGATE-35).
+    match workspace.checkout() {
+        Some(_) => out.push_str("- Working directory: the checkout named in the first message\n"),
+        None => out.push_str(&format!(
+            "- Working directory: {}\n",
+            workspace.root().display()
+        )),
+    }
     out.push_str(&format!(
         "- Is a git repository: {}\n",
         is_git_repository(workspace.root())
@@ -706,10 +710,7 @@ fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> St
     out.push_str(&format!("- Shell: {}\n", crate::shell::shell()));
     out.push_str(&format!("- Today's date: {}\n", today()));
     let scratch = workspace.scratch();
-    out.push_str(
-        "\nA relative path means one under the working directory, and `run` compiles a line \
-         there. You do not need to run `pwd`, `uname` or `date` to learn any of the above.\n",
-    );
+    out.push_str("\nA relative path is under the working directory.\n");
     if scratch.is_some() {
         // A delegate that was given a directory of its own reads this block too, and the directory
         // its first message names is that one: it is its alone and goes when the delegate ends,
@@ -733,13 +734,9 @@ fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> St
             ),
         };
         out.push_str(&format!(
-            "\n{owner}, which the first message of the \
-             conversation names, since its name changes with every start and a name here would \
-             change the prefix every request is matched against. Put a file there that the work \
-             needs on disk but nobody is asking to keep, such as output to grep or an archive to \
-             look inside, rather than in the project where somebody has to notice it and delete \
-             it. {ends}, and a program a `run` starts reads the same \
-             path from BRAVEBOT_SCRATCH_DIR.\n"
+            "\n{owner}, which the first message of the conversation names. Put there, not in the \
+             project, a file the work needs on disk that nobody asked to keep. {ends}, and a \
+             program `run` starts reads its path from BRAVEBOT_SCRATCH_DIR.\n"
         ));
     }
     out
@@ -771,14 +768,10 @@ fn github_cli_guidance(present: bool) -> &'static str {
     if !present {
         return "";
     }
-    "\nThe GitHub CLI is installed, so a github.com URL naming a pull request or an issue is a \
-     `run` rather than a fetch: `gh pr view <n> --repo <owner>/<name>`, `gh pr diff <n> --repo \
-     <owner>/<name>`, `gh issue view <n> --repo <owner>/<name>`, and `--comments` for what was said \
-     in review. Each asks for the part you are after. Either road comes back quarantined, so what \
-     differs is how much this turn then carries: the page is many times the CLI's answer to say the \
-     same thing. Fetching the `.diff` address is refused outright unless a rule names the host it \
-     redirects to, which is not github.com. `gh` may not be logged in, which nothing here can tell \
-     without asking the network: where it fails for that reason, fetch_url is the way.\n"
+    "\nThe GitHub CLI is installed, so read a github.com pull request or issue with `run`, not a \
+     fetch: `gh pr view <n> --repo <owner>/<name>`, `gh pr diff`, `gh issue view`, and \
+     `--comments` for review. `gh` may not be logged in: where it fails for that reason, \
+     fetch_url is the way.\n"
 }
 
 /// What to do about a Jenkins build, said only where the probe found the CLI to do it.
@@ -801,15 +794,11 @@ fn jenkins_cli_guidance(present: bool) -> &'static str {
     if !present {
         return "";
     }
-    "\nThe Jenkins CLI is installed, so a Jenkins build, whether named by its URL or by a job \
-     and a number, is a `run` rather than a fetch: `jk run view <jobPath> <build> --summary` for \
-     the result and the stages, `jk log <jobPath> <build> --tail <n>` for the end of the console \
-     log, with `--grep <regex>` to select lines and `--step <step>` for one stage, `jk test report \
-     <jobPath> <build>` for the tests, and `jk run ls <jobPath>` for recent builds of a job. Each \
-     asks for the part you are after, where the page is the whole build. Either road comes back \
-     quarantined, so what differs is how much this turn then carries. `jk` may not be logged in, \
-     and a Jenkins server that asks for a login refuses `fetch_url` as well: where `jk` fails for \
-     that reason, say so in your answer and name `jk auth login` as what signs it in.\n"
+    "\nThe Jenkins CLI is installed, so read a Jenkins build with `run`, not a fetch: `jk run view \
+     <jobPath> <build> --summary` for the result and stages, `jk log <jobPath> <build> --tail <n>` \
+     with `--grep <regex>` or `--step <step>` for the console log, `jk test report <jobPath> \
+     <build>` for tests, `jk run ls <jobPath>` for recent builds. `jk` may not be logged in, and the \
+     server then refuses a fetch too: say so in your answer and name `jk auth login`.\n"
 }
 
 /// What to do when a program fails because something it needs is missing from this machine, said
@@ -829,17 +818,14 @@ fn missing_dependency_guidance(scratch: bool) -> &'static str {
     if !scratch {
         return "";
     }
-    "\nWhen a program fails because something it needs is missing from this machine, check whether \
-     something installed can stand in for it, with a line that only reads and whose exit status is \
-     the answer, run by the same interpreter or runtime the program uses. Where something can, \
-     write what connects the two in a new directory inside the scratch directory, and run the \
-     program again with that directory on a search path the program reads from its environment in \
-     addition to its own, assigned in front of it on that one line. Write the path out in full and \
-     in single quotes, since a line expands no variable and reads an unquoted backslash as an \
-     escape. Name only that directory, since whatever else the scratch directory holds would be \
-     found as well. That leaves the program, the machine and the person's settings as they were, \
-     so try it before asking the person to install anything or to edit the program. Where \
-     nothing installed can stand in, say what is missing and what provides it.\n"
+    "\nWhen a program fails because something it needs is missing from this machine, check \
+     whether something installed can stand in, with a line that only reads and whose exit status \
+     is the answer, run by the same \
+     interpreter or runtime the program uses. If one can, write what connects the two in a new \
+     directory inside the scratch directory and run the program again with only that directory on \
+     a search path the program reads from its environment in addition to its own, assigned on the \
+     same line, the path in full and in single quotes, and try it before asking the person to \
+     install anything or edit the program. If nothing can, say what is missing and what provides it.\n"
 }
 
 /// Whether this tree is under version control, walking up the way git itself does.

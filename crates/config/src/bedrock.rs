@@ -390,7 +390,8 @@ impl Bedrock {
         self
     }
 
-    /// The cache lifetime a request to this account asks for, where somebody chose one.
+    /// The cache lifetime the settings chose for this account, where they chose one.
+    /// [`crate::CacheLifetimes::for_setting`] says what each breakpoint asks for.
     pub fn cache_ttl(&self) -> Option<crate::CacheTtl> {
         self.cache_ttl
     }

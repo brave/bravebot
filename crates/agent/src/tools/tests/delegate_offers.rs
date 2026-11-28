@@ -281,14 +281,14 @@ fn read_git_names_run_only_where_the_delegate_holds_one() {
         "a reader's read_git named a tool it is not offered: {reader}"
     );
     assert!(
-        reader.contains("no tool on your list reads that history instead"),
+        reader.contains("elsewhere no tool on your list reads that history"),
         "a reader was not told what it cannot read: {reader}"
     );
 
     let (runs, checker) = described(Kind::Checker);
     assert!(runs, "a checker was not offered a way to run a program");
     assert!(
-        checker.contains("elsewhere it says so and you use run"),
+        checker.contains("elsewhere use run"),
         "a checker was not sent to the tool it holds: {checker}"
     );
     assert!(
@@ -453,10 +453,8 @@ fn read_git_says_a_dot_git_that_is_a_file_is_declined() {
             .function
             .description;
         assert!(
-            said.contains(
-                "it declines the .git file a linked worktree or a submodule has, except at \
-                 the root of a checkout you were started in"
-            ),
+            said.contains("the .git file of a linked worktree or a submodule is declined")
+                && said.contains("except at the root of your checkout"),
             "the description did not say a .git file is declined: {said}"
         );
     }
@@ -614,11 +612,9 @@ fn the_planner_is_offered_a_count_of_delegates_to_wake_after() {
     assert_eq!(wake_after["minimum"], json!(1));
     let described = wake_after["description"].as_str().expect("a description");
     for said in [
-        "How many of this call's delegates have to end before you are asked again",
-        "Left out it is 1",
-        "at or above the number of delegates the call starts means all of them",
-        "Use it when you need the reports together",
-        "A line from the user still wakes you, and so does another call's count.",
+        "Delegates that must end before you are asked again",
+        "default 1",
+        "A typed line or another call's count also wakes you.",
     ] {
         assert!(described.contains(said), "{said:?} is not in {described}");
     }
@@ -648,14 +644,11 @@ fn the_planner_is_offered_a_count_of_delegates_to_wake_after() {
             .as_str()
             .expect("a description");
         assert!(
-            described.contains("Use it when you need the reports together")
+            described.contains("Delegates that must end before you are asked again")
                 && described.ends_with(" Another call's count still wakes you."),
             "{name}: {described}"
         );
-        assert!(
-            !described.contains("line from the user"),
-            "{name}: {described}"
-        );
+        assert!(!described.contains("typed line"), "{name}: {described}");
     }
 }
 
@@ -673,6 +666,31 @@ fn a_wake_after_that_is_not_a_count_of_delegates_is_refused() {
             .expect_err(&format!("{malformed} was taken for a count"));
         assert!(refused.contains("'wake_after'"), "{refused}");
     }
+}
+
+/// AGENT-7. The `budget` description says a figure buys a few dozen requests and not that many
+/// thousand tokens of reading, because every request counts the whole conversation. Rejects: a
+/// description that gives the format and not what a figure buys, which a planner reads as tokens
+/// of reading.
+#[test]
+fn the_budget_description_says_a_figure_buys_requests_and_not_tokens_of_reading() {
+    let described = available(
+        Scheduling::ArrangingALook,
+        Arming::Unavailable,
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    )
+    .into_iter()
+    .find(|t| t.function.name == "spawn_agent")
+    .expect("spawn_agent is offered")
+    .function
+    .parameters["properties"]["budget"]["description"]
+        .to_string();
+    assert!(
+        described.contains("Each request counts the whole conversation")
+            && described.contains("2m is about thirty requests, not 2m tokens of reading"),
+        "{described}"
+    );
 }
 
 /// DELEGATE-29. A figure is a count of tokens above zero, as a number or in `/limit`'s words,
@@ -952,8 +970,8 @@ fn the_isolation_field_offers_a_checkout_with_the_working_directorys_changes() {
     );
     let described = isolation["description"].as_str().expect("a description");
     assert!(
-        described.contains("\"checkout_with_changes\" is the same, and also copies into it")
-            && described.contains("the files you wrote and the ones git status lists"),
+        described.contains("A new checkout of the last commit per delegate")
+            && described.contains("with your changes copied in for checkout_with_changes"),
         "{described}"
     );
 }
@@ -982,12 +1000,9 @@ fn the_isolation_field_says_checkouts_share_refs_and_who_fetches_once() {
             .expect("a description")
             .to_string()
     };
-    let shared = "Checkouts share remote-tracking refs and tags with your working directory \
-                  and with each other, so a git fetch in one updates them in all of them, and \
-                  two fetches at the same time can fail.";
-    let stash = "Checkouts also share one stash, so changes git stash sets aside in one can \
-                 be popped in any of them. Do not ask a delegate in a checkout to use git \
-                 stash.";
+    let shared = "Checkouts share refs, tags and the stash with your working directory and \
+                  each other";
+    let stash = "do not have a delegate in one use git stash.";
 
     let running = described(Running::Offered);
     assert!(
@@ -996,10 +1011,7 @@ fn the_isolation_field_says_checkouts_share_refs_and_who_fetches_once() {
     );
     assert!(
         running.contains(shared)
-            && running.contains(
-                "Where delegates need a fetch, run it once yourself before starting them \
-                 rather than asking each to."
-            ),
+            && running.contains("run a fetch they need once yourself before starting them"),
         "a planner with run is not told the checkouts share refs and to fetch first: {running}"
     );
     let withheld = described(Running::Withheld);
@@ -1009,8 +1021,7 @@ fn the_isolation_field_says_checkouts_share_refs_and_who_fetches_once() {
     );
     assert!(
         withheld.contains(shared)
-            && withheld
-                .contains("Where delegates need a fetch, ask one of them for it rather than each.")
+            && withheld.contains("have one of them run a fetch they need, not each")
             && !withheld.contains("yourself"),
         "a planner without run is not told the checkouts share refs, or is told to fetch \
          itself: {withheld}"
@@ -1043,7 +1054,7 @@ fn a_delegates_descriptions_do_not_name_schedule_next() {
             tool.function
                 .description
                 .to_lowercase()
-                .contains("nothing will ask you again"),
+                .contains("nothing asks about this line again"),
             "{name} does not say no later look is coming: {}",
             tool.function.description
         );

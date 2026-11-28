@@ -517,7 +517,9 @@ impl Driven for BedrockClient<'_> {
         match concession {
             Concession::CacheTtl => {
                 !self.call.refusals.caching
-                    && self.config.cache_ttl().is_some()
+                    && self
+                        .converse_for(request, &self.learned_for, false)
+                        .states_a_lifetime()
                     && error.may_refuse_caching()
             }
             Concession::Breakpoints => error.may_refuse_caching(),
@@ -1037,6 +1039,16 @@ impl<'a> BedrockClient<'a> {
         })
     }
 
+    /// The cache lifetimes a request asks for: the ones the settings make, an hour on the tools and
+    /// the system prompt where they chose none, for a model that has not refused a lifetime.
+    fn cache_ttl_asked(&self) -> bravebot_config::CacheLifetimes {
+        if self.call.refusals.cache_ttl {
+            bravebot_config::CacheLifetimes::NONE
+        } else {
+            bravebot_config::CacheLifetimes::for_setting(self.config.cache_ttl())
+        }
+    }
+
     /// The body one request carries, before anything signs it.
     ///
     /// Separate from [`BedrockClient::build`] so what a configuration puts in a request can be
@@ -1051,11 +1063,7 @@ impl<'a> BedrockClient<'a> {
         let converse = protocol::request_from(&request.messages, request.tools.as_deref())
             .with_ceiling(self.ceiling_for(model))
             .with_effort(request.effort.filter(|_| !self.call.refusals.effort))
-            .with_cache_ttl(
-                self.config
-                    .cache_ttl()
-                    .filter(|_| !self.call.refusals.cache_ttl),
-            );
+            .with_cache_ttl(self.cache_ttl_asked());
         let converse = if self.streams_arguments(request, streaming) {
             converse.with_arguments_as_written()
         } else {
@@ -5348,30 +5356,87 @@ mod tests {
         }
     }
 
-    /// The lifetime the settings chose goes on the request only for an account that carries one, and
-    /// not once the model has refused it.
+    /// The lifetime the settings chose goes on every breakpoint, and with none chosen the tools and
+    /// the prompt ask for an hour and the conversation for nothing. A model that refused a lifetime
+    /// is sent none on any breakpoint, whether a person chose it or it was the default. Read on the
+    /// tools' breakpoint and the conversation's.
     #[test]
     fn the_chosen_lifetime_is_sent_until_the_model_refuses_it() {
         let egress = Egress::new();
         let request = writing_a_file("opus-arn");
-        let ttl_of = |client: &BedrockClient| {
-            serde_json::to_value(client.converse_for(&request, "opus-arn", false))
-                .expect("a body")
-                .pointer("/messages/0/content/1/cachePoint/ttl")
-                .cloned()
+        let ttls_of = |client: &BedrockClient| {
+            let body = serde_json::to_value(client.converse_for(&request, "opus-arn", false))
+                .expect("a body");
+            (
+                body.pointer("/toolConfig/tools/1/cachePoint/ttl").cloned(),
+                body.pointer("/messages/0/content/1/cachePoint/ttl")
+                    .cloned(),
+            )
         };
 
         let plain = config();
-        assert_eq!(ttl_of(&BedrockClient::new(&plain, &egress)), None);
-
-        let chosen = config().with_cache_ttl(Some(bravebot_config::CacheTtl::OneHour));
-        let mut client = BedrockClient::new(&chosen, &egress);
-        assert_eq!(ttl_of(&client), Some(json!("1h")));
+        let mut client = BedrockClient::new(&plain, &egress);
+        assert_eq!(
+            ttls_of(&client),
+            (Some(json!("1h")), None),
+            "the default is an hour on the tools and nothing on the conversation"
+        );
         client.call.refusals.cache_ttl = true;
         assert_eq!(
-            ttl_of(&client),
-            None,
+            ttls_of(&client),
+            (None, None),
+            "a refused default hour was sent again"
+        );
+
+        let chosen = config().with_cache_ttl(Some(bravebot_config::CacheTtl::FiveMinutes));
+        let mut client = BedrockClient::new(&chosen, &egress);
+        assert_eq!(ttls_of(&client), (Some(json!("5m")), Some(json!("5m"))));
+        client.call.refusals.cache_ttl = true;
+        assert_eq!(
+            ttls_of(&client),
+            (None, None),
             "a lifetime the model refused was sent again"
+        );
+    }
+
+    /// A model that refuses the hour asked for by default keeps its breakpoints, the same way it
+    /// does for a lifetime a person chose: the hour is given up first, the request answers with
+    /// every breakpoint and no lifetime on any. Rejects a refusal of the default that is not read as
+    /// one, which would give up the breakpoints instead.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn a_refused_default_hour_is_given_up_before_the_breakpoints() {
+        let model = "a-model-that-refuses-the-default-hour";
+        let config = config_for(model);
+        assert_eq!(config.cache_ttl(), None);
+        let request = writing_a_file(model);
+
+        let (result, sent) = stream_against(
+            &config,
+            &request,
+            vec![refused_with(REFUSED_CACHING_STATUS), answered()],
+        );
+
+        result.expect("the request without the lifetime answers");
+        let shape = |body: &serde_json::Value| {
+            (
+                body.pointer("/toolConfig/tools/1/cachePoint").cloned(),
+                body.pointer("/messages/0/content/1/cachePoint").cloned(),
+            )
+        };
+        assert_eq!(
+            sent.iter().map(shape).collect::<Vec<_>>(),
+            [
+                (
+                    Some(json!({"type": "default", "ttl": "1h"})),
+                    Some(json!({"type": "default"}))
+                ),
+                (
+                    Some(json!({"type": "default"})),
+                    Some(json!({"type": "default"}))
+                ),
+            ],
+            "the retry gave up the breakpoints with the hour, or kept the hour"
         );
     }
 

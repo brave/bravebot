@@ -842,8 +842,10 @@ minutes or `1h` for one hour. It applies to requests that go to an AWS account a
 OpenAI-compatible gateway, and not to Brave's own endpoint or to `api.openai.com`, which caches without
 being asked. A person who pauses for longer than the
 default lifetime between turns pays to read the whole conversation again; the one-hour lifetime avoids
-that, and the providers charge a higher rate to write it. With the key absent, bravebot sends no
-lifetime and every service keeps its own default. Any other word names nothing and sends nothing.
+that, and the providers charge a higher rate to write it. With the key absent, bravebot asks for one
+hour on the tool definitions and the system prompt, which are the same on every request, and sends no
+lifetime for the conversation, so the service's default applies to it. A value you set applies to
+every part. Any other word names nothing and is read as the key absent.
 
 Your own `~/.bravebot/settings.json` and a file named with `--settings` may choose either lifetime. A
 project's `.bravebot/settings.json` or `settings.local.json` may ask for `5m` and cannot ask for
@@ -858,7 +860,7 @@ The lifetime also bounds one `job_output` wait. The request after a longer wait 
 the longest wait the agent may ask for is 30 seconds under the lifetime: 270 seconds where the key is
 absent or `5m`, and 10 minutes with `1h`.
 
-`/status` shows the lifetime the setting asks for under the cache figures of the last turn. It is the
+`/status` shows the lifetime asked for under the cache figures of the last turn. It is the
 setting and not a measurement, so it reads the same after a model has refused the lifetime.
 
 ### `editorMode`

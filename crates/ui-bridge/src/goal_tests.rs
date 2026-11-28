@@ -903,8 +903,8 @@ fn the_eleventh_not_met_ends_the_goal_as_spent() {
 /// while the goal or the watch is about to start one.
 #[test]
 fn a_line_typed_under_a_goal_or_a_watch_is_told_which_one_takes_the_next_look() {
-    const NOTHING: &str = "Nothing will ask you again";
-    const ARRANGES: &str = "The next look is yours to arrange";
+    const NOTHING: &str = "Nothing asks about this line again";
+    const ARRANGES: &str = "Call schedule_next at the end of this turn";
     const GOAL: &str = "This session's goal sends the work back";
     const WATCH: &str = "This session's standing watches start a turn";
     if !test_profile::in_isolated_profile() {

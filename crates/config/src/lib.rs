@@ -1109,8 +1109,8 @@ impl std::error::Error for ConfigError {}
 /// How long a provider keeps a cached prompt prefix after the last request that read it.
 ///
 /// The two lifetimes the providers accept. A person's choice, read from the settings and never
-/// derived from anything a conversation holds. The longer one is charged at a higher write rate, so
-/// nothing is sent until somebody chooses.
+/// derived from anything a conversation holds. The longer one is charged at a higher write rate.
+/// Where nobody chose one, [`CacheLifetimes::for_setting`] says what each breakpoint asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheTtl {
     FiveMinutes,
@@ -1133,6 +1133,53 @@ impl CacheTtl {
     /// else. A word that names neither is absence rather than a guess at the nearest lifetime.
     pub fn parse(word: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|ttl| ttl.wire() == word.trim())
+    }
+}
+
+/// The lifetime each cache breakpoint of a request asks for, `None` being the service's own
+/// default ([BACKEND-27](../../../docs/specs/backends.md#BACKEND-27)).
+///
+/// Worked out from the `promptCacheTtl` setting alone, never from what a conversation holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheLifetimes {
+    /// The breakpoint after the last tool definition and the one on the system prompt.
+    pub prefix: Option<CacheTtl>,
+    /// The breakpoint at the end of the conversation.
+    pub conversation: Option<CacheTtl>,
+}
+
+impl CacheLifetimes {
+    /// No lifetime on any breakpoint, for a service that reads none or a model that refused one.
+    pub const NONE: Self = Self {
+        prefix: None,
+        conversation: None,
+    };
+
+    /// What the breakpoints ask for under `setting`.
+    ///
+    /// A lifetime a person chose goes on every breakpoint. With none chosen, the tool definitions
+    /// and the system prompt ask for an hour and the conversation keeps the service's default. The
+    /// prefix is the same bytes on every request of every session, so a request after a pause of
+    /// more than five minutes reads it back instead of writing it again, while the conversation's
+    /// breakpoint moves every round and a longer lifetime on it would only raise the write rate.
+    /// The longer lifetime comes first in the order tools, system, messages, which is the order
+    /// Anthropic requires of mixed lifetimes.
+    pub fn for_setting(setting: Option<CacheTtl>) -> Self {
+        match setting {
+            Some(ttl) => Self {
+                prefix: Some(ttl),
+                conversation: Some(ttl),
+            },
+            None => Self {
+                prefix: Some(CacheTtl::OneHour),
+                conversation: None,
+            },
+        }
+    }
+
+    /// Whether any breakpoint asks for a lifetime, which is what a refusal could be about.
+    pub fn asks_any(self) -> bool {
+        self.prefix.is_some() || self.conversation.is_some()
     }
 }
 
@@ -1341,8 +1388,10 @@ pub struct Config {
     pub commit_message_instructions: Option<String>,
     /// The cache lifetime the settings in force chose for requests to a gateway, if they chose one.
     ///
-    /// `None` sends no lifetime, so every service keeps its own default. Bedrock accounts carry the
-    /// same choice ([`bedrock::Bedrock::cache_ttl`]), set beside this where the settings are read.
+    /// [`CacheLifetimes::for_setting`] turns it into what each breakpoint asks for, which for `None`
+    /// is an hour on the tools and the system prompt and the service's default on the
+    /// conversation. Bedrock accounts carry the same choice ([`bedrock::Bedrock::cache_ttl`]), set
+    /// beside this where the settings are read.
     pub prompt_cache_ttl: Option<CacheTtl>,
     /// How many prompt tokens one request may reach before the conversation is compacted.
     ///
@@ -7480,6 +7529,33 @@ mod tests {
             shown.contains("2 withheld"),
             "the count is not said: {shown}"
         );
+    }
+
+    /// With no lifetime chosen, the tools and the system prompt ask for an hour and the conversation
+    /// asks for nothing, so the longer lifetime comes before the shorter one. A lifetime a person
+    /// chose goes on every breakpoint, whichever it is, so the five minutes cannot pass as the
+    /// default.
+    #[test]
+    fn an_unset_cache_lifetime_asks_an_hour_of_the_prefix_and_nothing_of_the_conversation() {
+        assert_eq!(
+            CacheLifetimes::for_setting(None),
+            CacheLifetimes {
+                prefix: Some(CacheTtl::OneHour),
+                conversation: None,
+            }
+        );
+        assert!(CacheLifetimes::for_setting(None).asks_any());
+        for ttl in CacheTtl::ALL {
+            assert_eq!(
+                CacheLifetimes::for_setting(Some(ttl)),
+                CacheLifetimes {
+                    prefix: Some(ttl),
+                    conversation: Some(ttl),
+                },
+                "{ttl:?}"
+            );
+        }
+        assert!(!CacheLifetimes::NONE.asks_any());
     }
 
     /// The lifetime the settings chose reaches every place a request is built from: the gateway

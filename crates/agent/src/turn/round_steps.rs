@@ -1351,7 +1351,11 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
         return;
     };
     let batch = super::Batch::of_call(lead, size, wake_after);
-    for (id, mut seeded) in started {
+    // The first delegate's first request goes out at once and the others' wait for it, so they
+    // read the prefix it wrote (DELEGATE-35). From the call's size alone.
+    let orders = crate::delegate::FirstRequest::for_call(size);
+    for ((id, mut seeded), order) in started.into_iter().zip(orders) {
+        seeded.first_request = order;
         // What the turn that started it says its context has met, met with what it starts from:
         // a constant the caller chose, so nothing here reads a byte of anything a delegate saw.
         seeded.context = seeded.context.meet(task.delegates_have_met);
@@ -1382,6 +1386,14 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
             let delegate_workspace = parent
                 .clone()
                 .with_delegate_scratch(own.as_ref().map(|own| own.directory().clone()));
+            // A first delegate that ends, fails or panics before its first request returns still
+            // lets the others go.
+            let _opens = crate::delegate::OpensWhenDropped(
+                seeded
+                    .first_request
+                    .as_ref()
+                    .and_then(crate::delegate::FirstRequest::lead),
+            );
             let mut confirmer = confirming.delegate_stoppable(id, stopped_by);
             let mut reporter = reporting.delegate(id);
             let mut sink = recording.delegate(id);

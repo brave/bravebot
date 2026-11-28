@@ -462,10 +462,11 @@ fn what_the_bridge_sends_and_keeps_of_a_failed_xai_turn_holds_none_of_the_values
     host.then("/token", 200, &a_refresh(ACCESS_4, REFRESH_4));
     host.then("/v1/chat/completions", 401, &an_error_body("unauthorized"));
     host.then("/v1/chat/completions", 401, &an_error_body("unauthorized"));
-    // Turn 3: a 400 is a bad request, sent again without the marks of its prefix, then after a
-    // renewal and without them again, and it is what the host said each time.
+    // Turn 3: a 400 is a bad request, sent again without the hour the prompt asks for by default,
+    // then without the marks of its prefix, then after a renewal and without both again, and it is
+    // what the host said each time.
     host.then("/token", 200, &a_refresh(ACCESS_5, REFRESH_5));
-    for _ in 0..4 {
+    for _ in 0..6 {
         host.then(
             "/v1/chat/completions",
             400,

@@ -552,6 +552,135 @@ pub struct Seeded {
     /// [`Task::with_delegates_that_have_met`]. It is a constant the caller chose and no byte of
     /// anything a delegate read, so nothing about it is decided from untrusted content.
     pub context: bravebot_core::label::Integrity,
+    /// Where this delegate stands in the order its call's first requests go out in, where the call
+    /// started more than one (DELEGATE-35). Set by the turn that starts the call, from the call's
+    /// size alone.
+    pub first_request: Option<FirstRequest>,
+}
+
+/// How long a delegate waits for the first delegate of its call to have its first request
+/// answered before it sends its own anyway.
+const FIRST_REQUEST_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The order in which the delegates of one call send their first requests (DELEGATE-35).
+///
+/// The first delegate sends at once. Each of the others waits until the first one's first request
+/// has been answered, so the prompt prefix that request wrote into the service's cache is there to
+/// be read. Without the wait they all send at the same moment, and each writes the same prefix.
+///
+/// The wait reads a flag the driver sets when the first delegate's own request returns or when its
+/// run ends, a person's stop and the turn's stop, and a fixed bound. Nothing a delegate read or a
+/// model wrote decides it.
+#[derive(Clone, Debug)]
+pub enum FirstRequest {
+    /// The first delegate of the call, which opens the way for the others.
+    Lead(std::sync::Arc<FirstAnswered>),
+    /// Any other delegate of the call, which waits once for the first.
+    Follow(std::sync::Arc<FirstAnswered>),
+}
+
+/// Whether the first delegate of a call has had its first request answered, or has ended.
+#[derive(Debug, Default)]
+pub struct FirstAnswered {
+    answered: std::sync::Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+
+impl FirstAnswered {
+    /// Let the other delegates of the call send their requests.
+    pub fn open(&self) {
+        if let Ok(mut answered) = self.answered.lock() {
+            *answered = true;
+        }
+        self.changed.notify_all();
+    }
+
+    fn is_open(&self) -> bool {
+        self.answered
+            .lock()
+            .map(|answered| *answered)
+            .unwrap_or(true)
+    }
+}
+
+/// Opens the way for the other delegates of a call when it is dropped, so a first delegate that
+/// ends before it makes a request, fails, or whose thread panics does not hold the others for the
+/// whole bound.
+pub struct OpensWhenDropped(pub Option<std::sync::Arc<FirstAnswered>>);
+
+impl Drop for OpensWhenDropped {
+    fn drop(&mut self) {
+        if let Some(first) = &self.0 {
+            first.open();
+        }
+    }
+}
+
+impl FirstRequest {
+    /// One entry per delegate of a call of `size`: the first leads and the rest follow. Empty of
+    /// any order where the call started one delegate, which has nobody to wait for.
+    pub fn for_call(size: usize) -> Vec<Option<Self>> {
+        if size < 2 {
+            return vec![None; size];
+        }
+        let first = std::sync::Arc::new(FirstAnswered::default());
+        (0..size)
+            .map(|at| match at {
+                0 => Some(Self::Lead(std::sync::Arc::clone(&first))),
+                _ => Some(Self::Follow(std::sync::Arc::clone(&first))),
+            })
+            .collect()
+    }
+
+    /// What the delegate that leads holds open until it ends, and `None` for one that follows.
+    pub fn lead(&self) -> Option<std::sync::Arc<FirstAnswered>> {
+        match self {
+            Self::Lead(first) => Some(std::sync::Arc::clone(first)),
+            Self::Follow(_) => None,
+        }
+    }
+
+    /// Called before each request. A delegate that follows waits until the first delegate's first
+    /// request was answered, the first delegate ended, the turn or a person stopped this one, or the
+    /// bound passed. Every later call finds the flag set and returns at once.
+    pub fn before_request(
+        &self,
+        cancel: &bravebot_core::cancel::Cancel,
+        stop: Option<&bravebot_core::cancel::DelegateStop>,
+    ) {
+        let Self::Follow(first) = self else {
+            return;
+        };
+        let began = std::time::Instant::now();
+        let Ok(mut answered) = first.answered.lock() else {
+            return;
+        };
+        while !*answered
+            && !cancel.is_cancelled()
+            && !stop.is_some_and(bravebot_core::cancel::DelegateStop::is_requested)
+            && began.elapsed() < FIRST_REQUEST_WAIT
+        {
+            // Woken by the first delegate, and every 50 ms to look at the stops, which signal
+            // nothing this condition variable hears.
+            match first
+                .changed
+                .wait_timeout(answered, std::time::Duration::from_millis(50))
+            {
+                Ok((held, _)) => answered = held,
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// Called after each request returns, however it ended. The delegate that leads opens the way
+    /// for the others; one that follows does nothing.
+    pub fn after_request(&self) {
+        if let Self::Lead(first) = self
+            && !first.is_open()
+        {
+            first.open();
+        }
+    }
 }
 
 /// Names what it holds and never the task.
@@ -624,6 +753,7 @@ pub fn seed<S: Sink>(
         workspace: None,
         stop: bravebot_core::cancel::DelegateStop::new(),
         context: bravebot_core::label::Integrity::Trusted,
+        first_request: None,
     }
 }
 
@@ -819,6 +949,7 @@ pub fn run(
         .with_confined_runs(confine_runs)
         .with_sandbox_mode(sandbox)
         .with_mcp(mcp.cloned())
+        .with_first_request(seeded.first_request.clone())
         .stoppable_by(seeded.stop.clone());
 
     task.file_authority = Some(seeded.file_authority.clone());
@@ -1590,5 +1721,82 @@ mod tests {
             !said.contains("read_git"),
             "a sentence about another tool reached the delegate: {said}"
         );
+    }
+
+    /// DELEGATE-35. The delegates of a call after the first wait for the first one's first request
+    /// to return, and then send without waiting again. A call of one delegate has nobody to wait
+    /// for, and a follower whose first delegate ended without a request is not held.
+    ///
+    /// Rejects: followers that send at once (each writes the prefix), followers that wait again at
+    /// every request, and a first delegate that ends without opening the way.
+    #[test]
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn the_others_of_a_call_wait_for_the_first_request_and_no_longer() {
+        assert!(FirstRequest::for_call(1).iter().all(Option::is_none));
+
+        let orders = FirstRequest::for_call(3);
+        let lead = orders[0].clone().expect("an order");
+        assert!(lead.lead().is_some(), "the first delegate does not lead");
+        assert!(
+            orders[1..]
+                .iter()
+                .all(|order| order.as_ref().is_some_and(|o| o.lead().is_none()))
+        );
+
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let (sent, arrived) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            for order in orders[1..].iter().flatten() {
+                let (sent, cancel) = (sent.clone(), cancel.clone());
+                scope.spawn(move || {
+                    order.before_request(&cancel, None);
+                    sent.send(()).expect("sent");
+                });
+            }
+            // Held while the first delegate's request is out.
+            assert!(
+                arrived
+                    .recv_timeout(std::time::Duration::from_millis(300))
+                    .is_err(),
+                "a later delegate sent before the first one's request returned"
+            );
+            lead.before_request(&cancel, None);
+            lead.after_request();
+            for _ in 0..2 {
+                arrived
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("a later delegate was still held after the first request returned");
+            }
+        });
+        // Once open, a later request does not wait.
+        let began = std::time::Instant::now();
+        orders[1]
+            .as_ref()
+            .expect("an order")
+            .before_request(&cancel, None);
+        assert!(began.elapsed() < std::time::Duration::from_millis(40));
+
+        // A first delegate that ends without a request lets the others go.
+        let orders = FirstRequest::for_call(2);
+        drop(OpensWhenDropped(
+            orders[0].as_ref().and_then(FirstRequest::lead),
+        ));
+        let began = std::time::Instant::now();
+        orders[1]
+            .as_ref()
+            .expect("an order")
+            .before_request(&cancel, None);
+        assert!(began.elapsed() < std::time::Duration::from_millis(40));
+
+        // And a stopped delegate is not held.
+        let orders = FirstRequest::for_call(2);
+        let stop = bravebot_core::cancel::DelegateStop::new();
+        stop.request();
+        let began = std::time::Instant::now();
+        orders[1]
+            .as_ref()
+            .expect("an order")
+            .before_request(&cancel, Some(&stop));
+        assert!(began.elapsed() < std::time::Duration::from_secs(1));
     }
 }

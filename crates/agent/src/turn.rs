@@ -3274,7 +3274,6 @@ where
     };
     let system = setup::system_prompt(
         task,
-        workspace,
         &delegates,
         addressed.as_ref(),
         style.as_ref(),
@@ -3420,6 +3419,16 @@ where
         policy.admit_session_excerpt(id, text.chars().count());
         said.push_str("\n\n");
         said.push_str(text);
+    }
+    // A delegate's checkout is said with its task. Its commit and path differ between the
+    // delegates of one call, so in the system prompt they would end the prefix those delegates
+    // share. In the same message as the task, so a compaction that sends the task again sends
+    // this with it (COMPACT-19, DELEGATE-35). Decided from whether the workspace is a checkout,
+    // which the driver made.
+    if task.delegate.is_some()
+        && let Some(checkout) = workspace.checkout()
+    {
+        said.push_str(crate::delegate::checkout_notice(checkout).trim_end());
     }
     // Nothing was typed, attached or pasted: a provider that requires content in every user
     // message would refuse the request this would otherwise add an empty one to, and the turn
@@ -4095,6 +4104,13 @@ where
         // The request answers to a token of its own, which also reads as cancelled once the turn is
         // stopped. A line typed while the reply is no more than thinking or a call being written
         // cancels this one alone, and the turn goes on (INPUT-10).
+        // A delegate that is not the first of its call waits here, once, until the first one's
+        // first request has been answered, so it reads the prefix that request wrote rather than
+        // writing the same one again (DELEGATE-35). Decided from a flag the driver sets after its
+        // own call returns, and from the stops.
+        if let Some(first) = &task.first_request {
+            first.before_request(cancel, task.stop.as_ref());
+        }
         let request_cut = cancel.within();
         let cuttable = cutting::Cuttable::new();
         let watch = may_cut
@@ -4152,6 +4168,11 @@ where
                 }
             })
         };
+        // Whatever came of it, the first delegate's first request is over, so the ones after it
+        // may send theirs (DELEGATE-35).
+        if let Some(first) = &task.first_request {
+            first.after_request();
+        }
         // Whatever came of the request: a ChatGPT sign-in renewed for it that the file could not take
         // is news either way, and nothing is said unless one was (CHATGPT-7).
         crate::chatgpt::say_an_unsaved_renewal(reporter);
@@ -5915,7 +5936,7 @@ mod tests {
         );
         let unlimited = read_described(setup::arming_under(&task, kept.allows("watch_file")));
         assert!(
-            unlimited.contains("watch_file is the better answer"),
+            unlimited.contains("For one file, watch_file outlives this turn."),
             "a run with watches is not sent to them: {unlimited}"
         );
     }
