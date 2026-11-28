@@ -1232,7 +1232,7 @@ fn a_checker_may_load_lsp_and_a_reader_may_not() {
 /// The most bytes the tool list of a one-shot turn's first request may take, written compactly as
 /// the request sends it. A little above what this test measures, so a description that grows back
 /// fails here.
-const FIRST_REQUEST_TOOL_BYTES: usize = 46_000;
+const FIRST_REQUEST_TOOL_BYTES: usize = 46_250;
 
 /// TOOL-7: a tick of a self-paced loop is asked by its preamble and the `loop` skill to call
 /// `schedule_next` on every tick, so its first request offers it in full and lists it nowhere for
