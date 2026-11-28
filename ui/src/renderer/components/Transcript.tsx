@@ -420,8 +420,14 @@ export function Transcript({
     setSearching(false)
     document.querySelector<HTMLElement>('.transcript-head .find-open')?.focus()
   }
+  // While a question waits, every scroll the window starts is instant. An animated scroll carries
+  // every row of a card across the window, and the card would count each one as read (PROMPT-4).
+  // `instant` and not `auto`, so a `scroll-behavior` set on `.entries` cannot animate it. A ref, so
+  // the handlers registered once read the question waiting now.
+  const waiting = useRef(pending)
+  waiting.current = pending
   const jump = (element: HTMLElement | null) => element?.scrollIntoView({ block: 'nearest',
-    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+    behavior: waiting.current ? 'instant' : window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   const latest = () => { following.current = true; setUnseen(false); jump(bottom.current) }
   useEffect(() => { void window.bravebot.readRecents().then(setRecents).catch(() => {}) }, [live?.handle])
   useLayoutEffect(() => {
