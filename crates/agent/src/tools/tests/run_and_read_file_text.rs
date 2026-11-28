@@ -63,8 +63,19 @@ fn the_run_description_names_the_special_parameters_and_the_dollar_quote_as_refu
 fn the_run_description_says_when_a_pattern_for_the_program_is_quoted() {
     let described = run_description();
     assert!(
-        described.contains("Quote a pattern meant for the program."),
+        described.contains("Quote a pattern meant for the program"),
         "the description does not say to quote a pattern meant for the program: {described}"
+    );
+    assert!(
+        described.contains("an unquoted one is replaced by the files it matches")
+            && described.contains("find . -name '*.md'"),
+        "the description does not say what an unquoted pattern becomes: {described}"
+    );
+    assert!(
+        described.contains("one after an option's `=` is passed as written")
+            && described.contains("--include=*.md"),
+        "the description does not say a pattern after an option's `=` is passed as written: \
+         {described}"
     );
 }
 
@@ -711,11 +722,6 @@ fn sentence_with<'a>(description: &'a str, needle: &str) -> &'a str {
 
 const WATCH_REQUEST: &str = "Where asked to watch";
 
-/// How the sentences for a line typed under the session's own loop, goal or watch open. They say
-/// where the next look comes from and keep the longer form of the condition.
-const WATCH_REQUEST_UNDER_A_SESSION_WATCH: &str =
-    "Where the request is to watch something or to be told when it changes";
-
 /// An answer to a request that had nothing to do with watching or change ended on a line
 /// saying no later look was scheduled, which reads as if a first look had been taken and a
 /// repeat could have been arranged. The line is for a request to watch, so the sentence that
@@ -768,8 +774,7 @@ fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_chang
         for name in ["read_file", "run"] {
             let description = tool_description(scheduling, name);
             assert!(
-                sentence_with(&description, instruction)
-                    .starts_with(WATCH_REQUEST_UNDER_A_SESSION_WATCH),
+                sentence_with(&description, instruction).starts_with(WATCH_REQUEST),
                 "{scheduling:?}: {name} has the planner say where the next look comes from for \
                  any request: {description}"
             );
