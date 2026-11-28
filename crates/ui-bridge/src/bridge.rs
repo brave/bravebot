@@ -6392,11 +6392,30 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
     };
     let account = diagnosis.and_then(|d| d.account);
     let said = account.map(crate::account_words::of_failure);
+    // The backend, the model and the fields the retries left out are the detail a refused
+    // failure's line carries (BACKEND-37); no other category holds any of them, since nothing
+    // else gives a backend or gives a field up.
+    let refused = category == Some("refused");
+    let backend = refused
+        .then(|| diagnosis.and_then(|d| d.backend))
+        .flatten()
+        .map(bravebot_agent::BackendKind::name);
+    let model = refused.then(|| {
+        bravebot_agent::confirm::printable_with_tab_pictured(
+            &bravebot_core::invisible::spelled(chosen.to_string()).text,
+        )
+    });
+    let left_out_fields = refused.then(|| {
+        diagnosis
+            .map(|d| d.conceded.in_order().map(|c| c.name()).collect::<Vec<_>>())
+            .unwrap_or_default()
+    });
     json!({ "kind": kind, "message": category.unwrap_or("cancelled"), "category": category,
         "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
         "account": account.map(AccountFailure::name),
         "accountMessage": said.as_ref().map(|said| &said.sentence),
-        "accountCommand": said.as_ref().and_then(|said| said.command) })
+        "accountCommand": said.as_ref().and_then(|said| said.command),
+        "backend": backend, "model": model, "leftOutFields": left_out_fields })
 }
 
 /// Keep the links a turn recorded with `set_link` on the session's record, as `/issue` and `/pr`

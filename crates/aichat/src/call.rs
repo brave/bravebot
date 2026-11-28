@@ -199,6 +199,21 @@ pub enum Concession {
     ThinkingShown,
 }
 
+impl Concession {
+    /// A fixed name for a front end, one for each variant and never a host, an address or
+    /// anything the service wrote ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::CacheTtl => "cache-ttl",
+            Self::Breakpoints => "breakpoints",
+            Self::Effort => "effort",
+            Self::Ceiling => "ceiling",
+            Self::ArgumentsAsWritten => "arguments-as-written",
+            Self::ThinkingShown => "thinking-shown",
+        }
+    }
+}
+
 /// The fields a call gave up, in the order it gave them up.
 ///
 /// A closed set of at most one of each [`Concession`], written by [`drive`] from the status of a

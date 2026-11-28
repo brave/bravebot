@@ -2835,7 +2835,9 @@ says no model. Only the refused category names the model and the backend.
 
 The note to the planner after a failed turn holds the category and the count only. The desktop
 bridge stores a failed turn's reason through the same line, with the configured model, so the
-desktop's stored reason names the model and the backend of a refused turn as the line above says.
+desktop's stored reason names the model and the backend of a refused turn as the line above says,
+and the window's own live failure display, sent while the turn is running, carries the same three
+fields of a refused turn, and none of them for any other category.
 
 Cancellation is distinct from failure. A processor carries cancellation and its attempt count
 separately from its tool-result text, so the parent can report the stop without parsing that text.
@@ -3013,6 +3015,8 @@ planner.
 `verified-by: bravebot_aichat::call::a_wait_started_after_a_stop_does_not_sleep`
 `verified-by: bravebot_bedrock::lib::a_reply_that_never_began_is_still_a_request_that_did_not_get_through`
 `verified-by: bravebot_bedrock::lib::a_whole_reply_that_never_began_is_not_sent_again`
+`verified-by: bravebot_ui_bridge::failure_tests::a_refused_failure_names_its_backend_model_and_the_fields_it_gave_up`
+`verified-by: bravebot_ui_bridge::failure_tests::the_failure_sent_holds_only_fixed_names_and_counts`
 `verified-by: bravebot_bedrock::lib::a_reply_that_went_quiet_while_an_argument_was_held_back_is_not_asked_for_again`
 `verified-by: bravebot_bedrock::lib::only_a_request_whose_arguments_are_held_back_stalls_rather_than_stopping`
 `verified-by: bravebot_aichat::client::a_stream_that_breaks_after_it_began_is_a_reply_that_stopped`

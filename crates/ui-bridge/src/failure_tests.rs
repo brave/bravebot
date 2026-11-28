@@ -7,6 +7,8 @@
 
 use super::*;
 use bravebot_agent::backend::BackendError;
+use bravebot_agent::{BackendKind, RetrySetting};
+use bravebot_aichat::call::{Conceded, Concession};
 use bravebot_aichat::responses::protocol::Refusal;
 use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure, XaiFailure};
 use std::time::Duration;
@@ -299,8 +301,10 @@ fn a_refused_premium_key_is_sent_as_any_other_unauthorized_failure() {
 }
 
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a
-/// reply, a request or a settings file held. The keys are `kind`, `message`, `category`, `attempts` and
-/// `status`, and the name, the sentence and the command of the account's failure.
+/// reply, a request or a settings file held. The keys are `kind`, `message`, `category`,
+/// `attempts` and `status`, the name, the sentence and the command of the account's failure, and,
+/// since this fixture's category is `refused`, the backend, the model and the fields left out
+/// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
 #[test]
 fn the_failure_sent_holds_only_fixed_names_and_counts() {
     let sent = failed_with(ChatError::Account(AccountFailure::Named {
@@ -322,13 +326,71 @@ fn the_failure_sent_holds_only_fixed_names_and_counts() {
             "accountCommand",
             "accountMessage",
             "attempts",
+            "backend",
             "category",
             "kind",
+            "leftOutFields",
             "message",
+            "model",
             "status"
         ],
         "{sent}"
     );
     // `message` is the category's name and not a sentence of the account's, which the window draws as `accountMessage`.
     assert_eq!(sent["message"], "refused", "{sent}");
+    // An account failure names no backend and gave up no field, but the category is still
+    // `refused`, so the model is named and the other two fields are sent as empty rather than
+    // left out.
+    assert_eq!(sent["backend"], Value::Null, "{sent}");
+    assert_eq!(sent["leftOutFields"], json!([]), "{sent}");
+}
+
+/// BACKEND-37: a refused failure's line names the backend that sent the requests, the model the
+/// turn ran on and the request fields the retries left out, in the order they were given up, and
+/// no other category carries any of the three.
+///
+/// The faults this rejects: the three fields sent for a category other than `refused`, the
+/// backend or the model read from anything but the fixed closed set and the configured name, and
+/// the fields left out sent in a different order from the one the call gave them up in.
+#[test]
+fn a_refused_failure_names_its_backend_model_and_the_fields_it_gave_up() {
+    let status = || bravebot_net::EgressError::Status {
+        url: "https://service.example.invalid/v1/chat".to_string(),
+        status: 400,
+        retry_after: None,
+        body: None,
+    };
+    let mut given = Conceded::default();
+    given.push(Concession::Effort);
+    given.push(Concession::Ceiling);
+    let refused = failed_with(BackendError::Attempted {
+        attempts: 3,
+        usage: None,
+        context_tokens: None,
+        conceded: given,
+        backend: Some(BackendKind::Bedrock),
+        retry_setting: RetrySetting::None,
+        cause: Box::new(BackendError::from(ChatError::Egress(status()))),
+    });
+    assert_eq!(refused["category"], "refused", "{refused}");
+    assert_eq!(refused["backend"], "bedrock", "{refused}");
+    assert_eq!(refused["model"], "chatgpt/gpt-test", "{refused}");
+    assert_eq!(
+        refused["leftOutFields"],
+        json!(["effort", "ceiling"]),
+        "{refused}"
+    );
+
+    // Any other category sends none of the three, even where a diagnosis happens to carry a
+    // backend: the window has no use for them outside the one line that names them.
+    let unavailable = failed_with(ChatError::Egress(bravebot_net::EgressError::Status {
+        url: "https://service.example.invalid/v1/chat".to_string(),
+        status: 503,
+        retry_after: None,
+        body: None,
+    }));
+    assert_eq!(unavailable["category"], "unavailable", "{unavailable}");
+    assert_eq!(unavailable["backend"], Value::Null, "{unavailable}");
+    assert_eq!(unavailable["model"], Value::Null, "{unavailable}");
+    assert_eq!(unavailable["leftOutFields"], Value::Null, "{unavailable}");
 }
