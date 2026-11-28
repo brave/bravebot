@@ -191,6 +191,13 @@ fn the_descriptions_quote_the_wait_in_force_and_its_cache_cost() {
                 .contains("prompt cache lifetime"),
             "{lifetime:?}: deadline_seconds does not give the cache cost"
         );
+        assert!(
+            run.function
+                .parameters
+                .to_string()
+                .contains("background: true, watched with job_output in shorter waits"),
+            "{lifetime:?}: deadline_seconds does not point at background: true with shorter waits"
+        );
     }
 }
 

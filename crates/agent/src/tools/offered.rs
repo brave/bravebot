@@ -1195,8 +1195,8 @@ fn table(
                     },
                     "revision": {
                         "type": "string",
-                        "description": "git syntax. log: one, A..B or A...B. diff: A..B, \
-                                        \"A B\" or A...B. tags: those it reaches. Defaults to \
+                        "description": "log: one, A..B or A...B. diff: A..B, \
+                                        \"A B\" or A...B. tags: those it reaches. Default \
                                         HEAD."
                     },
                     "path": {
@@ -1209,7 +1209,7 @@ fn table(
                     },
                     "count": {
                         "type": "integer",
-                        "description": "Defaults to 20, at most 200."
+                        "description": "Default 20, most 200."
                     },
                     "skip": {
                         "type": "integer"
@@ -1220,13 +1220,13 @@ fn table(
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "show of <revision>:<path> only: the first line, from 1. A \
-                                        show cut short gives the next offset."
+                        "description": "show of <revision>:<path> only: first line, from 1; a \
+                                        cut show gives the next offset."
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "show of <revision>:<path> only: the most lines, \
-                                        default and most 2000."
+                        "description": "show of <revision>:<path> only: most lines, default \
+                                        and most 2000."
                     },
                     "since": {
                         "type": "string",
@@ -1534,7 +1534,7 @@ fn table(
                         "description": format!(
                             "Default {deadline_default}, from {} to {deadline_ceiling}. One past \
                              the prompt cache lifetime rewrites the cache; prefer background: \
-                             true.",
+                             true, watched with job_output in shorter waits.",
                             crate::exec::FLOOR.as_secs()
                         )
                     },
