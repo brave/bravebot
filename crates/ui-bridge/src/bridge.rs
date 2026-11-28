@@ -5731,7 +5731,7 @@ fn shown_path(path: &Path, project: &Path) -> String {
 /// starting a loop over it (LOOP-14), and keeps loops of its own beside the goal and the watches.
 /// Every line the bridge wrote, such as a goal's carry-on or a watch's firing, is not the
 /// person's. A watch slot that cannot be read counts as live, so a wait is not kept beside a
-/// watch nobody can see, as the bridge read it before.
+/// watch nobody can see.
 fn later_look_of(
     typed_by_the_person: bool,
     sent_again_after_a_wait: bool,
