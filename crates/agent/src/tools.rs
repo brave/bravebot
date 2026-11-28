@@ -13920,6 +13920,54 @@ fn shown_content_type(raw: Option<&str>) -> String {
     }
 }
 
+/// Put a host a download was redirected to to the person, and on a yes start the transfer again
+/// from the origin with that host allowed for it alone (FETCH-4, DOWNLOAD-2). `None` for a no,
+/// which leaves the refusal the gate gave.
+///
+/// The host is a server's own bytes, so it is drawn and decides nothing until the person says the
+/// download may go there: the answer is bound to the host as it was drawn, spent once, and gone
+/// when the request reports back. The gate refuses a redirect hop before any byte of the body
+/// arrives, so nothing has been written to the destination yet, and the retry is a fresh request
+/// rather than a resumption of one.
+fn download_followed_to<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    url: &str,
+    approved: &str,
+    hop: &Labelled<String>,
+    request: bravebot_net::Request,
+) -> Option<Result<bravebot_net::Streamed<'static>, bravebot_net::EgressError>> {
+    let shown = policy.render_in_place("download_url", hop, |host| host);
+    let host = {
+        let proof = policy.authorise_display_release("where a download was redirected to");
+        shown.declassify(&proof)
+    };
+    let question = crate::confirm::FetchRequest {
+        url: url.to_string(),
+        host: host.clone(),
+        redirected_from: Some(approved.to_string()),
+        classified: crate::confirm::Classified::NotAsked,
+    };
+    if confirmer.confirm_fetch(&question) == Decision::Reject {
+        policy.refuse_unapproved_fetch("download_url");
+        return None;
+    }
+
+    policy.endorse_fetch(url);
+    policy.endorse_fetch_hop(&host);
+    let label = policy.before_fetch_via(url, &host).ok()?;
+    if let Some(spent) = bravebot_core::ambient::at_host(&host) {
+        policy.record_ambient(&[spent]);
+    }
+    let followed = tools
+        .chat
+        .egress
+        .fetch_streaming(policy, request, label, Some(tools.cancel));
+    policy.fetch_finished();
+    Some(followed)
+}
+
 /// Save what a URL serves to a file, which neither the driver nor the planner reads.
 ///
 /// Two routing arguments, each of which a person can read and answer for: the URL, through the
@@ -14056,13 +14104,27 @@ fn download_url<S: Sink, C: Confirmer>(
     // No `Accept` of this program's own: a download wants the file as the server holds it, and
     // the Markdown preference `fetch_url` states is for a page a processor reads.
     let request = bravebot_net::Request::get(&url).stream_within(DOWNLOAD_WITHIN);
-    let opened = tools
-        .chat
-        .egress
-        .fetch_streaming(policy, request, label, Some(tools.cancel));
+    let mut opened =
+        tools
+            .chat
+            .egress
+            .fetch_streaming(policy, request.clone(), label, Some(tools.cancel));
     // Once the request is open, so a failure does not leave the turn's other egress being checked
     // against the host this one call was approved for. The body is read below with no hop left.
     policy.fetch_finished();
+
+    // A hop the gate stopped for leaving the approved host is put to the person (FETCH-4,
+    // DOWNLOAD-2). A no leaves `opened` the refusal it was, and a yes starts the transfer again
+    // from the origin with that host allowed for it alone: nothing has been written yet, since
+    // the gate refuses the hop before any byte of the body arrives.
+    if opened.is_err()
+        && let Some(hop) = policy.take_fetch_hop()
+        && let Some(followed) =
+            download_followed_to(policy, tools, confirmer, &url, &host, &hop, request)
+    {
+        opened = followed;
+    }
+
     let mut stream = match opened {
         Ok(stream) => stream.capped_at(tools.download_cap),
         Err(error) => {
