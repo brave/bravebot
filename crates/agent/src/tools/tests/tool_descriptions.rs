@@ -1072,6 +1072,28 @@ fn argument_of(offered: &[bravebot_aichat::protocol::Tool], tool: &str, argument
 /// and a paragraph naming a tool the list lacks.
 #[test]
 fn the_run_description_on_watching_names_only_the_tools_the_list_holds() {
+    const ROUTE: &str = "Asked to watch something, or to say when it changes, load the built-in \
+         skill watching before you take the first look: a file and a program are watched by \
+         different means, and it says which, and what to say about the next look.";
+    const FILE: &str =
+        "A file takes no command: compare read_file's change token from one look with the next.";
+    const FILE_BARE: &str =
+        "A file is watched by comparing what one look at it returned with what the next returns.";
+    const PROGRAM: &str = "A program's own output is watched with background: true and then \
+         job_output with wait_seconds.";
+    const PROGRAM_BARE: &str =
+        "A program's own output is watched with background: true, and you are told when it ends.";
+    // The paragraph the route stands for where the turn cannot load the skill, written out in full.
+    let inline = |file: &str, program: &str| {
+        format!(
+            "Asked to watch something, or to say when it changes, decide first what is being \
+             watched. {file} {program} Neither reaches past this turn by itself, so take the first \
+             look now. Say which window you watched, or which looks you compared, rather than a \
+             time of day, which you have no clock for. Where the request is to watch something or \
+             to be told when it changes, and you have scheduled no further look, say that too. Any \
+             other request gets no sentence about a later look."
+        )
+    };
     let route = "load the built-in skill watching";
     let full = description_of(&the_table_without(&[]), "run");
     assert!(full.contains(route), "{full}");
@@ -1083,34 +1105,42 @@ fn the_run_description_on_watching_names_only_the_tools_the_list_holds() {
         "a turn that can load the skill was not sent to it"
     );
 
-    for (listed, gone) in [(false, &[][..]), (true, &["load_skill"][..])] {
-        let mut offered = the_table_without(gone);
-        state_watching_route(&mut offered, listed);
-        let said = description_of(&offered, "run");
-        assert!(
-            !said.contains(route),
-            "listed {listed}, without {gone:?}: {said}"
-        );
-        for stated in [
-            "decide first what is being watched",
-            "compare read_file's change token",
-            "background: true and then job_output with wait_seconds",
-            "take the first look now",
-        ] {
-            assert!(
-                said.contains(stated),
-                "listed {listed}, without {gone:?}: no '{stated}': {said}"
-            );
-        }
-    }
+    // Taking `read_file` or `job_output` off a list that can still load the skill changes nothing
+    // in `run`'s description, since the route names neither.
     for gone in ["read_file", "job_output"] {
-        let mut offered = the_table_without(&["load_skill", gone]);
+        let mut offered = the_table_without(&[gone]);
+        let before = description_of(&offered, "run");
         state_watching_route(&mut offered, true);
-        let said = description_of(&offered, "run");
-        assert!(!names_the_tool(&said, gone), "{gone} remains: {said}");
-        assert!(
-            said.contains("decide first what is being watched"),
-            "{said}"
+        assert_eq!(
+            description_of(&offered, "run"),
+            before,
+            "taking {gone} off changed run's description where the skill can be loaded"
+        );
+    }
+    // Where the skill cannot be loaded, `run`'s description is what it is for the same list with
+    // the route replaced by the paragraph in full, and nothing else differs.
+    for (listed, gone, expected) in [
+        (false, &[][..], inline(FILE, PROGRAM)),
+        (true, &["load_skill"][..], inline(FILE, PROGRAM)),
+        (
+            true,
+            &["load_skill", "read_file"][..],
+            inline(FILE_BARE, PROGRAM),
+        ),
+        (
+            true,
+            &["load_skill", "job_output"][..],
+            inline(FILE, PROGRAM_BARE),
+        ),
+    ] {
+        let mut offered = the_table_without(gone);
+        let before = description_of(&offered, "run");
+        assert!(before.contains(ROUTE), "without {gone:?}: {before}");
+        state_watching_route(&mut offered, listed);
+        assert_eq!(
+            description_of(&offered, "run"),
+            before.replacen(ROUTE, &expected, 1),
+            "listed {listed}, without {gone:?}"
         );
     }
 }

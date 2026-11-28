@@ -295,8 +295,9 @@ held back, `read_file` drops the half that names it beside `watch_file`, and the
 it and name neither. A result where a held-back tool's situation arises names `load_tool` with the
 tool's name: the line after a failed step names `request_path` only through `load_tool`, and only
 where the session would accept a request, and the note of a kept checkout names `apply_checkout`
-after the step that loads it. Where the tool is neither offered nor held back, both say what they
-said before.
+after the step that loads it. Where `request_path` is neither offered nor held back, the line after
+a failed step names no `request_path`, and where `apply_checkout` is neither, the note of a kept
+checkout says only where the files stay until the person brings them back another way.
 
 `search` and `list_files` lose their `read` argument where the list lacks `vet_content`, since
 `read` asks for the release `vet_content` makes ([VET-6](vet-content.md#VET-6)).

@@ -1505,8 +1505,9 @@ fn the_watching_skill_is_listed_and_carries_the_two_techniques() {
             "the body does not say '{stated}': {body}"
         );
     }
-    // `tail -f` was the wrong recipe for a file, and the tool that arranges a look differs by
-    // turn, so a body sent to every turn names neither.
+    // `tail -f` is not in the read-proven table, so watching a file with it costs an approval, and
+    // it reports appends only, where a file is watched by its change token. The tool that arranges
+    // a look differs by turn. A body sent to every turn names neither.
     for unsaid in ["tail -f", "schedule_next"] {
         assert!(!body.contains(unsaid), "the body says '{unsaid}': {body}");
     }
