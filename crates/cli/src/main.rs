@@ -1407,7 +1407,20 @@ fn prepare_the_run(
         .addressing_standing(true)
         .model_outranks_a_definition(named_on_the_command_line)
         // Every round is told the condition it is judged against, the first one included (GOAL-14).
-        .working_towards(goal.clone());
+        .working_towards(goal.clone())
+        // The person's line under `--goal` is answered by the goal, which sends the work back
+        // while the condition is unmet; the rounds it sends back are the driver's sentence and
+        // are told nothing asks again (SCHED-6). A one-shot run sends no line again after a wait.
+        .later_look(bravebot_agent::turn::LaterLook::for_line(
+            bravebot_agent::turn::AboutTheLine {
+                the_persons: true,
+                goal: match goal {
+                    Some(_) => bravebot_agent::turn::GoalHeld::InForce,
+                    None => bravebot_agent::turn::GoalHeld::None,
+                },
+                ..bravebot_agent::turn::AboutTheLine::default()
+            },
+        ));
     task = task_from_the_settings(task, &settings, effort);
     // A one-shot run puts no question to anybody (ASK-7), so the planner is told to say in its
     // reply what it could not read. A run reading lines sends its questions to the program feeding

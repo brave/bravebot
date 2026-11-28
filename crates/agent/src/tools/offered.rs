@@ -15,13 +15,17 @@ const TODO_STATUSES: [&str; 5] = Status::NAMES;
 
 /// What a turn may say about when it runs again.
 ///
-/// Four states rather than a flag, because "nobody is pacing this turn", "somebody else is" and
-/// "nothing will ask this turn anything again" want three different answers. A turn nobody is
-/// looping, on a caller that will put its line again, has to arrange its own later look or answer
-/// a request to report a change from one read and stop. A tick of a loop the person timed has that
-/// look coming already, so a tool for asking for one would have it schedule a second, and the
-/// wait would be dropped: the interval decides when that loop runs, not the turn. A turn nothing
-/// will ask again has the same wait dropped for the opposite reason, and the same answer.
+/// Seven states rather than a flag, because "nobody is pacing this turn", "somebody else is",
+/// "this session's own loop, goal or watch takes the next look" and "nothing will ask this turn
+/// anything again" want different answers. A turn nobody is looping, on a caller that will put its
+/// line again, has to arrange its own later look or answer a request to report a change from one
+/// read and stop. A tick of a loop the person timed has that look coming already, so a tool for
+/// asking for one would have it schedule a second, and the wait would be dropped: the interval
+/// decides when that loop runs, not the turn. A line the person typed while the session's loop,
+/// goal or watch is live has the wait dropped too, because the session does one of those at a
+/// time, but something of the session's own does start another turn, so it is not told that
+/// nothing will. A turn nothing will ask again has the same wait dropped for the opposite reason,
+/// and is told no later look is coming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheduling {
     /// Not a tick of anything, on a caller that will ask again. It may arrange the one later look
@@ -31,6 +35,16 @@ pub enum Scheduling {
     PacingALoop,
     /// A tick of a loop the person gave an interval for. There is nothing here to decide.
     TheirInterval,
+    /// A line the person typed while this session's loop runs. The loop's next tick is the next
+    /// look, and a wait this turn asked for would be dropped, so the tool is withheld.
+    UnderALoop,
+    /// A line the person typed while this session works towards a goal. The goal sends the work
+    /// back on its own, and a wait this turn asked for would be dropped, so the tool is withheld.
+    UnderAGoal,
+    /// A line the person typed while this session holds a standing watch. The watch starts a turn
+    /// when its file changes, and a wait this turn asked for would be dropped, so the tool is
+    /// withheld.
+    UnderAWatch,
     /// Nothing will ask this turn's line again, whatever wait it names: a surface that runs one
     /// turn and exits, or a line this program wrote rather than the person.
     ///
@@ -44,8 +58,9 @@ pub enum Scheduling {
 impl Scheduling {
     /// Whether the tool is offered to the planner, and dispatched where it is called anyway.
     ///
-    /// Withheld from a tick the person timed, which has nothing to decide, and from a turn
-    /// nothing will ask again, which has nothing a wait could become. A call from either is
+    /// Withheld from a tick the person timed, which has nothing to decide, from a line typed under
+    /// the session's own loop, goal or watch, whose wait the session would drop, and from a turn
+    /// nothing will ask again, which has nothing a wait could become. A call from any of them is
     /// answered the way any other name nobody offered is.
     pub fn offered(self) -> bool {
         matches!(self, Scheduling::ArrangingALook | Scheduling::PacingALoop)
@@ -928,6 +943,34 @@ fn table(
             "Inside a loop the next tick is the next look, so there is nothing to arrange: report what this tick saw and leave the rest to the next one.",
             "Inside a loop that is already what happens, so take this tick's look, report what it saw and leave the rest to the next one.",
         ),
+        // A line the person typed while the session's own loop, goal or watch is live. Something
+        // of the session's starts another turn, so the turn is not told that nothing will, and
+        // the session drops any wait this turn would ask for, so it is not told to arrange one.
+        // Each says what that next turn looks at, because it is not necessarily what this
+        // request asked about. The loop and the watch say not to wait in the foreground for the
+        // look they take; the goal does not, because GOAL-15 has a turn under a goal wait inside
+        // the turn for a condition outside the session.
+        Scheduling::UnderALoop => (
+            "This session's loop sends its line again without this turn, and this turn does not set the wait. Where the request is to watch something or to be told when it changes, report what this look found and say that the loop's next turn looks again at what the loop's line asks about; where the loop's line does not ask about what was asked here, say plainly that no later look at it is coming, and do not wait in this turn for the look the loop's next turn takes.",
+            "This session's loop sends its line again without this turn, and this turn does not set the wait. Where the request is to watch something or to be told when it changes, take this look now, report what it found and say that the loop's next turn looks again at what the loop's line asks about; where the loop's line does not ask about what was asked here, say plainly that no later look at it is coming, and do not wait in this turn for the look the loop's next turn takes.",
+        ),
+        Scheduling::UnderAGoal => (
+            "This session's goal sends the work back for another turn while its condition is unmet, and this turn does not set the wait. Where the request is to watch something or to be told when it changes, report what this look found and say that the goal's next turn, while its condition is unmet, looks again only at what the condition asks about; where the condition does not ask about what was asked here, say plainly that no later look at it is coming. What the goal's instructions say about waiting for the condition inside a turn still holds.",
+            "This session's goal sends the work back for another turn while its condition is unmet, and this turn does not set the wait. Where the request is to watch something or to be told when it changes, take this look now, report what it found and say that the goal's next turn, while its condition is unmet, looks again only at what the condition asks about; where the condition does not ask about what was asked here, say plainly that no later look at it is coming. What the goal's instructions say about waiting for the condition inside a turn still holds.",
+        ),
+        // The turn is not told which files the session's watches cover, and a session may hold
+        // several, so neither wording asks it to compare. Where it may arm a watch, arming one of
+        // the file asked about is the later look, and a path already watched arms nothing new, so
+        // it is not told that no later look at that file is coming. Where it may not, it is told
+        // only what the watches report on, and names no tool it is not offered (ARM-6).
+        Scheduling::UnderAWatch if arming.offered() => (
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where the request is to watch something or to be told when it changes, report what this look found; where what was asked about is a file, arm a standing watch of it with watch_file, which reports its change and arms nothing new where a watch already covers that file, and do not wait in this turn for that file to change; where it is not a file, or no watch of it could be armed, say plainly that no later look at it is coming.",
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where the request is to watch something or to be told when it changes, take this look now and report what it found; where what was asked about is a file, arm a standing watch of it with watch_file, which reports its change and arms nothing new where a watch already covers that file, and do not wait in this turn for that file to change; where it is not a file, or no watch of it could be armed, say plainly that no later look at it is coming.",
+        ),
+        Scheduling::UnderAWatch => (
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where the request is to watch something or to be told when it changes, report what this look found, say that this session's standing watches report a change only to the files they cover and that no later look at anything else is coming, and do not wait in this turn for a change one of them reports.",
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where the request is to watch something or to be told when it changes, take this look now, report what it found, say that this session's standing watches report a change only to the files they cover and that no later look at anything else is coming, and do not wait in this turn for a change one of them reports.",
+        ),
         Scheduling::NoLaterLook => (
             "Comparing a second token needs a later turn, and nothing will ask you again: this turn is the last one asked about the user's line. Where the request is to watch something or to be told when it changes, report what this look found and say plainly that no later look is coming, rather than promising a later report or telling the user to arrange one.",
             "Nothing will ask you again, though: this turn is the last one asked about the user's line, so take the look you can take inside it. Where the request is to watch something or to be told when it changes, say plainly that no later one is coming.",
@@ -1660,11 +1703,12 @@ fn table(
                 "required": ["query"]
             }),
         ),
-        // ASK-12. The text does not depend on the mode. The four sentences it adds say that a
-        // question costs the user's attention, and name no mode and no place a question goes,
-        // because the planner is told of no mode but plan mode (MODE-3, MODE-8) and nothing about
-        // what decides (AUTO-7). The older clause that the questions are put to the user one at a
-        // time is unchanged.
+        // ASK-12. The text does not depend on the mode. The sentences it adds say that a question
+        // costs the user's attention and how to word a question for somebody who has not seen
+        // what the planner read, and the `question` and `detail` arguments say the latter in a
+        // shorter form. They name no mode and no place a question goes, because the planner is
+        // told of no mode but plan mode (MODE-3, MODE-8) and nothing about what decides (AUTO-7).
+        // The sentence that the questions are put to the user one at a time is not part of ASK-12.
         Tool::function(
             "ask_user",
             format!(
@@ -1682,7 +1726,11 @@ fn table(
              than a question per turn; they are put to the user one at a time. Offer concrete \
              options where you can; the user may also answer in their own words or skip a \
              question, and a skipped question is an answer to work with rather than a reason to \
-             ask again."
+             ask again. Write each question and option so that somebody who has not seen what \
+             you read can answer it, in plain words saying what they would see or get, with no \
+             issue numbers, clause IDs or internal names; the user sees only the question, its \
+             options and the text of your reply before the call, not files you wrote or results \
+             you read, so state there what each option does and the facts the choice rests on."
             ),
             json!({
                 "type": "object",
@@ -1703,7 +1751,11 @@ fn table(
                                 },
                                 "question": {
                                     "type": "string",
-                                    "description": "The question, in one sentence."
+                                    "description": "The question, in one sentence, in plain \
+                                                    words that somebody who has not seen what \
+                                                    you read can answer, saying what they \
+                                                    would see or get, with no issue numbers, \
+                                                    clause IDs or internal names."
                                 },
                                 "options": {
                                     "type": "array",
@@ -1725,7 +1777,12 @@ fn table(
                                             "detail": {
                                                 "type": "string",
                                                 "description": "Optional line saying what \
-                                                                choosing it means."
+                                                                choosing it means, in plain \
+                                                                words for somebody who has \
+                                                                not seen what you read: what \
+                                                                they would see or get, with \
+                                                                no issue numbers, clause IDs \
+                                                                or internal names."
                                             }
                                         },
                                         "required": ["label"]

@@ -76,7 +76,7 @@ fn take_turn_in(
             working_towards: None,
             loops: Default::default(),
             tick: None,
-            looking_again: false,
+            later_look: bravebot_agent::turn::LaterLook::Nothing,
             model: None,
             addressing: None,
             addressing_standing: false,

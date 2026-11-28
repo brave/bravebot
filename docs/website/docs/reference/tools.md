@@ -47,8 +47,12 @@ to one without it and not to a delegate.
 [`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
 [`schedule_next`](#schedule_next) goes to a turn that will be asked again: one inside a self-paced
 [`/loop`](commands.md#loop-interval-prompt), and one on a line you typed in a session that can send
-it again. Not to a tick of a loop you gave an interval for, not to a delegate, and not where nothing
-will ask again, which is a one-shot run, the desktop application, or a line the agent wrote itself.
+it again. Not to a tick of a loop you gave an interval for, and not to a delegate. Not to a line you
+type while the session's own loop, goal or standing watch is live: that loop, goal or watch starts
+the next turn, and the turn is told which one and what it looks at. Not to a one-shot run or a line
+the agent wrote itself. Nothing sends those again, except the first line of a one-shot
+[`--goal`](cli.md#--goal-condition) run: the goal sends the work back while its condition is unmet,
+and that turn is told so.
 [`watch_file`](#watch_file) goes to a session that keeps watches, so not to a delegate, a one-shot
 run or a planned run. [`advisor`](#advisor) goes to a session that named a model to consult with
 [`--advisor`](cli.md#--advisor-name), the [`advisorModel`](../customize/configuration.md#advisormodel)
@@ -1328,7 +1332,9 @@ The planner is also told not to ask a question your request already answers, and
 to do what you asked or whether to do it automatically, because you asked for it. What is left to
 ask is a choice your request leaves open and that differs in consequence, such as which of two
 accounts to send from. Each question it asks costs your attention, and no
-[permission mode](../security/permission-modes.md) answers it for you.
+[permission mode](../security/permission-modes.md) answers it for you. It is told to word each
+question and option in plain words for someone who has not seen what it read, because you see only
+the question, its options and the reply before it, not files it wrote or results it read.
 
 ## `propose_plan`
 
@@ -1426,6 +1432,10 @@ which starts a loop over the line you typed. It is offered only where that later
 happen; a call from any other turn is answered the way any unoffered name is. A turn that runs a prompt
 bravebot wrote for a command, as [`/init`](commands.md#init), [`/review`](commands.md#review-target-focus)
 and [`/help`](commands.md#help-question) do, is not offered it, so those cannot start a loop that repeats the fixed prompt.
+A line you type while the session's own loop, goal or standing watch is live is not offered it either,
+since the session runs one of the three at a time. The turn is told that the live one starts the next
+turn, what that turn looks at, and that it does not set the wait itself. In a one-shot run with
+[`--goal`](cli.md#--goal-condition) your line is told the goal sends the work back.
 
 | Parameter | |
 |---|---|

@@ -190,6 +190,9 @@ fn the_run_description_says_to_probe_a_browsers_debugging_port_before_asking_abo
         Scheduling::ArrangingALook,
         Scheduling::PacingALoop,
         Scheduling::TheirInterval,
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
         Scheduling::NoLaterLook,
     ] {
         read(
@@ -321,6 +324,12 @@ fn the_run_description_points_text_made_from_an_output_at_the_processor() {
 /// Each turn is checked for the wrong sentence as well as the right one: a description that
 /// carried all three answers at once would satisfy any test that only looked for the one it
 /// wanted, and would leave the planner picking whichever it read first.
+#[expect(clippy::panic, reason = "a test fails by panicking")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of what each kind of scheduling tells a watch request, checked for the \
+              right sentence and against the others' in the same pass"
+)]
 #[test]
 fn what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_arrange() {
     let described = |scheduling, name: &str| {
@@ -367,6 +376,166 @@ fn what_a_watch_request_is_told_about_the_next_look_matches_what_this_turn_can_a
             !last.contains("schedule_next"),
             "{name} sent a turn nothing will ask again to a tool it was not offered: {last}"
         );
+
+        // A line the person typed under the session's own loop, goal or watch is withheld the
+        // tool as well, but something of the session's does start another turn, so it is told
+        // which one and that this turn does not set the wait, and not that nothing will ask.
+        for (scheduling, which) in [
+            (Scheduling::UnderALoop, "loop"),
+            (Scheduling::UnderAGoal, "goal"),
+            (Scheduling::UnderAWatch, "watch"),
+        ] {
+            let under = described(scheduling, name);
+            let lowered = under.to_lowercase();
+            assert!(
+                lowered.contains(&format!("this session's {which}"))
+                    || lowered.contains(&format!("this session's standing {which}")),
+                "{name} under a {which} was not told the {which} takes the next look: {under}"
+            );
+            assert!(
+                under.contains("this turn does not set the wait"),
+                "{name} under a {which} was not told this turn does not set the wait: {under}"
+            );
+            for claim in [
+                "nothing will ask you again",
+                "no later look is coming",
+                "no later one is coming",
+            ] {
+                assert!(
+                    !lowered.contains(claim),
+                    "{name} under a {which} was told '{claim}': {under}"
+                );
+            }
+            assert!(
+                !under.contains("schedule_next"),
+                "{name} under a {which} was sent to a tool it was not offered: {under}"
+            );
+        }
+
+        // Where the next turn comes from, in each case's own terms. The loop sends its own line
+        // again, so a turn that waited in the foreground for that look would be standing in for
+        // it. The goal sends the work back while its condition is unmet, and GOAL-15 has a turn
+        // under a goal wait inside the turn, so it is not told not to. The watch starts a turn
+        // only when its own file changes, so it is no later look at anything else.
+        let under_a_loop = described(Scheduling::UnderALoop, name);
+        for stated in [
+            "This session's loop sends its line again without this turn",
+            "where the loop's line does not ask about what was asked here, say plainly that no \
+             later look at it is coming",
+            "do not wait in this turn for the look the loop's next turn takes",
+        ] {
+            assert!(
+                under_a_loop.contains(stated),
+                "{name} under a loop does not say '{stated}': {under_a_loop}"
+            );
+        }
+        let under_a_goal = described(Scheduling::UnderAGoal, name);
+        for stated in [
+            "This session's goal sends the work back for another turn while its condition is \
+             unmet",
+            "waiting for the condition inside a turn still holds",
+            "where the condition does not ask about what was asked here, say plainly that no \
+             later look at it is coming",
+        ] {
+            assert!(
+                under_a_goal.contains(stated),
+                "{name} under a goal does not say '{stated}': {under_a_goal}"
+            );
+        }
+        assert!(
+            !under_a_goal.contains("do not wait in this turn"),
+            "{name} under a goal contradicts GOAL-15's advice to wait inside the turn: \
+             {under_a_goal}"
+        );
+        // Neither case leaves the reader to work out what a bare "that" refers to.
+        for (which, under) in [("loop", &under_a_loop), ("goal", &under_a_goal)] {
+            assert!(
+                !under.contains("where that is not what was asked about"),
+                "{name} under a {which} says 'that' where it means the {which}'s own line or \
+                 condition: {under}"
+            );
+        }
+        // The turn is not told which files the session's watches cover, and a session may hold
+        // several, so it is told what they report on rather than asked to compare. Where it may
+        // arm a watch, a file the watches do not cover is answered by arming one, so it is not
+        // told that no later look at that file is coming. Rejects: the watch wording asking the
+        // planner whether the file is the watched one, and one wording given to both armings.
+        let under_a_watch = described(Scheduling::UnderAWatch, name);
+        for stated in [
+            "This session's standing watches start a turn only when a file they cover changes",
+            "They report on the files they cover and on nothing else",
+            "where what was asked about is a file, arm a standing watch of it with watch_file",
+            "do not wait in this turn for that file to change",
+            "where it is not a file, or no watch of it could be armed, say plainly that no later \
+             look at it is coming",
+        ] {
+            assert!(
+                under_a_watch.contains(stated),
+                "{name} under a watch with watches to arm does not say '{stated}': {under_a_watch}"
+            );
+        }
+        let unarmable = available(
+            Scheduling::UnderAWatch,
+            Arming::Unavailable,
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .find(|t| t.function.name == name)
+        .unwrap_or_else(|| panic!("{name} is offered"))
+        .function
+        .description;
+        for stated in [
+            "This session's standing watches start a turn only when a file they cover changes",
+            "say that this session's standing watches report a change only to the files they \
+             cover and that no later look at anything else is coming",
+            "do not wait in this turn for a change one of them reports",
+        ] {
+            assert!(
+                unarmable.contains(stated),
+                "{name} under a watch with no watch to arm does not say '{stated}': {unarmable}"
+            );
+        }
+        for (arming, under) in [("to arm", &under_a_watch), ("none to arm", &unarmable)] {
+            assert!(
+                !under.contains("whether what was asked about is the file the watch covers"),
+                "{name} under a watch ({arming}) asks the planner to compare a file with watched \
+                 paths it was never given: {under}"
+            );
+        }
+        assert!(
+            !under_a_watch.contains("no later look at anything else is coming"),
+            "{name} under a watch tells a turn that may arm one that no later look at another \
+             file is coming: {under_a_watch}"
+        );
+        assert!(
+            !unarmable.contains("arm a standing watch"),
+            "{name} under a watch sends a turn that may not arm one to arm one: {unarmable}"
+        );
+    }
+
+    // ARM-6: a turn whose surface keeps no watches is not offered watch_file, so the wording for
+    // these three states does not name it either.
+    for scheduling in [
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
+    ] {
+        for tool in available(
+            scheduling,
+            Arming::Unavailable,
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        ) {
+            if ["read_file", "run"].contains(&tool.function.name.as_str()) {
+                assert!(
+                    !tool.function.description.contains("watch_file"),
+                    "{scheduling:?}: {} names watch_file where it is not offered: {}",
+                    tool.function.name,
+                    tool.function.description
+                );
+            }
+        }
     }
 }
 
@@ -561,6 +730,9 @@ fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_chang
         Scheduling::ArrangingALook,
         Scheduling::PacingALoop,
         Scheduling::TheirInterval,
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
         Scheduling::NoLaterLook,
     ] {
         for (name, instruction) in [
@@ -576,6 +748,33 @@ fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_chang
                 description.contains("Any other request gets no sentence about a later look"),
                 "{name} does not tell the planner a request that did not ask gets no such line: \
                  {description}"
+            );
+        }
+    }
+
+    // A line typed under the session's own loop, goal or watch is told where the next look comes
+    // from, and that is a sentence about a later look too, so it opens with the same condition.
+    for (scheduling, instruction) in [
+        (
+            Scheduling::UnderALoop,
+            "say that the loop's next turn looks again at what the loop's line asks about",
+        ),
+        (
+            Scheduling::UnderAGoal,
+            "say that the goal's next turn, while its condition is unmet, looks again only at \
+             what the condition asks about",
+        ),
+        (
+            Scheduling::UnderAWatch,
+            "where what was asked about is a file, arm a standing watch of it with watch_file",
+        ),
+    ] {
+        for name in ["read_file", "run"] {
+            let description = tool_description(scheduling, name);
+            assert!(
+                sentence_with(&description, instruction).starts_with(WATCH_REQUEST),
+                "{scheduling:?}: {name} has the planner say where the next look comes from for \
+                 any request: {description}"
             );
         }
     }

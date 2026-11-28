@@ -13,7 +13,9 @@ use bravebot_core::policy::{Denial, Policy, Routing};
 use bravebot_i18n::t;
 
 use super::prompts::reading_a_reference;
-use super::{FOR_A_PERSON, Inputs, OPENING, PLANNING, ReadOutputIs, Task, TurnError, held};
+use super::{
+    FOR_A_PERSON, Inputs, LaterLook, OPENING, PLANNING, ReadOutputIs, Task, TurnError, held,
+};
 use crate::confirm::Confirmer;
 use crate::report::Reporter;
 use crate::request_view::{Prompt, Provenance};
@@ -47,9 +49,13 @@ pub(super) fn precommit_routing(task: &Task) -> Routing {
 /// the person gave an interval for decides nothing, because their interval already did.
 ///
 /// The caller says whether there is anything to arrange at all, because only it knows: a
-/// one-shot run and the desktop bridge each take one turn and exit, and a session running a
-/// line this program wrote keeps no loop over it. A wait asked for there is discarded, so the
-/// turn is offered no way to ask for one rather than told a watch it cannot have now exists.
+/// one-shot run takes one turn and exits, the desktop bridge sends no line again that the person
+/// did not type into it, and a session running a line this program wrote keeps no loop over it.
+/// A wait asked for there is discarded, so the turn is offered no way to ask for one rather than
+/// told a watch it cannot have now exists.
+/// The caller also says where a line the person typed is already looked at again by the
+/// session's own loop, goal or watch, which drops the wait as well but does start another turn,
+/// so the turn is told which of the three takes the next look rather than that nothing will.
 ///
 /// A turn addressed to a definition arranges nothing later either, and arms no watch: what
 /// either starts is a turn of the session's planner, holding what the definition took away
@@ -59,8 +65,13 @@ pub(super) fn scheduling_for(task: &Task) -> tools::Scheduling {
         _ if task.addressing.is_some() => tools::Scheduling::NoLaterLook,
         Some(tick) if tick.self_paced => tools::Scheduling::PacingALoop,
         Some(_) => tools::Scheduling::TheirInterval,
-        None if task.looking_again => tools::Scheduling::ArrangingALook,
-        None => tools::Scheduling::NoLaterLook,
+        None => match task.later_look {
+            LaterLook::ThisTurnArranges => tools::Scheduling::ArrangingALook,
+            LaterLook::UnderALoop => tools::Scheduling::UnderALoop,
+            LaterLook::UnderAGoal => tools::Scheduling::UnderAGoal,
+            LaterLook::UnderAWatch => tools::Scheduling::UnderAWatch,
+            LaterLook::Nothing => tools::Scheduling::NoLaterLook,
+        },
     }
 }
 

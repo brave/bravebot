@@ -27335,6 +27335,43 @@ fn a_goal_run_sends_the_work_back_until_the_judge_says_met() {
     );
 }
 
+/// SCHED-6: the first round of a `--goal` run carries the person's line, and the goal sends the
+/// work back while the condition is unmet, so that round is told the goal takes the next look
+/// rather than that nothing will ask again. The round the goal sends back is the driver's
+/// sentence, which nothing sends again. Neither is offered `schedule_next`. The regression it
+/// rejects: a one-shot goal run telling the person that no later look is coming while the goal is
+/// about to send the work back.
+#[test]
+fn the_first_round_of_a_goal_run_is_told_the_goal_takes_the_next_look() {
+    let gateway = a_gateway_for_a_goal(&["NOT MET\nstill red", "MET\nnow"], 0);
+
+    let (output, requests) = a_goal_run("cli-running-goal-later-look", &gateway, &[]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let turns: Vec<&String> = requests
+        .iter()
+        .filter(|body| !body.contains(THE_JUDGES_WORDS))
+        .collect();
+    assert_eq!(turns.len(), 2, "{stderr}");
+    let goal = "This session's goal sends the work back";
+    let nothing = "Nothing will ask you again";
+    assert!(
+        turns[0].contains(goal) && !turns[0].contains(nothing),
+        "the person's line was not told the goal takes the next look: {}",
+        turns[0]
+    );
+    assert!(
+        turns[1].contains(nothing) && !turns[1].contains(goal),
+        "the driver's sentence was told the goal sends it again: {}",
+        turns[1]
+    );
+    for turn in turns {
+        assert!(!turn.contains(r#""name":"schedule_next""#), "{turn}");
+        assert!(turn.contains(r#""name":"read_file""#), "{turn}");
+    }
+}
+
 /// GROUND-4: a one-shot run's judge reads the driver's count of what the rounds since the goal was
 /// set ran and wrote, before the condition, as a session's judge does.
 #[test]

@@ -582,8 +582,8 @@ pub struct Tools<'a> {
     ///
     /// Initialized to the workspace root and updated when `run` specifies a `directory`.
     pub run_directory: &'a mut RunDirectory,
-    /// How many lines ran with a sandbox in this turn and did not exit zero, which a request for
-    /// a line with no sandbox is accepted after and not before (SANDBOX-29).
+    /// How many lines ran with a sandbox in the foreground of this turn and did not exit zero,
+    /// which a request for a line with no sandbox is accepted after and not before (SANDBOX-29).
     pub confined_failures: &'a mut ConfinedFailures,
     /// The slots a check has already said `unsafe` about in this turn, so `read_output` and
     /// `vet_content` do not check them again (OUTPUT-3).
@@ -880,8 +880,10 @@ impl<'a> Tools<'a> {
     }
 }
 
-/// How many lines have run with a sandbox in a turn and not exited zero, less the requests for no
-/// sandbox accepted since (SANDBOX-29).
+/// How many lines have run with a sandbox in the foreground of a turn and not exited zero, or were
+/// refused because their program could not be confined, less the requests for no sandbox accepted
+/// since (SANDBOX-29). A line in the background is counted only for a program that could not be
+/// confined, never for its exit code.
 ///
 /// Counted from exit codes, which are structure and not what a program printed, so nothing a
 /// program wrote reaches it. A request for a line with no sandbox is accepted only while it is
@@ -8597,11 +8599,18 @@ fn schedule_next<S: Sink>(
     // Which of the two happened is worth telling the planner apart, because the answer it is
     // writing differs: a tick reports what this look found and leaves the rest to the next one,
     // while a turn that has just started a watch is telling somebody a watch now exists.
-    // The two withheld cases do not reach here: dispatch answers a call from either as an unknown
-    // name, for want of anything a confirmation could truthfully say about a wait nothing keeps.
+    // The withheld cases do not reach here: a tick the person timed, a line typed under the
+    // session's own loop, goal or watch, and a turn nothing will ask again. Dispatch answers a
+    // call from any of them as an unknown name, for want of anything a confirmation could
+    // truthfully say about a wait nothing keeps.
     let confirmation = match scheduling {
         _ if stopping => "scheduled: this loop has ended and no further tick will run".to_string(),
-        Scheduling::PacingALoop | Scheduling::TheirInterval | Scheduling::NoLaterLook => format!(
+        Scheduling::PacingALoop
+        | Scheduling::TheirInterval
+        | Scheduling::UnderALoop
+        | Scheduling::UnderAGoal
+        | Scheduling::UnderAWatch
+        | Scheduling::NoLaterLook => format!(
             "scheduled: this loop runs again in {held} seconds, sending the user's own prompt \
              unchanged"
         ),
@@ -10997,12 +11006,19 @@ const NOT_ACCEPTING_UNCONFINED: &str = "refused: this session does not accept a 
 
 /// What a request to run a line with no sandbox says when no line has failed with one in this turn.
 /// Unlike [`NOT_ACCEPTING_UNCONFINED`] it says what to do, since the session would accept the
-/// request after a line the sandbox refused.
-const UNCONFINED_BEFORE_A_FAILURE: &str = "refused: run the line with the sandbox first. A request \
-     to run a line with no sandbox is accepted only after a line has run with one and failed, or \
-     a line was refused because its program could not be confined, and neither has happened yet \
-     this turn. If it then fails because the sandbox refused it access, or is refused because it \
-     could not be confined, ask again and say in 'why' what was refused.";
+/// request after a line the sandbox refused. It names what earns nothing, a line in the background,
+/// a line stopped at its deadline and a failure a delegate reported, so a planner that has seen one
+/// of those fail runs the same line in the foreground, with a deadline that does not stop it.
+const UNCONFINED_BEFORE_A_FAILURE: &str = "refused: run the same line with the sandbox first, in \
+     the foreground. A request to run a line with no sandbox is accepted only after a line in this \
+     turn ran in the foreground with the sandbox and exited non-zero, or a line was refused \
+     because its program could not be confined, and neither has happened yet this turn. A line \
+     run in the background, whether started with 'background' or moved there, earns nothing by \
+     exiting non-zero. A line stopped at its deadline or by the person earns nothing, and neither \
+     does a failure a delegate reported. Run the line without 'background' and without \
+     'unconfined', with a 'deadline_seconds' long enough for it to end on its own. If it then \
+     fails because the sandbox refused it access, or is refused because it could not be \
+     confined, ask again and say in 'why' what was refused.";
 
 /// Whether this turn may be asked to start one line with no profile (SANDBOX-29).
 ///
@@ -11652,7 +11668,10 @@ fn start_the_job<S: Sink, R: Reporter>(
     tools.jobs.confined_as(
         &name,
         job.confinement.map(|confinement| {
-            confinement.profile_offering(&job.plan.steps(), unconfined_is_offered(policy, tools))
+            confinement.background_profile_offering(
+                &job.plan.steps(),
+                unconfined_is_offered(policy, tools),
+            )
         }),
     );
     tools.jobs.tree_found(&name, tree);

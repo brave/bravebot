@@ -1957,6 +1957,20 @@ impl Confinement {
         self.profile_offering_in(steps, unconfined_offered, &process_environment())
     }
 
+    /// [`Confinement::profile_offering`] for a line that ran in the background, from the start or
+    /// after it was moved there. Where the sentence names `'unconfined': true`, it adds
+    /// [`BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST`]: a line in the background earns no request
+    /// (SANDBOX-29), so the planner is told to run the line in the foreground first. Whether the
+    /// argument is named is decided by the same conditions that chose the sentences, never by
+    /// reading the composed text.
+    pub fn background_profile_offering(&self, steps: &[&Step], unconfined_offered: bool) -> String {
+        let (said, named) = self.offering_in(steps, unconfined_offered, &process_environment());
+        match named {
+            true => format!("{said}{BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST}"),
+            false => said,
+        }
+    }
+
     /// [`Confinement::profile_offering`] for stages that start with `environment`.
     fn profile_offering_in(
         &self,
@@ -1964,6 +1978,17 @@ impl Confinement {
         unconfined_offered: bool,
         environment: &[(String, String)],
     ) -> String {
+        self.offering_in(steps, unconfined_offered, environment).0
+    }
+
+    /// [`Confinement::profile_offering_in`], and whether a sentence in it names
+    /// `'unconfined': true`.
+    fn offering_in(
+        &self,
+        steps: &[&Step],
+        unconfined_offered: bool,
+        environment: &[(String, String)],
+    ) -> (String, bool) {
         let (signs, refused) = self.signing_state(steps);
         let source = match (signs, unconfined_offered) {
             (false, _) => String::new(),
@@ -1982,29 +2007,28 @@ impl Confinement {
             ""
         };
         let commit = commit_sentence(self.mode);
-        let git = match self.prelude {
+        let (git, git_names_it) = match self.prelude {
             Prelude::MacOs if !steps.is_empty() && steps.iter().all(|step| self.runs_git(step)) => {
-                String::new()
+                (String::new(), false)
             }
-            Prelude::MacOs if unconfined_offered => {
+            Prelude::MacOs if unconfined_offered => (
                 format!(
                     "{}{MACOS_GIT_UNCONFINED_SENTENCE}",
                     macos_git_sentence(self.mode)
-                )
-            }
-            Prelude::MacOs => macos_git_sentence(self.mode).to_string(),
-            Prelude::Linux | Prelude::Windows => String::new(),
+                ),
+                true,
+            ),
+            Prelude::MacOs => (macos_git_sentence(self.mode).to_string(), false),
+            Prelude::Linux | Prelude::Windows => (String::new(), false),
         };
-        let launch = match self.prelude {
-            Prelude::MacOs
-                if unconfined_offered
-                    && steps
-                        .iter()
-                        .any(|step| launches_applications(&step.resolved)) =>
-            {
-                MACOS_LAUNCH_UNCONFINED_SENTENCE
-            }
-            _ => "",
+        let launch_names_it = self.prelude == Prelude::MacOs
+            && unconfined_offered
+            && steps
+                .iter()
+                .any(|step| launches_applications(&step.resolved));
+        let launch = match launch_names_it {
+            true => MACOS_LAUNCH_UNCONFINED_SENTENCE,
+            false => "",
         };
         let listing = match self.prelude {
             Prelude::MacOs if steps.iter().any(|step| lists_processes(&step.resolved)) => {
@@ -2023,19 +2047,26 @@ impl Confinement {
             true => REQUEST_SKIPPED_AN_ASSIGNED_STAGE_SENTENCE,
             false => "",
         };
-        format!(
-            "{}{}{}{source}{refusal}{}{commit}{git}{launch}{listing}{shell}{assigned}{}",
-            self.linked_checkout_sentence(steps, unconfined_offered),
+        let (linked, linked_names_it) = self.linked_checkout_sentence(steps, unconfined_offered);
+        let (identity, identity_names_it) =
+            self.identity_sentence(steps, unconfined_offered, environment);
+        // Each sentence that names the argument is said only where it is offered: the signing way
+        // out, the macOS git and launch sentences, and the linked checkout and identity sentences.
+        // Each term is the condition that chose its sentence, and no composed text is tested.
+        let names_it = unconfined_offered
+            && (signs || git_names_it || launch_names_it || linked_names_it || identity_names_it);
+        let said = format!(
+            "{linked}{}{}{source}{refusal}{identity}{commit}{git}{launch}{listing}{shell}{assigned}{}",
             self.cache_sentence(steps),
             self.reach(steps),
-            self.identity_sentence(steps, unconfined_offered, environment),
             credential_locations_sentence(
                 self.mode,
                 self.requests_offered,
                 self.names_request_path(),
                 self.askable,
             ),
-        )
+        );
+        (said, names_it)
     }
 
     /// The sentence that opens the failure sentence where a step of `steps` is git and the `.git`
@@ -2050,16 +2081,21 @@ impl Confinement {
     /// the `.git` entry is a file, never from what the entry holds or what a program printed. It
     /// names a route only where the session would accept it: `request_path` with write where a
     /// request is offered and the list holds the tool, `'unconfined': true` where
-    /// `unconfined_offered` says so, and otherwise that no route exists.
-    fn linked_checkout_sentence(&self, steps: &[&Step], unconfined_offered: bool) -> String {
+    /// `unconfined_offered` says so, and otherwise that no route exists. The bool is whether the
+    /// sentence names `'unconfined': true`.
+    fn linked_checkout_sentence(
+        &self,
+        steps: &[&Step],
+        unconfined_offered: bool,
+    ) -> (String, bool) {
         if !matches!(self.mode, SandboxMode::Strict | SandboxMode::WorkspaceWrite)
             || !steps.iter().any(|step| self.runs_git(step))
         {
-            return String::new();
+            return (String::new(), false);
         }
         let linked = self.linked_checkouts();
         if linked.is_empty() {
-            return String::new();
+            return (String::new(), false);
         }
         let named = linked
             .iter()
@@ -2082,7 +2118,10 @@ impl Confinement {
         if routes.is_empty() {
             routes.push_str(LINKED_CHECKOUT_NO_ROUTE_SENTENCE);
         }
-        format!("{named} {is}{LINKED_CHECKOUT_SENTENCE}{routes} ")
+        (
+            format!("{named} {is}{LINKED_CHECKOUT_SENTENCE}{routes} "),
+            unconfined_offered,
+        )
     }
 
     /// Whether `step` runs git as the `.git` write lift judges it: a file named `git` that no
@@ -2179,19 +2218,20 @@ impl Confinement {
     ///
     /// Fixed text chosen by what [`Confinement::identified`] decided for each step, which reads the
     /// argv, the person's settings and their choices at run prompts, and nothing a program printed.
-    /// It names no host, owner or path.
+    /// It names no host, owner or path. The bool is whether the sentence names
+    /// `'unconfined': true`.
     fn identity_sentence(
         &self,
         steps: &[&Step],
         unconfined_offered: bool,
         environment: &[(String, String)],
-    ) -> String {
+    ) -> (String, bool) {
         let decided: Vec<Identified> = steps
             .iter()
             .filter_map(|step| self.identified(step))
             .collect();
         if decided.is_empty() {
-            return String::new();
+            return (String::new(), false);
         }
         let mut said = String::new();
         for (holds, sentence) in [
@@ -2240,7 +2280,7 @@ impl Confinement {
         if unconfined_offered {
             said.push_str(IDENTITY_UNCONFINED_WAY_OUT);
         }
-        said
+        (said, unconfined_offered)
     }
 
     /// What a stage that pushes over ssh had to authenticate with: whether the session's agent
@@ -3128,6 +3168,18 @@ const SIGNING_NOT_SSH_SENTENCE: &str = " No ssh agent socket was lent to that st
 /// Added to [`SIGNING_NOT_SSH_SENTENCE`] where the mode lends the remote scope.
 const SIGNING_REMOTE_CLAUSE: &str = ", or by a line that asks for the `remote` scope, which \
      lends the socket whatever those files say";
+
+/// Said after the sentences of a failed line that ran in the background, where one of them names
+/// `'unconfined': true`. A line in the background earns no request for no sandbox (SANDBOX-29), so
+/// the request would be refused until a line fails in the foreground. The sentence is fixed when
+/// the job starts, and a line may fail in the foreground before the job's end is read, so it says
+/// what to do in both cases.
+const BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST: &str = " This line ran in the background, \
+     which earns no request for 'unconfined': true. Unless a line has already failed in the \
+     foreground with the sandbox this turn, first run this line again in the foreground with the \
+     sandbox, without 'background' and with a 'deadline_seconds' long enough for it to end on its \
+     own. If it fails there because the sandbox refused it access, ask for 'unconfined': true and \
+     say in 'why' what was refused.";
 
 /// The way through the sentences above names where the session accepts a request for a line
 /// with no sandbox, ending without a full stop so the caller can end the sentence.

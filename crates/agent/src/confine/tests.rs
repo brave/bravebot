@@ -4100,6 +4100,135 @@ fn the_planner_is_told_on_macos_that_only_git_writes_a_git_directory() {
     }
 }
 
+/// SANDBOX-29: the account of a failed line that ran in the background, where it names
+/// `'unconfined': true`, adds that the line has to run again in the foreground with the sandbox
+/// first, since a line in the background earns no request. It adds nothing where the account names
+/// no such route, and the account of a line that failed in the foreground never says it. The faults
+/// it rejects are a job account that sends the planner to a request the gate then refuses, the
+/// sentence said where no route was named, and the sentence said after a foreground failure, which
+/// has already earned the request.
+#[test]
+fn a_failed_background_line_naming_unconfined_is_told_to_fail_in_the_foreground_first() {
+    let make = step("/usr/bin/make", &["release"]);
+    let at = |prelude| {
+        reading_confinement(prelude, &["/work/project"]).with_mode(SandboxMode::WorkspaceWrite)
+    };
+    let named = at(Prelude::MacOs).background_profile_offering(&[&make], true);
+    assert!(named.contains(MACOS_GIT_UNCONFINED_SENTENCE), "{named}");
+    assert!(
+        named.ends_with(BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST),
+        "{named}"
+    );
+    assert_eq!(
+        named,
+        format!(
+            "{}{BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST}",
+            at(Prelude::MacOs).profile_offering(&[&make], true)
+        )
+    );
+    for (prelude, offered) in [
+        (Prelude::MacOs, false),
+        (Prelude::Linux, true),
+        (Prelude::Linux, false),
+    ] {
+        let said = at(prelude).background_profile_offering(&[&make], offered);
+        assert!(
+            !said.contains("unconfined"),
+            "{prelude:?} {offered}: {said}"
+        );
+        assert_eq!(
+            said,
+            at(prelude).profile_offering(&[&make], offered),
+            "{prelude:?} {offered}"
+        );
+    }
+    let foreground = at(Prelude::MacOs).profile_offering(&[&make], true);
+    assert!(
+        !foreground.contains(BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST),
+        "{foreground}"
+    );
+    // The sentence is fixed when the job starts, and a line may fail in the foreground before the
+    // job ends, so it does not tell the planner to run the line in the foreground first when a
+    // foreground failure has already earned the request.
+    assert!(
+        BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST.contains(
+            "Unless a line has already failed in the foreground with the sandbox this turn, first \
+             run this line again in the foreground"
+        ),
+        "{BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST}"
+    );
+}
+
+/// SANDBOX-29: the account of a failed background line adds that the line has to fail in the
+/// foreground first where the only sentence naming `'unconfined': true` is the linked checkout's,
+/// the push identity's or the signing one's, on a platform with no git sentence of its own. The
+/// fault it rejects is a decision on whether the argument is named that leaves out one of those
+/// sentences, which sends the planner to a request the gate then refuses.
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the directory is cleared of an earlier run's files and may not exist"
+)]
+#[test]
+#[cfg(unix)]
+fn a_failed_background_line_whose_checkout_push_or_signing_names_unconfined_is_told_the_foreground_first()
+ {
+    let top = crate::testutil::scratch_dir("confine-background-linked");
+    let _ = std::fs::remove_dir_all(&top);
+    std::fs::create_dir_all(top.join("wt")).expect("worktree");
+    std::fs::write(top.join("wt/.git"), "gitdir: /elsewhere/worktrees/wt\n").expect("a .git file");
+    let top = top.canonicalize().expect("canonical");
+    let status = step("/usr/bin/git", &["status"]);
+    let linked = reading_confinement(Prelude::Linux, &[named(&top.join("wt"))])
+        .with_mode(SandboxMode::WorkspaceWrite);
+
+    let places = IdentityPlaces::with_two_keys("background-push");
+    let push = step("/usr/bin/git", &["push", "git@github.com:acme/widgets.git"]);
+    let pushing = places.confinement(&[]);
+
+    let (home, signing) =
+        a_confinement_over_a_home_that("background-signing", SIGNS_WITH_A_KEY, &["keys/work.pub"]);
+    let commit = step("/usr/bin/git", &["commit", "-m", "x"]);
+
+    for (what, confined, step, route) in [
+        (
+            "linked",
+            &linked,
+            &status,
+            LINKED_CHECKOUT_UNCONFINED_SENTENCE,
+        ),
+        ("push", &pushing, &push, IDENTITY_UNCONFINED_WAY_OUT),
+        ("signing", &signing, &commit, SIGNING_UNCONFINED_WAY_OUT),
+    ] {
+        let account = confined.profile_offering(&[step], true);
+        assert!(account.contains(route.trim_start()), "{what}: {account}");
+        for other in [
+            MACOS_GIT_UNCONFINED_SENTENCE,
+            MACOS_LAUNCH_UNCONFINED_SENTENCE,
+            SIGNING_UNCONFINED_WAY_OUT,
+            IDENTITY_UNCONFINED_WAY_OUT,
+            LINKED_CHECKOUT_UNCONFINED_SENTENCE,
+        ]
+        .into_iter()
+        .filter(|other| *other != route)
+        {
+            assert!(!account.contains(other.trim_start()), "{what}: {account}");
+        }
+        assert_eq!(
+            confined.background_profile_offering(&[step], true),
+            format!("{account}{BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST}"),
+            "{what}"
+        );
+        let refused = confined.background_profile_offering(&[step], false);
+        assert!(
+            !refused.contains(BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST),
+            "{what}: {refused}"
+        );
+    }
+    std::fs::remove_dir_all(&top).unwrap();
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
 /// SANDBOX-14, SANDBOX-29: after a failed step on macOS the planner is pointed at `'unconfined':
 /// true` for a script that runs git, only where the session accepts the request, and never on
 /// another platform, where nothing holds a `.git` back. The fault it rejects is the sentence
@@ -4443,6 +4572,9 @@ fn the_sentences_about_loopback_and_listing_processes_name_no_tool() {
         Scheduling::ArrangingALook,
         Scheduling::PacingALoop,
         Scheduling::TheirInterval,
+        Scheduling::UnderALoop,
+        Scheduling::UnderAGoal,
+        Scheduling::UnderAWatch,
         Scheduling::NoLaterLook,
     ] {
         for running in [Running::Offered, Running::Withheld] {
@@ -4485,6 +4617,10 @@ fn each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt() {
         ("signing", SIGNING_UNCONFINED_WAY_OUT),
         ("push", IDENTITY_UNCONFINED_WAY_OUT),
         ("linked worktree", LINKED_CHECKOUT_UNCONFINED_SENTENCE),
+        (
+            "background, foreground first",
+            BACKGROUND_UNCONFINED_IN_THE_FOREGROUND_FIRST,
+        ),
     ] {
         assert!(said.contains("'unconfined': true"), "{name}: {said}");
         assert!(said.contains("again"), "{name}: {said}");

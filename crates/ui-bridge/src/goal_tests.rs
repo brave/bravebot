@@ -894,6 +894,84 @@ fn the_eleventh_not_met_ends_the_goal_as_spent() {
     assert_eq!(chat.proceed(), json!({ "started": false }));
 }
 
+/// SCHED-6: a line the person sends while the chat works towards a goal, or holds a standing
+/// watch, is told that the goal or the watch starts the next turn, and not that nothing will ask
+/// again. A line under a paused goal and the goal's own carry-on are told nothing will ask again.
+/// None of them is offered `schedule_next`, since the wait would be dropped. A line under no goal
+/// or watch arranges its own later look, which starts a loop over it (LOOP-14). The regression it
+/// rejects: a desktop turn under a live goal or watch telling the person no later look is coming
+/// while the goal or the watch is about to start one.
+#[test]
+fn a_line_typed_under_a_goal_or_a_watch_is_told_which_one_takes_the_next_look() {
+    const NOTHING: &str = "Nothing will ask you again";
+    const ARRANGES: &str = "The next look is yours to arrange";
+    const GOAL: &str = "This session's goal sends the work back";
+    const WATCH: &str = "This session's standing watches start a turn";
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let told = |body: &str, expected: &str, case: &str| {
+        for said in [NOTHING, ARRANGES, GOAL, WATCH] {
+            assert_eq!(
+                body.contains(said),
+                said == expected,
+                "{case}: the request says {said:?} is {}: {body}",
+                body.contains(said)
+            );
+        }
+        // The tool table, not the descriptions: `watch_file`'s description names `schedule_next`
+        // wherever `watch_file` is offered.
+        assert_eq!(
+            body.contains(r#""name":"schedule_next""#),
+            expected == ARRANGES,
+            "{case}: {body}"
+        );
+        assert!(body.contains(r#""name":"read_file""#), "{case}: {body}");
+    };
+
+    let mut chat = served_judging(Answers::Done, Judge::Says("NOT MET\nnot yet"));
+    chat.send("tell me when the CI check changes");
+    chat.ended(1);
+    chat.goal("a.txt says two");
+    chat.send("tell me when the CI check changes");
+    chat.ended(2);
+    assert_eq!(chat.proceed(), json!({ "started": "check" }));
+    chat.settled();
+    assert_eq!(chat.proceed()["started"], "turn");
+    chat.ended(3);
+    chat.goal("pause");
+    chat.send("tell me when the CI check changes");
+    chat.ended(4);
+    let bodies = chat.bodies.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 5, "three typed turns, a check and a carry-on");
+    told(&bodies[0], ARRANGES, "no goal or watch");
+    told(&bodies[1], GOAL, "typed under a goal");
+    told(&bodies[3], NOTHING, "the goal's carry-on");
+    told(&bodies[4], NOTHING, "typed under a paused goal");
+
+    let mut chat = served(Answers::Done);
+    {
+        let open = chat.bridge.open.get(&chat.handle).unwrap();
+        let workspace = Workspace::new(open.project.clone()).unwrap();
+        let looked = workspace.look("a.txt", workspace.root());
+        open.watches
+            .lock()
+            .unwrap()
+            .arm(
+                "a.txt".into(),
+                workspace.root().to_path_buf(),
+                bravebot_agent::watch::BY_THE_PERSON,
+                looked,
+                std::time::Instant::now(),
+            )
+            .unwrap();
+    }
+    chat.send("tell me when the CI check changes");
+    chat.ended(1);
+    let bodies = chat.bodies.lock().unwrap().clone();
+    told(&bodies[0], WATCH, "typed under a watch");
+}
+
 /// A prompt the person sends after a turn ends goes before the goal's check: it clears the check
 /// that was due, and its own end makes the check due again. The regression it rejects: a judge
 /// asked about an exchange missing what the person said next.

@@ -2115,16 +2115,25 @@ fn only_a_line_the_person_wrote_becomes_a_watch_the_turn_asked_for() {
     let wakeup = turn::Wakeup::asked(900, false);
     let idle = Session::new("none");
     assert_eq!(
-        watch_to_start(Some(wakeup), will_look_again(&idle, Wrote::ThePerson)),
+        watch_to_start(
+            Some(wakeup),
+            will_look_again(&idle, Wrote::ThePerson).this_turn_arranges()
+        ),
         Some(wakeup),
         "a turn on the person's own line could not arrange a later look"
     );
     assert_eq!(
-        watch_to_start(Some(wakeup), will_look_again(&idle, Wrote::TheDriver)),
+        watch_to_start(
+            Some(wakeup),
+            will_look_again(&idle, Wrote::TheDriver).this_turn_arranges()
+        ),
         None
     );
     assert_eq!(
-        watch_to_start(None, will_look_again(&idle, Wrote::ThePerson)),
+        watch_to_start(
+            None,
+            will_look_again(&idle, Wrote::ThePerson).this_turn_arranges()
+        ),
         None
     );
 }
@@ -2220,15 +2229,28 @@ fn the_task_a_turn_is_built_with_carries_the_goal_only_while_it_is_in_force() {
 /// be the person's, since a loop repeats a line somebody endorsed; and the session has to
 /// have nothing of its own already running, since it does one of a watch, a loop and a goal
 /// at a time, and a wait arriving under any of the three is dropped.
+///
+/// The refusals are told apart. A line this program wrote is one nothing will send again. A
+/// line the person typed under a loop, a goal or a watch is answered with which of the three
+/// takes the next look, because it does start another turn, and a turn told that nothing will
+/// tells the person no later look is coming. Rejects: every refusal collapsed into
+/// `LaterLook::Nothing`, and the loop, goal and watch cases given each other's answer.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of who wrote the line against what the session holds, each case set up \
+              beside its assertion"
+)]
 #[test]
 fn only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look() {
     let idle = Session::new("none");
-    assert!(
+    assert_eq!(
         will_look_again(&idle, Wrote::ThePerson),
+        turn::LaterLook::ThisTurnArranges,
         "a turn on the person's own line, with the session idle, was offered nothing"
     );
-    assert!(
-        !will_look_again(&idle, Wrote::TheDriver),
+    assert_eq!(
+        will_look_again(&idle, Wrote::TheDriver),
+        turn::LaterLook::Nothing,
         "a sentence this program wrote was offered a loop over itself"
     );
 
@@ -2237,8 +2259,9 @@ fn only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look() {
         init.start_init().is_some(),
         "the fixture's workspace already had an AGENTS.md"
     );
-    assert!(
-        !will_look_again(&init, Wrote::ThePerson),
+    assert_eq!(
+        will_look_again(&init, Wrote::ThePerson),
+        turn::LaterLook::Nothing,
         "a /init turn was offered a loop over the prompt this program wrote"
     );
     let mut review = Session::new("none");
@@ -2249,8 +2272,9 @@ fn only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look() {
         },
         crate::state::NamesFrom::nothing(),
     );
-    assert!(
-        !will_look_again(&review, Wrote::ThePerson),
+    assert_eq!(
+        will_look_again(&review, Wrote::ThePerson),
+        turn::LaterLook::Nothing,
         "a /review turn was offered a loop over the prompt this program wrote"
     );
 
@@ -2261,16 +2285,31 @@ fn only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look() {
         Vec::new(),
         crate::state::NamesFrom::nothing(),
     );
-    assert!(
-        !will_look_again(&looping, Wrote::ThePerson),
-        "a line typed during a loop was offered a second one"
+    assert_eq!(
+        will_look_again(&looping, Wrote::ThePerson),
+        turn::LaterLook::UnderALoop,
+        "a line typed during a loop was not told the loop takes the next look"
     );
 
     let mut goal = Session::new("none");
     goal.start_goal("cargo test exits 0".to_string());
-    assert!(
-        !will_look_again(&goal, Wrote::ThePerson),
-        "a turn under a goal was offered a loop the goal will refuse"
+    assert_eq!(
+        will_look_again(&goal, Wrote::ThePerson),
+        turn::LaterLook::UnderAGoal,
+        "a turn under a goal was not told the goal sends the work back"
+    );
+    // The goal's own carry-on sentence is this program's, so nothing sends that line again.
+    assert_eq!(
+        will_look_again(&goal, Wrote::TheDriver),
+        turn::LaterLook::Nothing,
+        "a goal's carry-on sentence was told something would send it again"
+    );
+    // A paused goal sends nothing back until it is resumed.
+    goal.pause_goal();
+    assert_eq!(
+        will_look_again(&goal, Wrote::ThePerson),
+        turn::LaterLook::Nothing,
+        "a turn under a paused goal was told the goal sends the work back"
     );
 
     let mut watching = Session::new("none");
@@ -2279,9 +2318,114 @@ fn only_a_turn_whose_wait_would_be_kept_is_offered_a_later_look() {
         ".",
         bravebot_agent::watch::Looked::Saw("a token".to_string()),
     );
-    assert!(
-        !will_look_again(&watching, Wrote::ThePerson),
-        "a turn under a standing watch was offered a loop the watch will refuse"
+    assert_eq!(
+        will_look_again(&watching, Wrote::ThePerson),
+        turn::LaterLook::UnderAWatch,
+        "a turn under a standing watch was not told the watch starts the next turn"
+    );
+
+    // A line this program wrote is one nothing sends again whatever the session has live: the
+    // loop, goal or watch repeats or answers the person's own line, never the driver's sentence.
+    // Rejects: the loop, goal and watch checks put ahead of who wrote the line.
+    let mut goal = Session::new("none");
+    goal.start_goal("cargo test exits 0".to_string());
+    for (session, live) in [(&looping, "loop"), (&goal, "goal"), (&watching, "watch")] {
+        assert_eq!(
+            will_look_again(session, Wrote::TheDriver),
+            turn::LaterLook::Nothing,
+            "a sentence this program wrote under a {live} was told the {live} sends it again"
+        );
+    }
+    for (mut session, live) in [(looping, "loop"), (goal, "goal"), (watching, "watch")] {
+        session.start_review(
+            &crate::review_command::Asked {
+                target: crate::review_command::Target::Uncommitted,
+                focus: None,
+            },
+            crate::state::NamesFrom::nothing(),
+        );
+        assert_eq!(
+            will_look_again(&session, Wrote::ThePerson),
+            turn::LaterLook::Nothing,
+            "a /review turn under a {live} was told the {live} sends its prompt again"
+        );
+        session.take_driver_prompt();
+        session.start_help("how do loops work", crate::state::NamesFrom::nothing());
+        assert_eq!(
+            will_look_again(&session, Wrote::ThePerson),
+            turn::LaterLook::Nothing,
+            "a /help turn under a {live} was told the {live} sends its prompt again"
+        );
+    }
+}
+
+/// SCHED-6: the task a turn is built with carries what [`will_look_again`] answers, through the
+/// same `the_turn_task` the terminal starts every turn with. The test above asks the function
+/// alone, so a task builder that dropped its answer and passed `LaterLook::Nothing`, or one that
+/// read the session after the driver's pending prompt was taken, would leave it passing while a
+/// line typed under a loop told the person no later look is coming. Rejects: the answer not
+/// reaching the task, and a `/review` turn under a loop built as the loop's.
+#[test]
+fn the_task_a_turn_is_built_with_says_what_takes_the_next_look() {
+    let root = a_workspace_with_a_readme();
+    let built = |session: &mut Session| a_task_built_for(session, root.path(), "go").later_look;
+
+    let mut idle = Session::new("none").in_workspace(root.path());
+    assert_eq!(
+        built(&mut idle),
+        turn::LaterLook::ThisTurnArranges,
+        "a line typed into an idle session was not built to arrange its own look"
+    );
+
+    let mut looping = Session::new("none").in_workspace(root.path());
+    looping.start_loop(
+        crate::loops::request("5m watch the build"),
+        Vec::new(),
+        Vec::new(),
+        crate::state::NamesFrom::nothing(),
+    );
+    assert_eq!(
+        built(&mut looping),
+        turn::LaterLook::UnderALoop,
+        "a line typed during a loop was not built with the loop taking the next look"
+    );
+    looping.start_review(
+        &crate::review_command::Asked {
+            target: crate::review_command::Target::Uncommitted,
+            focus: None,
+        },
+        crate::state::NamesFrom::nothing(),
+    );
+    assert_eq!(
+        built(&mut looping),
+        turn::LaterLook::Nothing,
+        "a /review turn under a loop was built as a line the loop sends again"
+    );
+
+    let mut goal = Session::new("none").in_workspace(root.path());
+    goal.start_goal("cargo test exits 0".to_string());
+    assert_eq!(
+        built(&mut goal),
+        turn::LaterLook::UnderAGoal,
+        "a line typed under a goal was not built with the goal taking the next look"
+    );
+    goal.pause_goal();
+    assert_eq!(
+        built(&mut goal),
+        turn::LaterLook::Nothing,
+        "a line typed under a paused goal was built as one the goal sends back"
+    );
+
+    let mut watching = Session::new("none").in_workspace(root.path());
+    watching.arm_watch(
+        "a.txt",
+        ".",
+        bravebot_agent::watch::Looked::Saw("a token".to_string()),
+    );
+    assert_eq!(
+        built(&mut watching),
+        turn::LaterLook::UnderAWatch,
+        "a line typed under a standing watch was not built with the watch taking the next look"
     );
 }
 

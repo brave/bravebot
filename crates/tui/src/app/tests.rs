@@ -1145,7 +1145,6 @@ fn a_task_built_with(
         prompt,
         wrote,
         None,
-        false,
     )
     .into_task()
 }

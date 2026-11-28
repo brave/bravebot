@@ -1806,12 +1806,16 @@ fn an_accepted_request_for_reach_leaves_no_sandbox_refusal() {
 }
 
 /// SANDBOX-29: a request for a line with no sandbox is refused, with a sentence that says
-/// to run the line with the sandbox first, until a line has run with one and failed, or was
-/// refused because its program could not be confined, in the
-/// turn, and the trail records the refusal under `sandbox`. Each failure earns one request:
+/// to run the same line with the sandbox first, in the foreground, until a line has run with one
+/// in the foreground and failed, or was refused because its program could not be confined, in the
+/// turn, and the trail records the refusal under `sandbox`. The sentence says that a line run in
+/// the background, a line stopped at its deadline and a failure a delegate reported earn nothing,
+/// and that the line is to run long enough to end on its own. Each failure earns one request:
 /// after the person is asked once, the next request is refused again. The regressions it
 /// rejects are a request accepted before any line failed, a refusal that does not say what
-/// to do, a refusal the trail omits, and a failure that earns requests without end.
+/// to do, a refusal that leaves a planner whose background line failed to run it in the
+/// background again or with a deadline that stops it, a refusal the trail omits, and a failure
+/// that earns requests without end.
 #[test]
 fn a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed() {
     use bravebot_sandbox::SandboxMode::WorkspaceWrite;
@@ -1824,19 +1828,49 @@ fn a_request_for_no_sandbox_is_accepted_only_after_a_confined_line_failed() {
         said.contains("a line was refused because its program could not be confined"),
         "the refusal does not say a refused program earns the request: {said}"
     );
+    for (clause, missing) in [
+        (
+            "run the same line with the sandbox first, in the foreground",
+            "the refusal does not name the same line in the foreground as the next step",
+        ),
+        (
+            "ran in the foreground with the sandbox and exited non-zero",
+            "the refusal does not say a foreground line must fail",
+        ),
+        (
+            "A line run in the background, whether started with 'background' or moved there, \
+             earns nothing",
+            "the refusal does not say a background line earns nothing",
+        ),
+        (
+            "A line stopped at its deadline or by the person earns nothing",
+            "the refusal does not say a line stopped at its deadline earns nothing",
+        ),
+        (
+            "a failure a delegate reported",
+            "the refusal does not say a delegate's failure earns nothing",
+        ),
+        (
+            "without 'background' and without 'unconfined', with a 'deadline_seconds' long \
+             enough for it to end on its own",
+            "the refusal does not say how to run the line so that its failure counts",
+        ),
+    ] {
+        assert!(said.contains(clause), "{missing}: {said}");
+    }
     assert_eq!(
         sandbox_refusals(&refused),
         [
             "run.unconfined: the request was refused and the line did not run: no line \
-                     has run with a sandbox and failed, or been refused because it could not be \
-                     confined, this turn"
+                     has run in the foreground with a sandbox and failed, or been refused because \
+                     it could not be confined, this turn"
         ],
         "{refused:?}"
     );
     assert_eq!(
         note,
-        "refused, 'unconfined' is not accepted: no line has run with a sandbox and \
-                 failed, or been refused because it could not be confined, this turn",
+        "refused, 'unconfined' is not accepted: no line has run in the foreground with a \
+                 sandbox and failed, or been refused because it could not be confined, this turn",
         "the person watching was not told why"
     );
 
@@ -1930,7 +1964,7 @@ fn a_request_for_no_sandbox_the_person_did_not_accept_leaves_the_earned_one() {
         .collect();
     for text in &said {
         assert!(
-            !text.contains("run the line with the sandbox first"),
+            !text.contains("run the same line with the sandbox first"),
             "a declined prompt spent the earned request: {said:?}"
         );
     }

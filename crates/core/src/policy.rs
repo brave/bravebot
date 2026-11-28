@@ -396,8 +396,10 @@ pub enum RunRequestCause {
     Delegate,
     /// The session names no profile directory for a request to be recorded under.
     NoProfileDirectory,
-    /// No line has run with a sandbox and failed in this turn, and none was refused because its
-    /// program could not be confined, so there is no refusal for the request to follow.
+    /// No line has run in the foreground with a sandbox and failed in this turn, and none, in the
+    /// foreground or the background, was refused because its program could not be confined, so
+    /// there is no refusal for the request to follow. A line run in the background that fails
+    /// earns nothing.
     NoConfinedAttempt,
     /// Every stage of the line has an assignment in front of its program, and such a stage is
     /// given no requested name, so the request would add nothing.
@@ -417,8 +419,8 @@ impl fmt::Display for RunRequestCause {
             Self::Delegate => f.write_str("a delegate may not ask"),
             Self::NoProfileDirectory => f.write_str("the session has no profile directory"),
             Self::NoConfinedAttempt => f.write_str(
-                "no line has run with a sandbox and failed, or been refused because it could \
-                     not be confined, this turn",
+                "no line has run in the foreground with a sandbox and failed, or been refused \
+                     because it could not be confined, this turn",
             ),
             Self::EveryStageAssigned => f.write_str(
                 "every stage of the line has an assignment in front of its program, and such a \
