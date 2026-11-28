@@ -122,7 +122,8 @@ until a read works.
 
 **Why a run without `vet_content` is told of read_file.** It is offered no `read` and cannot call
 `vet_content`, so the vouch read_file offers is the one way it has to read a file the listing found.
-Told that read_file had nothing to add, delegates guessed what a file held instead of reading it.
+A delegate told that read_file has nothing to add holds a reference with no move that reads it,
+so it guesses what the file holds.
 
 `verified-by: bravebot_agent::turn::a_large_quarantined_listing_says_what_its_references_are_once`
 `verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_run_of_files_and_one_per_run_of_directories`

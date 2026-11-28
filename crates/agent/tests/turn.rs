@@ -94099,7 +94099,7 @@ fn assert_told_read_file_offers_to_vouch(search: &str, listing: &str) {
 /// typed, or of a listed file's reference as `path_ref`, offers to vouch for the file. Its
 /// `search` and `list_files` keep no `read` argument. The regression it rejects is a delegate
 /// handed a reference with no move that reads it, told that `read_file` has nothing to add,
-/// which sent delegates to guess a declaration instead of reading it (#4722).
+/// so it guesses what a file holds instead of reading it (#4722).
 #[test]
 #[expect(clippy::expect_used, reason = "a test fails by panicking")]
 #[expect(clippy::panic, reason = "a test fails by panicking")]

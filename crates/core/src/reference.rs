@@ -1316,8 +1316,9 @@ mod tests {
     /// it. The sentence that read_file has nothing to add stays for a run offered vet_content and a
     /// run where nobody can answer the offer to vouch. A run not offered read_file is told that the
     /// reference already is the file and is not told read_file's name (TOOL-6). The faults it
-    /// rejects are the new sentence keyed on fewer than the three facts, the old one left beside
-    /// it, and read_file named to a run that is not offered it.
+    /// rejects are the sentence that read_file offers to vouch shown where vet_content is offered
+    /// or nobody can answer the offer, the listing saying both that read_file offers to vouch and
+    /// that it has nothing to add, and read_file named to a run that is not offered it.
     #[test]
     fn an_untrusted_entry_names_read_file_where_it_is_the_one_route_and_can_be_answered() {
         let delegate: Vec<Reference> = listing(1, 0)
@@ -1379,8 +1380,9 @@ mod tests {
 
     /// TOOL-6: a reference to one file made for a run not offered read_file says that the
     /// reference already is the file and does not name read_file, and keeps the other moves the
-    /// run is offered. A run offered read_file reads the same text as before. The fault it rejects
-    /// is the file sentence naming read_file to a run that cannot call it.
+    /// run is offered. A run offered read_file and vet_content is told that read_file has nothing
+    /// to add. The fault it rejects is the file sentence naming read_file to a run that cannot
+    /// call it.
     #[test]
     fn a_file_reference_names_read_file_only_where_the_run_is_offered_it() {
         let entry = || {
