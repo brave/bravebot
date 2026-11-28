@@ -1005,9 +1005,9 @@ const BUILT_IN: [BuiltIn; 2] = [
 /// (RUN-18).
 pub const WATCHING_SKILL: &str = "watching";
 
-/// How a request to watch something is answered (RUN-18). This was a paragraph of `run`'s
-/// description, sent on every request of every turn; it is needed only in a turn asked to watch
-/// something, so `run` names this skill and the body says the rest once it is loaded.
+/// How a request to watch something is answered (RUN-18). Needed only in a turn asked to watch
+/// something, and too long to send on every request, so `run`'s description names this skill and
+/// the body says the rest once it is loaded.
 ///
 /// It names no tool that arranges a later look, because which turn this is decides that and the
 /// body is the same in every turn: `read_file`'s description says it for the turn it is in

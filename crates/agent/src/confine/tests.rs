@@ -5181,7 +5181,7 @@ fn no_sentence_names_request_path_where_the_list_lacks_it() {
                 assert_eq!(
                     listed,
                     stated(true, Some(prelude), Network::Open, mode, offered).unwrap(),
-                    "{at}: the full list reads the text it always did"
+                    "{at}: a list holding request_path does not read as the full-list text"
                 );
                 // What is left of the menu and the refusal is still said.
                 assert!(unlisted.contains("`scopes`"), "{at}: {unlisted}");
@@ -5311,9 +5311,9 @@ fn the_profile_line_names_request_path_only_where_the_list_holds_it() {
 /// TOOL-6, TOOL-7: where the turn holds `request_path` back for `load_tool`, the profile line
 /// after a failed step names neither the tool's route in the menu nor the count, and ends with
 /// the one sentence that `load_tool` loads it, said only where the session accepts a request.
-/// A list that holds the tool keeps the text it always had, and one that neither holds it nor
-/// holds it back is told nothing of it. The regressions it rejects are a held-back tool named as
-/// if offered, and a held-back tool never named at all in the situation it is for, which leaves
+/// A list that holds the tool reads exactly as the full-list text, and one that neither holds it
+/// nor holds it back is told nothing of it. The regressions it rejects are a held-back tool named
+/// as if offered, and a held-back tool never named at all in the situation it is for, which leaves
 /// the planner no way to reach a path outside the workspace.
 #[test]
 fn a_held_back_request_path_is_named_with_load_tool_after_a_failure() {

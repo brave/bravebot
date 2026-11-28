@@ -1035,7 +1035,8 @@ fn state_run_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
 }
 
 /// The sentence of `run`'s description that sends a request to watch something to the built-in
-/// skill `watching` (RUN-18), which holds what that paragraph used to say. Replaced by
+/// skill `watching` (RUN-18), which holds how a file and a program are watched and what to say
+/// about the next look. Replaced by
 /// [`run_watching_inline`] where the turn cannot load the skill ([`state_watching_route`]).
 const WATCH_ROUTE: &str = "Asked to watch something, or to say when it changes, load the \
      built-in skill watching before you take the first look: a file and a program are watched by \

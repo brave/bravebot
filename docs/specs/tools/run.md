@@ -1558,10 +1558,10 @@ place, or its list does not hold `load_skill`, `run`'s description carries the
 paragraph itself in place of the sentence that names the skill, naming `read_file` and `job_output`
 only where the list holds each ([TOOL-6](tool-surface.md#TOOL-6)).
 
-**Why a skill and not the description.** The paragraph was sent with every request of every turn,
-and it is read only in a turn asked to watch something. The sentence that names the skill is the
-part a planner needs before its first call, and costs one `load_skill` round in the turns that need
-the rest ([#4712](https://github.com/brave/bravebot/issues/4712)).
+**Why a skill and not the description.** A paragraph in `run`'s description would be sent on
+every request of every turn, and it is read only in a turn asked to watch something. The sentence
+that names the skill is the part a planner needs before its first call, and costs one `load_skill`
+round in the turns that need the rest.
 
 **Why the file branch names no command.** The recipe this clause first shipped was `tail -f`, and it
 was wrong twice over. It is not in the read-proven table, so every watch of a file cost an approval

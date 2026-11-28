@@ -216,13 +216,13 @@ fn the_run_description_says_to_probe_a_browsers_debugging_port_before_asking_abo
     assert!(holding > 0, "no kind of delegate is offered `run`");
 }
 
-/// RUN-18. A session asked to watch a file read it once, said what it held, and left nothing
-/// watching, because nothing joined a watch request to either technique. `run`'s description
+/// RUN-18. A session asked to watch a file that has nothing joining the request to either
+/// technique reads it once, says what it holds, and leaves nothing watching. `run`'s description
 /// joins it to the built-in skill `watching`, before the first look, and the skill holds the
-/// techniques (tests/skills.rs pins its body). The paragraph was sent on every request, so it is
-/// not in the description too. The regressions it rejects are a description that drops
-/// the route, one that names a skill other than the one the catalogue holds, and one that keeps
-/// the whole paragraph as well.
+/// techniques (tests/skills.rs pins its body). The skill's techniques are not repeated in the
+/// description, which is sent on every request. The regressions it rejects are a description
+/// that drops the route, one that names a skill other than the one the catalogue holds, and one
+/// that keeps the whole paragraph as well.
 #[test]
 fn the_run_description_routes_a_watch_request_to_one_of_the_two_techniques() {
     let described = run_description();

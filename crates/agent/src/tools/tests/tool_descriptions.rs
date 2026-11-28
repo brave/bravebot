@@ -1582,7 +1582,7 @@ fn the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_wr
 
 /// TOOL-6, TOOL-7. The descriptions of `load_skill`, `search_skills`, `download_url` and
 /// `ask_user` are written from the list: each names another tool only where the list holds it,
-/// and a list holding every tool reads the text it always did. The regression it rejects is a
+/// and a list holding every tool names every other tool. The regression it rejects is a
 /// description that names `search_skills`, `load_skill`, `fetch_url` or a reading tool to a turn
 /// whose list lacks it, as a definition's `tools:` line can leave it.
 #[test]
@@ -1702,8 +1702,8 @@ fn a_held_back_tool_names_no_tool_the_offered_list_lacks() {
 
 /// TOOL-6, TOOL-7. Where `watch_file` and `schedule_next` are held back for `load_tool`,
 /// the `read_file` and `run` descriptions of the core list name neither, and the sentence that
-/// arranges the next look sends the planner to `load_tool`. Where neither is held back they
-/// read as they always did. The regressions it rejects are a core description naming a tool
+/// arranges the next look sends the planner to `load_tool`. Where neither is held back they name
+/// each directly. The regressions it rejects are a core description naming a tool
 /// the list holds back, and the route to a later look dropped altogether.
 #[test]
 fn the_read_and_run_descriptions_name_a_held_back_watch_or_schedule_through_load_tool() {

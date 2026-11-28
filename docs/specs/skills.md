@@ -733,10 +733,11 @@ The body is the same in every turn and names no tool that arranges a look, since
 [SCHED-6](tools/schedule-next.md#SCHED-6) offers one in some turns and not others. `read_file`'s
 description says which case this turn is ([READ-6](tools/read-file.md#READ-6)).
 
-**Why.** Guidance used in a minority of turns was in `run`'s description, sent on every request.
-A built-in skill costs its name and one line in the prompt, and a `load_skill` round in the turns
-that need it. A skill and not a refusal or a result, because a watch request has no failed call to
-answer: the mistake it prevents was a turn that read once, reported, and made no further call.
+**Why.** Guidance read only in a turn asked to watch something would, in `run`'s description, be
+sent on every request. A built-in skill costs its name and one line in the prompt, and a
+`load_skill` round in the turns that need it. A skill and not a refusal or a result, because a
+watch request has no failed call to answer: the mistake it prevents is a turn that reads once,
+reports, and makes no further call.
 
 `verified-by: bravebot_agent::skills::the_watching_skill_is_listed_and_carries_the_two_techniques`
 `verified-by: bravebot_agent::deferred_tools::the_first_request_routes_a_watch_request_to_a_skill_it_lists`

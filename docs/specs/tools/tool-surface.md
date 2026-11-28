@@ -480,7 +480,7 @@ A name one character out, in another case, or a prefix of one loads nothing
 load asks nobody. It offers the tool's definition as it was written when the turn started
 ([TOOL-6](#TOOL-6)), from the next request to the end of the turn, appended after every tool
 already offered, so the list in front of it is sent unchanged. From the next request a result whose
-situation is the loaded tool's names the tool itself and no longer sends the planner to `load_tool`.
+situation is the loaded tool's names the tool itself and does not send the planner to `load_tool`.
 A loaded tool takes `why` and lists it as required, as
 every tool does ([TOOL-5](#TOOL-5)). A call to a held-back tool that is not loaded is refused
 ([TOOL-3](#TOOL-3)).
@@ -491,8 +491,8 @@ permission mode, and by the
 `name` arguments the planner passed to `load_tool`. No byte of a file, a result or a server's reply
 is read to decide it.
 
-**Why.** Every built-in was otherwise sent in full on every request, about 73,000 bytes in a
-one-shot `--safe` turn's first request, most of it for tools the turn never calls.
+**Why.** Sending every built-in in full on every request costs about 73,000 bytes in a one-shot
+`--safe` turn's first request, most of it for tools the turn never calls.
 
 **Known cost.** The tool list is the front of the cached prefix, so the request after a load writes
 the cache from the first byte past the tools it held before. Appending the loaded definition keeps

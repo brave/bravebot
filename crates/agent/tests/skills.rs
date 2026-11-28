@@ -1450,8 +1450,8 @@ fn the_loop_skill_is_advertised_for_a_tick_and_for_nothing_else() {
     }
 }
 
-/// RUN-18, SKILL-22: the built-in skill `watching` holds what `run`'s description used to say about
-/// a request to watch something, and is listed beside `loop` by default, so the planner is told of
+/// RUN-18, SKILL-22: the built-in skill `watching` holds the account of how a request to watch
+/// something is answered, and is listed beside `loop` by default, so the planner is told of
 /// it before any load. The regressions it rejects are guidance moved to a skill the planner is not
 /// told of, a description that invites a load for more than a watch request, and a body that
 /// dropped the first look, a technique or the line about a later look.
