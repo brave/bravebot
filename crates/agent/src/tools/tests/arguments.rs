@@ -3529,9 +3529,10 @@ fn a_skill_name_is_refused_once_the_context_has_met_something_untrusted() {
 ///
 /// TOOL-3, BACKEND-44: the error says the call was not run, names the tool, quotes the text
 /// around the bad byte so the bad key shows, lists what the tool takes, and asks for the whole
-/// call again as valid JSON. The regressions it rejects are the bare parser error the planner
-/// was given before, a rewording that quotes nothing or only the start of the text, and a
-/// parameter list drawn for a name that is not a built-in's.
+/// call again as valid JSON. The regressions it rejects are an error that is only the parser's
+/// message, with no tool name, no quote and no list of parameters, a rewording that quotes
+/// nothing or only the start of the text, and a parameter list drawn for a name that is not a
+/// built-in's.
 #[test]
 #[expect(clippy::expect_used, reason = "a test fails by panicking")]
 #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]

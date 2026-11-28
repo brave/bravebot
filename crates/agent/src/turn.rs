@@ -10837,8 +10837,8 @@ mod tests {
 
     /// After a thinking stop at a level, the person and the trail are told the request asking again
     /// goes out one level lower, naming both levels, for that one request. The regressions it
-    /// rejects: a lowering only the planner's request shows, a trail that records the old "asked
-    /// again" outcome, and levels named the wrong way round.
+    /// rejects: a lowering only the planner's request shows, a trail that records only that the
+    /// planner was asked again, with no level, and levels named the wrong way round.
     #[test]
     fn a_thinking_stop_at_a_level_tells_the_person_and_the_trail_both_levels() {
         use bravebot_aichat::CutOff;
@@ -10964,7 +10964,7 @@ mod tests {
     /// nothing is settled where the request failed, and a stop in a call after text is settled
     /// after the reply. The second is of another kind, so it is asked about too and the file is
     /// written. The regression it rejects is the path after a reply keeping a count of its own
-    /// kind, or the old single flag, which ends the turn on the text.
+    /// kind, or one flag shared by every kind of stop, which ends the turn on the text.
     #[test]
     #[expect(clippy::expect_used, reason = "a test fails by panicking")]
     fn a_thinking_stop_then_a_stop_in_a_call_after_text_is_asked_again() {

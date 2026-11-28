@@ -3077,6 +3077,7 @@ planner.
 `verified-by: bravebot_session::sessions::a_transport_failure_says_last_that_a_new_message_continues_the_turn`
 `verified-by: bravebot_ui_bridge::failure_tests::a_transport_failure_is_stored_with_the_terminals_line_naming_its_cause`
 `verified-by: bravebot_ui_bridge::failure_tests::the_window_is_sent_the_agents_line_for_a_transport_failure`
+`verified-by: bravebot_ui_bridge::failure_tests::the_window_is_sent_the_agents_line_for_a_reply_that_went_quiet_past_the_gap`
 `verified-by: bravebot_ui_bridge::failure_tests::the_window_is_sent_the_agents_line_for_a_reply_that_reached_its_output_limit`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs folds a turn.error carrying the agent's line through the window's own reducer and draws the real row, holding that the card's description is the line with each setting it names in a code element, that the window's own words for the category are not said beside it, that markup in the line or a setting name is drawn as characters, and that without a line the card says its category's words, which for a reply that reached its output limit name BRAVEBOT_OUTPUT_BUDGET and say the limit is not on the context window; ui/scripts/marking.test.mjs draws the card of a plan run that stopped with the line; make check-ui runs both)`
 `verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_which_part_of_a_request_a_delegate_s_transport_failure_ended`

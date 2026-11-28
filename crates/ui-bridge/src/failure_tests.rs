@@ -463,10 +463,54 @@ fn the_window_is_sent_the_agents_line_for_a_transport_failure() {
         assert!(!sent.to_string().contains("PRIVATE"), "{sent}");
     }
 
-    // Any other failure is worded by the window from its category, as before.
+    // Any other failure is worded by the window from its category.
     let other = failed_with(ChatError::NoContent);
     assert_eq!(other["failureMessage"], Value::Null, "{other}");
     assert_eq!(other["failureCodes"], Value::Null, "{other}");
+}
+
+/// BACKEND-37: a reply that began and then went quiet past the gap is incomplete, not a transport
+/// failure, and the window is sent the agent's line for it all the same, naming the gap in force
+/// and the setting that changes it, with `idle-gap` as the cause the card is titled by. An
+/// incomplete reply that stopped for any other reason has no gap or setting to name, so it is sent
+/// neither and the window words it from its category.
+///
+/// The faults this rejects: the line and the cause sent only for the transport category, which
+/// leaves a reply that went quiet with the category's words and no setting; and the line or the
+/// cause sent for every incomplete reply, which names a gap that did not end it.
+#[test]
+fn the_window_is_sent_the_agents_line_for_a_reply_that_went_quiet_past_the_gap() {
+    let stopped = |cause: ChatError| {
+        failed_with(BackendError::Attempted {
+            attempts: 3,
+            usage: None,
+            context_tokens: None,
+            conceded: Default::default(),
+            backend: None,
+            retry_setting: bravebot_agent::RetrySetting::Entry,
+            idle_gap: Some(Duration::from_secs(300)),
+            cause: Box::new(BackendError::from(cause)),
+        })
+    };
+    let quiet = stopped(ChatError::WentQuiet);
+    assert_eq!(quiet["category"], "incomplete", "{quiet}");
+    assert_eq!(quiet["failureCause"], "idle-gap", "{quiet}");
+    let said = quiet["failureMessage"].as_str().unwrap_or_default();
+    assert!(
+        said.starts_with("The reply went quiet for longer than the 5 minute gap allowed"),
+        "{quiet}"
+    );
+    assert!(said.contains("idleTimeoutMs"), "{quiet}");
+    assert_eq!(
+        quiet["failureCodes"],
+        json!(["idleTimeoutMs", "maxRetries"]),
+        "{quiet}"
+    );
+
+    let dropped = stopped(ChatError::Incomplete);
+    assert_eq!(dropped["category"], "incomplete", "{dropped}");
+    assert_eq!(dropped["failureMessage"], Value::Null, "{dropped}");
+    assert_eq!(dropped["failureCause"], Value::Null, "{dropped}");
 }
 
 /// BACKEND-37, BACKEND-42: a window is sent the agent's own line for a reply that reached its output
