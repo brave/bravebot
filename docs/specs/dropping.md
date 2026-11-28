@@ -109,12 +109,16 @@ but that a person's gesture put its path there.
 `verified-by: bravebot_agent::turn::dropping_a_text_file_does_not_reach_anything_beside_it`
 `verified-by: bravebot_agent::turn::dropping_a_picture_does_not_reach_anything_beside_it`
 `verified-by: bravebot_agent::turn::dropping_a_file_vouches_for_that_file_and_not_the_ones_beside_it`
+`verified-by: bravebot_agent::turn::a_dropped_file_in_another_encoding_becomes_context`
 
 <a id="DROP-4"></a>
 ### DROP-4: a recognised type is carried, and an unrecognised one is only a path
 
 Images and PDFs are carried as bytes, so the model looks at them. A text file becomes context, its
-contents entering the turn as trusted input. A type nothing here takes has its path written into the line instead, which is
+contents entering the turn as trusted input, decoded the same way `read_file` decodes a page
+([READ-3](tools/read-file.md#READ-3)): a file in UTF-16, UTF-32 or Latin-1 is text rather than
+binary, with no note of the decoding since the window shows no page markers over context. A type
+nothing here takes has its path written into the line instead, which is
 what dropping a file did before any of this existed. Extensions are recognised whatever their case.
 
 A slash command whose argument reaches a model carries what such a request can hold. `/btw` sends a
