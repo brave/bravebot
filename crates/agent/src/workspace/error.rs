@@ -134,6 +134,12 @@ impl WorkspaceError {
     /// the policy layer composed, and what may be in one is that layer's question rather than
     /// this one's.
     pub fn describe(&self, named: &str) -> String {
+        self.describe_beside(named, crate::tools::Beside::every())
+    }
+
+    /// As [`Self::describe`], naming `read_file` on [`Self::NotUtf8`] only where `beside` says
+    /// that tool is offered (TOOL-6).
+    pub fn describe_beside(&self, named: &str, beside: crate::tools::Beside) -> String {
         match self {
             Self::Denied(d) => d.to_string(),
             Self::Escapes {
@@ -292,11 +298,20 @@ impl WorkspaceError {
             Self::Binary { .. } => {
                 format!("'{named}' is a binary file, so it cannot be read as text")
             }
-            Self::NotUtf8 { .. } => format!(
-                "'{named}' is text in an encoding other than UTF-8, which this call does not \
-                 handle: writing it back would change the file's encoding. read_file shows such \
-                 a file decoded"
-            ),
+            Self::NotUtf8 { .. } => {
+                if beside.holds(crate::tools::Named::ReadFile) {
+                    format!(
+                        "'{named}' is text in an encoding other than UTF-8, which this call does not \
+                         handle: writing it back would change the file's encoding. read_file shows such \
+                         a file decoded"
+                    )
+                } else {
+                    format!(
+                        "'{named}' is text in an encoding other than UTF-8, which this call does not \
+                         handle: writing it back would change the file's encoding"
+                    )
+                }
+            }
             Self::TooLarge { limit, .. } => format!(
                 "'{named}' is larger than the {} MiB an attachment may be",
                 limit / (1024 * 1024)
@@ -517,5 +532,31 @@ impl std::error::Error for WorkspaceError {}
 impl From<Denial> for WorkspaceError {
     fn from(value: Denial) -> Self {
         Self::Denied(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkspaceError;
+    use crate::tools::{Beside, Named};
+
+    /// TOOL-6: `WorkspaceError::NotUtf8` names `read_file` only where the turn's list holds it.
+    #[test]
+    fn not_utf8_names_read_file_only_where_offered() {
+        let error = WorkspaceError::NotUtf8 {
+            path: "notes.txt".to_string(),
+        };
+        let with_read = error.describe_beside("notes.txt", Beside::every());
+        let without_read =
+            error.describe_beside("notes.txt", Beside::every().without(Named::ReadFile));
+        assert!(
+            with_read.contains("read_file shows such a file decoded"),
+            "{with_read}"
+        );
+        assert!(
+            without_read.contains("writing it back would change the file's encoding")
+                && !without_read.contains("read_file"),
+            "{without_read}"
+        );
     }
 }

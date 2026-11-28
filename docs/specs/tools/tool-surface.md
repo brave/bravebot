@@ -313,19 +313,14 @@ and is refused for a reason it cannot act on, and then has a question to report 
 It was also told in its own prompt what it cannot do, so it holds both answers at once and the one in
 the tool list is the one that is true.
 
-Not every text is written this way yet. Some results and refusals still name `run`, `read_file`,
-`edit_file`, `read_output`, `job_output`, `search_skills`, `load_skill`, `download_url` or
-`read_git` without reading the list: the decoding note of a page read, the
-result of an approved `request_path`, the unconfined way out that a refused write names, the descriptions of
-`load_skill`, `search_skills`, `download_url` and `ask_user`, the notice about `search_skills`, the
-planning, person-facing and environment prompts, and the reminder of a kept skill after compaction.
-A refusal of a checkout names `read_git` as the reader it would have used only where the caller
-gives no other name: `checkout_for_cause_as` and `checkout_in_temporary_directory_cause_as` let
-`spawn_agent` name the reader this turn's own list holds, `read_git` where it does and a name that
-turn can act on where it does not, and `offered` does the same for `apply_checkout` and
-`apply_kept_checkout`. A text of this kind is to be written from the list when it is found, and
-the test for it is the one the sites above have: a list without the tool, and a list with every
-tool as the control.
+Not every text is written this way yet. Some checkout notes of `spawn_agent` still name
+`apply_checkout` or `read_git` without reading the list. A refusal of a checkout names `read_git`
+as the reader it would have used only where the caller gives no other name:
+`checkout_for_cause_as` and `checkout_in_temporary_directory_cause_as` let `spawn_agent` name the
+reader this turn's own list holds, `read_git` where it does and a name that turn can act on where
+it does not, and `offered` does the same for `apply_checkout` and `apply_kept_checkout`. A text
+of this kind is to be written from the list when it is found, and the test for it is the one the
+sites above have: a list without the tool, and a list with every tool as the control.
 
 The checkout notes of `spawn_agent` name `lsp` only where the collecting turn's own list holds it,
 since a checkout's delegate is never offered `lsp` (its own list has it stripped unconditionally),
@@ -414,3 +409,14 @@ without naming a tool to fetch them with.
 `verified-by: bravebot_agent::turn::a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::turn::delegate_end::the_apply_checkout_clause_names_the_tool_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::tests::tool_descriptions::the_checkout_notice_names_lsp_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::lsp::outside_location_names_read_file_only_where_offered`
+`verified-by: bravebot_agent::tools::tests::reading_files::request_path_approval_names_only_offered_file_tools`
+`verified-by: bravebot_agent::tools::tests::confinement::a_refused_write_without_run_omits_unconfined_way_out`
+`verified-by: bravebot_agent::workspace::error::not_utf8_names_read_file_only_where_offered`
+`verified-by: bravebot_agent::tools::offered::skill_download_and_ask_user_descriptions_name_only_offered_tools`
+`verified-by: bravebot_agent::preamble::skills_intro_names_load_and_search_only_where_offered`
+`verified-by: bravebot_agent::turn::skills_overview_notice_names_search_skills_only_where_offered`
+`verified-by: bravebot_agent::conversation::kept_skill_names_load_skill_only_where_offered`
+`verified-by: bravebot_agent::turn::prompts::planning_and_for_a_person_name_only_offered_tools`
+`verified-by: bravebot_agent::preamble::environment_and_missing_dependency_name_run_only_where_offered`
+`verified-by: bravebot_agent::turn::round_steps::nothing_run_nudge_names_spawn_agent_only_where_offered`

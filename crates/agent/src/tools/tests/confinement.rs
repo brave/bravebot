@@ -2478,6 +2478,57 @@ fn pointing_a_refused_write_at_the_unconfined_line_records_no_refusal_of_it() {
     }
 }
 
+/// TOOL-6: a refused write omits the `'unconfined': true` `run` hint when `run` is withheld.
+#[expect(
+    clippy::expect_used,
+    reason = "test fixture creates a temporary workspace and policy"
+)]
+#[test]
+fn a_refused_write_without_run_omits_unconfined_way_out() {
+    let scratch = Scratch::new("write-refused-without-run");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    let call_write = |with_run: bool| {
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileWrite, Capability::ShellExec]),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust.clone());
+        let produced = with_tools(&workspace, |tools| {
+            tools.confine_runs = true;
+            tools.sandbox = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+            tools.profile = Some(std::path::Path::new("/profile"));
+            tools.asks_about_unconfined = true;
+            tools.beside = if with_run {
+                Beside::every()
+            } else {
+                Beside::every().without(Named::Run)
+            };
+            write_file(
+                &mut policy,
+                tools,
+                &mut crate::confirm::Unattended,
+                &json!({"path": "../escaped.txt", "contents": "hi", "why": "test"}),
+            )
+        });
+        told(&mut policy, &produced.text)
+    };
+    let control = call_write(true);
+    let withheld = call_write(false);
+    assert!(control.contains("'unconfined': true"), "{control}");
+    assert!(
+        !withheld.contains("'unconfined': true") && !withheld.contains("A run line"),
+        "{withheld}"
+    );
+}
+
 /// SANDBOX-28: a delegate that names `request_path` anyway is answered as an unknown name,
 /// the person is not asked, and nothing is held. The first case is the control: the same
 /// call from a turn that is not a delegate is asked and held, so an implementation that

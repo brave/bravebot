@@ -570,6 +570,9 @@ pub struct Conversation {
     /// Whether the person has been told that a turn summarised because retrieval could not run,
     /// since retrieval last worked (RETRIEVE-7). Not part of a [`Snapshot`]: once per session.
     recall_fallback_said: bool,
+    /// Whether `load_skill` is offered on the current turn, used when carrying cut skills
+    /// across compaction or trimming (TOOL-6).
+    load_skill_offered: bool,
 }
 
 /// A window of a file as `read_file` showed it, for telling a repeat of the same read from a new one.
@@ -672,6 +675,7 @@ impl Conversation {
             left_out: 0,
             pinned: Vec::new(),
             prompt_at: None,
+            load_skill_offered: true,
             recall_fallback_said: false,
         }
     }
@@ -1312,7 +1316,14 @@ impl Conversation {
             // other words, and the rest of one cut short is the person's to ask for again.
             let named = matches!(stored.composed, Some(Composed::SkillNamed { .. }));
             carried.push(Stored {
-                message: Arc::new(Message::user(kept_skill(name, shown, cut, named, gone))),
+                message: Arc::new(Message::user(kept_skill(
+                    name,
+                    shown,
+                    cut,
+                    named,
+                    gone,
+                    self.load_skill_offered,
+                ))),
                 composed: Some(Composed::SkillKept { name: name.clone() }),
                 address: None,
                 source: stored.source.clone(),
@@ -2306,8 +2317,14 @@ impl Conversation {
             left_out: snapshot.left_out,
             pinned,
             prompt_at: None,
+            load_skill_offered: true,
             recall_fallback_said: false,
         }
+    }
+
+    /// Record whether `load_skill` is offered on the current turn (TOOL-6).
+    pub fn set_load_skill_offered(&mut self, offered: bool) {
+        self.load_skill_offered = offered;
     }
 
     /// The exchange, for an interface that wants to show what was said.
@@ -2525,20 +2542,32 @@ fn within(text: &str, limit: usize) -> (&str, bool) {
 /// A skill the planner loaded is its own to read again with `load_skill`. One the person named is
 /// not offered to it, so it is told the instructions are for the line that named it and that only the
 /// person can have the rest loaded again.
-fn kept_skill(name: &str, body: &str, cut: bool, named: bool, gone: Gone) -> String {
+fn kept_skill(
+    name: &str,
+    body: &str,
+    cut: bool,
+    named: bool,
+    gone: Gone,
+    load_skill_offered: bool,
+) -> String {
     let gone = match gone {
         Gone::Summarised => "are summarised above",
         Gone::NoLongerSent => "are no longer sent",
     };
-    let ending = match (cut, named) {
-        (false, _) => String::new(),
-        (true, false) => format!(
+    let ending = match (cut, named, load_skill_offered) {
+        (false, _, _) => String::new(),
+        (true, false, true) => format!(
             "\n\nThe rest of this skill was left out to keep the request short. Call load_skill \
              with the name {name} to read all of it."
         ),
-        (true, true) => "\n\nThe rest of this skill was left out to keep the request short. Only \
+        (true, false, false) => {
+            "\n\nThe rest of this skill was left out to keep the request short.".to_string()
+        }
+        (true, true, _) => {
+            "\n\nThe rest of this skill was left out to keep the request short. Only \
              the user can have it loaded again, by naming it in a line they type."
-            .to_string(),
+                .to_string()
+        }
     };
     match named {
         false => format!(
@@ -6883,5 +6912,17 @@ mod tests {
         assert_eq!(snapshot.retrieval_cut, cut - 1);
         let resumed = Conversation::restored(snapshot);
         assert_eq!(request_texts(&resumed), request_texts(&conversation));
+    }
+
+    #[test]
+    fn kept_skill_names_load_skill_only_where_offered() {
+        let with_tool = kept_skill("euro", "body", true, false, Gone::Summarised, true);
+        let without_tool = kept_skill("euro", "body", true, false, Gone::Summarised, false);
+        assert!(with_tool.contains("Call load_skill"), "{with_tool}");
+        assert!(!without_tool.contains("load_skill"), "{without_tool}");
+        assert!(
+            without_tool.contains("left out to keep the request short"),
+            "{without_tool}"
+        );
     }
 }

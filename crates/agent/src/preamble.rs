@@ -222,6 +222,7 @@ pub fn compose<S: Sink>(
         goal,
         attribution,
         None,
+        crate::tools::Beside::every(),
     )
 }
 
@@ -243,6 +244,7 @@ pub fn compose_in<S: Sink>(
     goal: Option<&str>,
     attribution: &Attribution,
     appended: Option<&str>,
+    beside: crate::tools::Beside,
 ) -> Preamble {
     let mut preamble = Preamble::default();
 
@@ -252,17 +254,18 @@ pub fn compose_in<S: Sink>(
     let jenkins_cli = crate::programs::resolve("jk", workspace.root()).is_some();
     preamble.add(
         Provenance::Driver,
-        environment(workspace, github_cli, jenkins_cli),
+        environment(workspace, github_cli, jenkins_cli, beside),
     );
     preamble
         .for_a_person
-        .push_str(github_cli_guidance(github_cli));
+        .push_str(github_cli_guidance(github_cli, beside));
     preamble
         .for_a_person
-        .push_str(jenkins_cli_guidance(jenkins_cli));
-    preamble
-        .for_a_person
-        .push_str(missing_dependency_guidance(workspace.scratch().is_some()));
+        .push_str(jenkins_cli_guidance(jenkins_cli, beside));
+    preamble.for_a_person.push_str(missing_dependency_guidance(
+        workspace.scratch().is_some(),
+        beside,
+    ));
 
     let mut standing = Prompt::default();
     // What the sources admitted so far cost, for the combined word of INSTR-15.
@@ -414,20 +417,9 @@ pub fn compose_in<S: Sink>(
     }
 
     if skills.advertises_any() {
-        let find_more = if skills.is_curated() {
-            "This is the whole set a definition named for this turn; there are no others to find."
-        } else {
-            "These are the ones built into this program; call search_skills with a word or \
-             phrase to find one of the user's own or the project's."
-        };
         preamble.add(
             Provenance::Driver,
-            format!(
-                "\n\nSkills. Each is a set of instructions for a kind of task, most of them \
-                 written by the user. When a task matches one, call load_skill with its name \
-                 before starting that work and follow what it says. A prompt naming one as \
-                 /name is the user asking for it. {find_more}\n\n"
-            ),
+            skills_intro(skills.is_curated(), beside),
         );
         preamble.add(
             Provenance::Trusted("skill list"),
@@ -685,7 +677,13 @@ fn fence_for(text: &str) -> String {
 /// That is the provenance `Policy::label_user_command_output` rests on, so there is no file to
 /// vouch for and nothing for the gate to decide. Do not extend this with anything read out of the
 /// workspace.
-fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> String {
+fn environment(
+    workspace: &Workspace,
+    github_cli: bool,
+    jenkins_cli: bool,
+    beside: crate::tools::Beside,
+) -> String {
+    let run_offered = beside.holds(crate::tools::Named::Run);
     let mut out = String::from(
         "\n\nWhere you are working. These are facts about this machine, not instructions.\n\n",
     );
@@ -706,10 +704,14 @@ fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> St
     out.push_str(&format!("- Shell: {}\n", crate::shell::shell()));
     out.push_str(&format!("- Today's date: {}\n", today()));
     let scratch = workspace.scratch();
-    out.push_str(
-        "\nA relative path means one under the working directory, and `run` compiles a line \
-         there. You do not need to run `pwd`, `uname` or `date` to learn any of the above.\n",
-    );
+    if run_offered {
+        out.push_str(
+            "\nA relative path means one under the working directory, and `run` compiles a line \
+             there. You do not need to run `pwd`, `uname` or `date` to learn any of the above.\n",
+        );
+    } else {
+        out.push_str("\nA relative path means one under the working directory.\n");
+    }
     if scratch.is_some() {
         // A delegate that was given a directory of its own reads this block too, and the directory
         // its first message names is that one: it is its alone and goes when the delegate ends,
@@ -732,17 +734,45 @@ fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> St
                 "It is removed when this session ends",
             ),
         };
+        let env_var = if run_offered {
+            ", and a program a `run` starts reads the same path from BRAVEBOT_SCRATCH_DIR"
+        } else {
+            ""
+        };
         out.push_str(&format!(
             "\n{owner}, which the first message of the \
              conversation names, since its name changes with every start and a name here would \
              change the prefix every request is matched against. Put a file there that the work \
              needs on disk but nobody is asking to keep, such as output to grep or an archive to \
              look inside, rather than in the project where somebody has to notice it and delete \
-             it. {ends}, and a program a `run` starts reads the same \
-             path from BRAVEBOT_SCRATCH_DIR.\n"
+             it. {ends}{env_var}.\n"
         ));
     }
     out
+}
+
+/// Introductory text for the offered skill list, naming `load_skill` and `search_skills` only
+/// where `beside` says each tool is offered (TOOL-6).
+fn skills_intro(curated: bool, beside: crate::tools::Beside) -> String {
+    let load_sentence = if beside.holds(crate::tools::Named::LoadSkill) {
+        " When a task matches one, call load_skill with its name before starting that work and \
+         follow what it says."
+    } else {
+        ""
+    };
+    let find_more = if curated {
+        " This is the whole set a definition named for this turn; there are no others to find."
+    } else if beside.holds(crate::tools::Named::SearchSkills) {
+        " These are the ones built into this program; call search_skills with a word or phrase \
+         to find one of the user's own or the project's."
+    } else {
+        " These are the ones built into this program."
+    };
+    format!(
+        "\n\nSkills. Each is a set of instructions for a kind of task, most of them written by \
+         the user.{load_sentence} A prompt naming one as /name is the user asking for \
+         it.{find_more}\n\n"
+    )
 }
 
 /// Which road a GitHub URL takes, said only where the probe found the CLI to take it.
@@ -767,18 +797,26 @@ fn environment(workspace: &Workspace, github_cli: bool, jenkins_cli: bool) -> St
 /// **On the path is not logged in**, and authentication cannot be told without a request this has
 /// no business making before the first turn, so the paragraph carries its own fallback. Without one
 /// this would trade a fetch that fails for a run that fails.
-fn github_cli_guidance(present: bool) -> &'static str {
-    if !present {
+fn github_cli_guidance(present: bool, beside: crate::tools::Beside) -> &'static str {
+    if !present || !beside.holds(crate::tools::Named::Run) {
         return "";
     }
-    "\nThe GitHub CLI is installed, so a github.com URL naming a pull request or an issue is a \
-     `run` rather than a fetch: `gh pr view <n> --repo <owner>/<name>`, `gh pr diff <n> --repo \
-     <owner>/<name>`, `gh issue view <n> --repo <owner>/<name>`, and `--comments` for what was said \
-     in review. Each asks for the part you are after. Either road comes back quarantined, so what \
-     differs is how much this turn then carries: the page is many times the CLI's answer to say the \
-     same thing. Fetching the `.diff` address is refused outright unless a rule names the host it \
-     redirects to, which is not github.com. `gh` may not be logged in, which nothing here can tell \
-     without asking the network: where it fails for that reason, fetch_url is the way.\n"
+    if beside.holds(crate::tools::Named::FetchUrl) {
+        "\nThe GitHub CLI is installed, so a github.com URL naming a pull request or an issue is a \
+         `run` rather than a fetch: `gh pr view <n> --repo <owner>/<name>`, `gh pr diff <n> --repo \
+         <owner>/<name>`, `gh issue view <n> --repo <owner>/<name>`, and `--comments` for what was said \
+         in review. Each asks for the part you are after. Either road comes back quarantined, so what \
+         differs is how much this turn then carries: the page is many times the CLI's answer to say the \
+         same thing. Fetching the `.diff` address is refused outright unless a rule names the host it \
+         redirects to, which is not github.com. `gh` may not be logged in, which nothing here can tell \
+         without asking the network: where it fails for that reason, fetch_url is the way.\n"
+    } else {
+        "\nThe GitHub CLI is installed, so use `run` with `gh pr view <n> --repo <owner>/<name>`, \
+         `gh pr diff <n> --repo <owner>/<name>`, `gh issue view <n> --repo <owner>/<name>`, and \
+         `--comments` for what was said in review. Each asks for the part you are after, and comes \
+         back quarantined. `gh` may not be logged in, which nothing here can tell without asking \
+         the network: where it fails for that reason, say so in your answer.\n"
+    }
 }
 
 /// What to do about a Jenkins build, said only where the probe found the CLI to do it.
@@ -797,19 +835,29 @@ fn github_cli_guidance(present: bool) -> &'static str {
 /// probe before the first turn here, so the paragraph says what to do when the CLI fails for that
 /// reason. There is no fetch to fall back to, since the server that needs the login refuses the
 /// fetch as well.
-fn jenkins_cli_guidance(present: bool) -> &'static str {
-    if !present {
+fn jenkins_cli_guidance(present: bool, beside: crate::tools::Beside) -> &'static str {
+    if !present || !beside.holds(crate::tools::Named::Run) {
         return "";
     }
-    "\nThe Jenkins CLI is installed, so a Jenkins build, whether named by its URL or by a job \
-     and a number, is a `run` rather than a fetch: `jk run view <jobPath> <build> --summary` for \
-     the result and the stages, `jk log <jobPath> <build> --tail <n>` for the end of the console \
-     log, with `--grep <regex>` to select lines and `--step <step>` for one stage, `jk test report \
-     <jobPath> <build>` for the tests, and `jk run ls <jobPath>` for recent builds of a job. Each \
-     asks for the part you are after, where the page is the whole build. Either road comes back \
-     quarantined, so what differs is how much this turn then carries. `jk` may not be logged in, \
-     and a Jenkins server that asks for a login refuses `fetch_url` as well: where `jk` fails for \
-     that reason, say so in your answer and name `jk auth login` as what signs it in.\n"
+    if beside.holds(crate::tools::Named::FetchUrl) {
+        "\nThe Jenkins CLI is installed, so a Jenkins build, whether named by its URL or by a job \
+         and a number, is a `run` rather than a fetch: `jk run view <jobPath> <build> --summary` for \
+         the result and the stages, `jk log <jobPath> <build> --tail <n>` for the end of the console \
+         log, with `--grep <regex>` to select lines and `--step <step>` for one stage, `jk test report \
+         <jobPath> <build>` for the tests, and `jk run ls <jobPath>` for recent builds of a job. Each \
+         asks for the part you are after, where the page is the whole build. Either road comes back \
+         quarantined, so what differs is how much this turn then carries. `jk` may not be logged in, \
+         and a Jenkins server that asks for a login refuses `fetch_url` as well: where `jk` fails for \
+         that reason, say so in your answer and name `jk auth login` as what signs it in.\n"
+    } else {
+        "\nThe Jenkins CLI is installed, so use `run` for a Jenkins build, whether named by its URL \
+         or by a job and a number: `jk run view <jobPath> <build> --summary` for the result and the \
+         stages, `jk log <jobPath> <build> --tail <n>` for the end of the console log, with \
+         `--grep <regex>` to select lines and `--step <step>` for one stage, `jk test report \
+         <jobPath> <build>` for the tests, and `jk run ls <jobPath>` for recent builds of a job. \
+         Each asks for the part you are after. `jk` may not be logged in: where `jk` fails for that \
+         reason, say so in your answer and name `jk auth login` as what signs it in.\n"
+    }
 }
 
 /// What to do when a program fails because something it needs is missing from this machine, said
@@ -825,8 +873,8 @@ fn jenkins_cli_guidance(present: bool) -> &'static str {
 /// would lose it. A new directory inside the session's, and only that on the path, because the
 /// session's own holds whatever else the work put in it. In single quotes, because the line
 /// compiler reads an unquoted backslash as an escape and a Windows path is made of them.
-fn missing_dependency_guidance(scratch: bool) -> &'static str {
-    if !scratch {
+fn missing_dependency_guidance(scratch: bool, beside: crate::tools::Beside) -> &'static str {
+    if !scratch || !beside.holds(crate::tools::Named::Run) {
         return "";
     }
     "\nWhen a program fails because something it needs is missing from this machine, check whether \
@@ -1646,15 +1694,21 @@ mod tests {
         let mut workspace = Workspace::new(&root).expect("workspace");
         workspace.open_scratch(Some(session_directory));
 
-        let for_session = environment(&workspace, false, false);
+        let for_session = environment(&workspace, false, false, crate::tools::Beside::every());
         let for_delegate = environment(
             &workspace
                 .clone()
                 .with_delegate_scratch(Some(delegate_directory)),
             false,
             false,
+            crate::tools::Beside::every(),
         );
-        let for_sharing = environment(&workspace.clone().with_delegate_scratch(None), false, false);
+        let for_sharing = environment(
+            &workspace.clone().with_delegate_scratch(None),
+            false,
+            false,
+            crate::tools::Beside::every(),
+        );
 
         assert!(
             for_session.contains(
@@ -1695,28 +1749,36 @@ mod tests {
     /// on any host, which is what the tests going through `compose` cannot do.
     #[test]
     fn whether_the_github_cli_is_installed_is_said_either_way() {
+        use crate::tools::{Beside, Named};
+
         let workspace = Workspace::new(".").expect("workspace");
 
-        let installed = environment(&workspace, true, false);
+        let installed = environment(&workspace, true, false, Beside::every());
         assert!(
             installed.contains("- GitHub CLI (gh) on PATH: true\n"),
             "an installed CLI was not reported as one: {installed}"
         );
+        assert!(installed.contains("`run`"), "{installed}");
 
-        let absent = environment(&workspace, false, false);
+        let absent = environment(&workspace, false, false, Beside::every());
         assert!(
             absent.contains("- GitHub CLI (gh) on PATH: false\n"),
             "a machine with no CLI was told nothing about one: {absent}"
         );
+
+        let without_run = environment(&workspace, true, false, Beside::every().without(Named::Run));
+        assert!(!without_run.contains("`run`"), "{without_run}");
     }
 
     /// The two probes are separate facts: a machine with one CLI and not the other says so for
     /// each, and neither line follows the other.
     #[test]
     fn whether_the_jenkins_cli_is_installed_is_said_either_way_and_apart_from_the_github_cli() {
+        use crate::tools::Beside;
+
         let workspace = Workspace::new(".").expect("workspace");
 
-        let jenkins_only = environment(&workspace, false, true);
+        let jenkins_only = environment(&workspace, false, true, Beside::every());
         assert!(
             jenkins_only.contains("- Jenkins CLI (jk) on PATH: true\n"),
             "an installed Jenkins CLI was not reported as one: {jenkins_only}"
@@ -1726,7 +1788,7 @@ mod tests {
             "the Jenkins CLI's probe changed the GitHub CLI's line: {jenkins_only}"
         );
 
-        let github_only = environment(&workspace, true, false);
+        let github_only = environment(&workspace, true, false, Beside::every());
         assert!(
             github_only.contains("- Jenkins CLI (jk) on PATH: false\n"),
             "a machine with no Jenkins CLI was told nothing about one: {github_only}"
@@ -1789,7 +1851,9 @@ mod tests {
     /// an approval finding out.
     #[test]
     fn a_github_url_is_sent_to_the_cli_only_where_the_probe_found_one() {
-        let said = github_cli_guidance(true);
+        use crate::tools::{Beside, Named};
+
+        let said = github_cli_guidance(true, Beside::every());
         for command in ["gh pr view", "gh pr diff", "gh issue view"] {
             assert!(
                 said.contains(command),
@@ -1798,9 +1862,14 @@ mod tests {
         }
 
         assert_eq!(
-            github_cli_guidance(false),
+            github_cli_guidance(false, Beside::every()),
             "",
             "a machine with no gh was told to use it anyway"
+        );
+        assert_eq!(
+            github_cli_guidance(true, Beside::every().without(Named::Run)),
+            "",
+            "a turn without run was told to use gh anyway"
         );
     }
 
@@ -1809,7 +1878,9 @@ mod tests {
     /// fallback the paragraph trades a fetch that fails for a run that fails.
     #[test]
     fn an_installed_github_cli_still_names_fetch_url_as_the_fallback() {
-        let said = github_cli_guidance(true);
+        use crate::tools::{Beside, Named};
+
+        let said = github_cli_guidance(true, Beside::every());
         assert!(
             said.contains("may not be logged in"),
             "the one thing the probe cannot tell is not said: {said}"
@@ -1818,6 +1889,12 @@ mod tests {
             said.contains("fetch_url is the way"),
             "a gh that fails leaves the planner with nowhere to go: {said}"
         );
+
+        let without_fetch = github_cli_guidance(true, Beside::every().without(Named::FetchUrl));
+        assert!(
+            !without_fetch.contains("fetch_url"),
+            "github_cli_guidance named fetch_url when withheld: {without_fetch}"
+        );
     }
 
     /// A Jenkins build named by its page costs the whole page for a result or the end of a log, and
@@ -1825,7 +1902,9 @@ mod tests {
     /// no `jk` only moves the waste to a run that fails.
     #[test]
     fn a_jenkins_build_is_sent_to_the_cli_only_where_the_probe_found_one() {
-        let said = jenkins_cli_guidance(true);
+        use crate::tools::{Beside, Named};
+
+        let said = jenkins_cli_guidance(true, Beside::every());
         for command in [
             "jk run view",
             "jk log",
@@ -1841,9 +1920,14 @@ mod tests {
         }
 
         assert_eq!(
-            jenkins_cli_guidance(false),
+            jenkins_cli_guidance(false, Beside::every()),
             "",
             "a machine with no jk was told to use it anyway"
+        );
+        assert_eq!(
+            jenkins_cli_guidance(true, Beside::every().without(Named::Run)),
+            "",
+            "a turn without run was told to use jk anyway"
         );
     }
 
@@ -1851,7 +1935,9 @@ mod tests {
     /// logged in, the planner retries or falls back to a fetch the same server refuses.
     #[test]
     fn an_installed_jenkins_cli_says_what_to_do_when_it_is_not_logged_in() {
-        let said = jenkins_cli_guidance(true);
+        use crate::tools::{Beside, Named};
+
+        let said = jenkins_cli_guidance(true, Beside::every());
         assert!(
             said.contains("may not be logged in"),
             "the one thing the probe cannot tell is not said: {said}"
@@ -1868,6 +1954,45 @@ mod tests {
             !said.contains("fetch_url is the way"),
             "the planner was sent to a fetch a login-gated server refuses: {said}"
         );
+
+        let without_fetch = jenkins_cli_guidance(true, Beside::every().without(Named::FetchUrl));
+        assert!(
+            !without_fetch.contains("fetch_url"),
+            "jenkins_cli_guidance named fetch_url when withheld: {without_fetch}"
+        );
+    }
+
+    /// TOOL-6: `environment` and `missing_dependency_guidance` name `run` only when offered.
+    #[expect(
+        clippy::expect_used,
+        reason = "test fixture creates a temporary workspace directory"
+    )]
+    #[test]
+    fn environment_and_missing_dependency_name_run_only_where_offered() {
+        use crate::tools::{Beside, Named};
+
+        let temp = std::env::temp_dir().join(format!("bravebot-env-beside-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&temp));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let workspace = Workspace::new(&temp).expect("workspace");
+
+        let with_run = environment(&workspace, false, false, Beside::every());
+        let without_run = environment(
+            &workspace,
+            false,
+            false,
+            Beside::every().without(Named::Run),
+        );
+        assert!(with_run.contains("`run` compiles"), "{with_run}");
+        assert!(!without_run.contains("`run`"), "{without_run}");
+
+        assert!(!missing_dependency_guidance(true, Beside::every()).is_empty());
+        assert_eq!(
+            missing_dependency_guidance(true, Beside::every().without(Named::Run)),
+            ""
+        );
+
+        drop(std::fs::remove_dir_all(&temp));
     }
 
     #[test]
@@ -1875,5 +2000,23 @@ mod tests {
         assert_eq!(pointer_target("Be brief. Write tests.", "AGENTS.md"), None);
         // `.md` alone is a name of nothing.
         assert_eq!(pointer_target("Look in .md", "AGENTS.md"), None);
+    }
+
+    #[test]
+    fn skills_intro_names_load_and_search_only_where_offered() {
+        use crate::tools::{Beside, Named};
+
+        let full = skills_intro(false, Beside::every());
+        assert!(full.contains("load_skill"), "{full}");
+        assert!(full.contains("search_skills"), "{full}");
+
+        let without_both = skills_intro(
+            false,
+            Beside::every()
+                .without(Named::LoadSkill)
+                .without(Named::SearchSkills),
+        );
+        assert!(!without_both.contains("load_skill"), "{without_both}");
+        assert!(!without_both.contains("search_skills"), "{without_both}");
     }
 }

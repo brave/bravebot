@@ -100,7 +100,7 @@ impl Running {
 /// `run` is also [`Running`], which the refusals read; the two always agree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Beside {
-    held: u16,
+    held: u32,
 }
 
 /// A tool that planner-facing text names only where the turn's list holds it. [`Beside`] holds a
@@ -118,13 +118,19 @@ pub enum Named {
     VetContent,
     RequestPath,
     Search,
+    ListFiles,
     SpawnAgent,
     Lsp,
     ApplyCheckout,
+    SearchSkills,
+    LoadSkill,
+    FetchUrl,
+    AskUser,
+    TodoWrite,
 }
 
 impl Named {
-    const ALL: [Named; 14] = [
+    const ALL: [Named; 20] = [
         Named::Run,
         Named::ReadOutput,
         Named::ReadFile,
@@ -136,9 +142,15 @@ impl Named {
         Named::VetContent,
         Named::RequestPath,
         Named::Search,
+        Named::ListFiles,
         Named::SpawnAgent,
         Named::Lsp,
         Named::ApplyCheckout,
+        Named::SearchSkills,
+        Named::LoadSkill,
+        Named::FetchUrl,
+        Named::AskUser,
+        Named::TodoWrite,
     ];
 
     /// The name the tool is offered under. `run` is read as [`Running::on`] reads it, so it has
@@ -156,14 +168,20 @@ impl Named {
             Named::VetContent => Some("vet_content"),
             Named::RequestPath => Some("request_path"),
             Named::Search => Some("search"),
+            Named::ListFiles => Some("list_files"),
             Named::SpawnAgent => Some("spawn_agent"),
             Named::Lsp => Some("lsp"),
             Named::ApplyCheckout => Some("apply_checkout"),
+            Named::SearchSkills => Some("search_skills"),
+            Named::LoadSkill => Some("load_skill"),
+            Named::FetchUrl => Some("fetch_url"),
+            Named::AskUser => Some("ask_user"),
+            Named::TodoWrite => Some("todo_write"),
         }
     }
 
-    const fn bit(self) -> u16 {
-        1 << self as u16
+    const fn bit(self) -> u32 {
+        1 << self as u32
     }
 }
 
@@ -720,6 +738,95 @@ fn vet_content_instead(beside: &dyn Fn(&str) -> bool) -> String {
     }
 }
 
+/// Description of `load_skill`, naming `search_skills` only where `beside` says it is offered (TOOL-6).
+fn load_skill_description(beside: &dyn Fn(&str) -> bool) -> String {
+    if beside("search_skills") {
+        "Read one of the skills listed for you, or one search_skills found. A skill is \
+         instructions the user wrote for a kind of task. Load one before doing that kind of \
+         work, and follow what it says. Only a name you were listed or that search_skills \
+         returned exists; there is no path to give."
+            .to_string()
+    } else {
+        "Read one of the skills listed for you. A skill is \
+         instructions the user wrote for a kind of task. Load one before doing that kind of \
+         work, and follow what it says. Only a name you were listed \
+         exists; there is no path to give."
+            .to_string()
+    }
+}
+
+/// Description of `load_skill`'s `name` parameter, naming `search_skills` only where offered (TOOL-6).
+fn load_skill_name_description(beside: &dyn Fn(&str) -> bool) -> &'static str {
+    if beside("search_skills") {
+        "The name of a skill exactly as it was listed for you \
+         or as search_skills returned it, e.g. commit-style."
+    } else {
+        "The name of a skill exactly as it was listed for you, e.g. commit-style."
+    }
+}
+
+/// Description of `search_skills`, naming `load_skill` only where `beside` says it is offered (TOOL-6).
+fn search_skills_description(beside: &dyn Fn(&str) -> bool) -> String {
+    if beside("load_skill") {
+        "Find a skill by a word or phrase, among skills of the user's own and the \
+         project's own that are not listed for you up front. Matches a skill whose name or \
+         description holds every word of the query, and returns each match's name and \
+         description in full. Load a match with load_skill before doing the kind of work it \
+         names."
+            .to_string()
+    } else {
+        "Find a skill by a word or phrase, among skills of the user's own and the \
+         project's own that are not listed for you up front. Matches a skill whose name or \
+         description holds every word of the query, and returns each match's name and \
+         description in full."
+            .to_string()
+    }
+}
+
+/// Description of `download_url`, naming `fetch_url` only where `beside` says it is offered (TOOL-6).
+fn download_url_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let binary_for = if beside("fetch_url") {
+        "Use it for a picture, archive, PDF, font or any file fetch_url would corrupt."
+    } else {
+        "Use it for a picture, archive, PDF, font or any binary file."
+    };
+    format!(
+        "Save an http or https URL to a file in the workspace without reading it: binary \
+         safe, and the bytes go from the network to the file and never into your context. \
+         {binary_for} It replaces an existing file at the path. The file is quarantined like \
+         anything fetched, so you cannot read it back or be told what it says. The user is asked \
+         about the host and about the destination before anything is written."
+    )
+}
+
+/// Description of `ask_user`, naming only the lookup tools on `beside` (TOOL-6).
+fn ask_user_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let held: Vec<&str> = ["list_files", "search", "read_file", "run"]
+        .into_iter()
+        .filter(|name| beside(name))
+        .collect();
+    let look_with = match held.as_slice() {
+        [] => "go and look instead".to_string(),
+        [only] => format!("go and look with {only} instead"),
+        [head @ .., last] => format!("go and look with {} or {last} instead", head.join(", ")),
+    };
+    format!(
+        "Ask the user up to four questions and wait for their answers. Only for what you \
+         cannot find out yourself: which of two approaches to take, whether something is in \
+         scope, which of two plausible files they meant. Never for a fact about this machine. \
+         A path, a filename, whether a program is installed, what something is called: {look_with}, \
+         and note that a quarantined result does not stop you asking afterwards, so looking first \
+         costs you nothing. Do not ask a question whose answer the request states. Do not ask \
+         whether to do what the user asked, or whether to do it automatically, because they asked \
+         for it. What is left to ask is a choice that the request leaves open and that differs in \
+         consequence, such as which of two accounts to send from. Each question you ask costs the \
+         user's attention. Ask everything the plan turns on in one call rather than a question per \
+         turn; they are put to the user one at a time. Offer concrete options where you can; the \
+         user may also answer in their own words or skip a question, and a skipped question is an \
+         answer to work with rather than a reason to ask again."
+    )
+}
+
 /// Write the descriptions that name other tools again for the list a turn settled on, so a run is
 /// not sent to a tool it is not offered.
 ///
@@ -768,6 +875,9 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
                     tool.function.description =
                         tool.function.description.replacen(&full, &narrowed, 1);
                 }
+            }
+            "load_skill" | "search_skills" | "download_url" | "ask_user" => {
+                state_skill_or_ask_beside(tool, &beside);
             }
             "run" => state_run_beside(tool, &beside),
             "read_file" => {
@@ -819,6 +929,26 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
             }
             _ => {}
         }
+    }
+}
+
+/// [`state_what_is_beside`] for `load_skill`, `search_skills`, `download_url`, and `ask_user`.
+fn state_skill_or_ask_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
+    match tool.function.name.as_str() {
+        "load_skill" => {
+            tool.function.description = load_skill_description(beside);
+            if let Some(name) = tool
+                .function
+                .parameters
+                .pointer_mut("/properties/name/description")
+            {
+                *name = json!(load_skill_name_description(beside));
+            }
+        }
+        "search_skills" => tool.function.description = search_skills_description(beside),
+        "download_url" => tool.function.description = download_url_description(beside),
+        "ask_user" => tool.function.description = ask_user_description(beside),
+        _ => {}
     }
 }
 
@@ -3102,4 +3232,107 @@ fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definiti
          narrowest first.{described}"
     ));
     kind["enum"] = json!(delegates.names());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exec::Deadlines;
+
+    #[expect(
+        clippy::panic,
+        reason = "test helper fails fast when an expected tool is absent"
+    )]
+    fn tool_named<'a>(tools: &'a [Tool], name: &str) -> &'a Tool {
+        tools
+            .iter()
+            .find(|t| t.function.name == name)
+            .unwrap_or_else(|| panic!("{name} not found"))
+    }
+
+    #[test]
+    fn skill_download_and_ask_user_descriptions_name_only_offered_tools() {
+        let full = available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let mut control = full.clone();
+        state_what_is_beside(&mut control);
+
+        let mut without_search_skills: Vec<Tool> = full
+            .iter()
+            .filter(|t| t.function.name != "search_skills")
+            .cloned()
+            .collect();
+        state_what_is_beside(&mut without_search_skills);
+        let load_ctrl = tool_named(&control, "load_skill");
+        let load_without = tool_named(&without_search_skills, "load_skill");
+        assert!(load_ctrl.function.description.contains("search_skills"));
+        assert!(!load_without.function.description.contains("search_skills"));
+        assert!(
+            !load_without
+                .function
+                .parameters
+                .pointer("/properties/name/description")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .contains("search_skills")
+        );
+
+        let mut without_load_skill: Vec<Tool> = full
+            .iter()
+            .filter(|t| t.function.name != "load_skill")
+            .cloned()
+            .collect();
+        state_what_is_beside(&mut without_load_skill);
+        assert!(
+            tool_named(&control, "search_skills")
+                .function
+                .description
+                .contains("load_skill")
+        );
+        assert!(
+            !tool_named(&without_load_skill, "search_skills")
+                .function
+                .description
+                .contains("load_skill")
+        );
+
+        let mut without_fetch: Vec<Tool> = full
+            .iter()
+            .filter(|t| t.function.name != "fetch_url")
+            .cloned()
+            .collect();
+        state_what_is_beside(&mut without_fetch);
+        assert!(
+            tool_named(&control, "download_url")
+                .function
+                .description
+                .contains("fetch_url")
+        );
+        assert!(
+            !tool_named(&without_fetch, "download_url")
+                .function
+                .description
+                .contains("fetch_url")
+        );
+
+        let mut ask_only: Vec<Tool> = full
+            .iter()
+            .filter(|t| t.function.name == "ask_user")
+            .cloned()
+            .collect();
+        state_what_is_beside(&mut ask_only);
+        let ask_ctrl = &tool_named(&control, "ask_user").function.description;
+        let ask_alone = &tool_named(&ask_only, "ask_user").function.description;
+        assert!(ask_ctrl.contains("list_files, search, read_file or run"));
+        for tool in ["list_files", "search", "read_file", "run"] {
+            assert!(
+                !ask_alone.contains(tool),
+                "ask_user without {tool} still named it: {ask_alone}"
+            );
+        }
+    }
 }

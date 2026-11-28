@@ -444,6 +444,27 @@ pub fn prompt_for(
     processors: Processors,
     has_token_budget: bool,
 ) -> String {
+    prompt_for_beside(
+        held,
+        standing_instruction,
+        memory,
+        may_delegate,
+        processors,
+        has_token_budget,
+        crate::tools::Beside::every(),
+    )
+}
+
+/// As [`prompt_for`], naming tools in `PLANNING` only where `beside` says they are offered (TOOL-6).
+pub fn prompt_for_beside(
+    held: &CapabilitySet,
+    standing_instruction: &str,
+    memory: &str,
+    may_delegate: bool,
+    processors: Processors,
+    has_token_budget: bool,
+    beside: crate::tools::Beside,
+) -> String {
     let delegating = if may_delegate {
         MAY_DELEGATE
     } else {
@@ -452,7 +473,7 @@ pub fn prompt_for(
     let budgeted = if has_token_budget { BUDGETED } else { "" };
     format!(
         "{DELEGATED}{budgeted}{delegating}{NO_FETCH}{}{}{memory}{}",
-        turn::PLANNING,
+        turn::planning(beside),
         standing(standing_instruction),
         limits(held, processors)
     )

@@ -2017,6 +2017,7 @@ fn words_from_the_command_line_follow_the_projects_file_in_what_a_delegate_reads
             None,
             &Attribution::default(),
             appended,
+            bravebot_agent::tools::Beside::every(),
         )
     };
 
@@ -2084,6 +2085,7 @@ fn compose_with_home(
         None,
         &Attribution::default(),
         None,
+        bravebot_agent::tools::Beside::every(),
     )
 }
 
@@ -3205,6 +3207,7 @@ fn a_nested_file_spelled_in_another_case_is_an_ordinary_file() {
             None,
             &Attribution::default(),
             None,
+            bravebot_agent::tools::Beside::every(),
         )
     };
 

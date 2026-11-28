@@ -48,8 +48,10 @@ mod task;
 pub use hooked::Hooked;
 pub(crate) use hooked::trouble_sentences;
 use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices, say_stopped_plugins};
+#[cfg(test)]
 pub(crate) use prompts::PLANNING;
-use prompts::{FOR_A_PERSON, KEPT_FACTS, KEPT_FACTS_END, OPENING};
+pub(crate) use prompts::planning;
+use prompts::{KEPT_FACTS, KEPT_FACTS_END, OPENING, for_a_person};
 pub use result::*;
 pub use task::*;
 
@@ -998,6 +1000,25 @@ fn adopt_and_say<R: Reporter + ?Sized>(
 /// is given a private fact is held private from there. The turn is labelled by the facts injected
 /// into it and not by the corpus they were ranked in. The block is the driver's to place in the
 /// system prompt and is never written into the stored conversation.
+/// Notice naming unlisted skills, suggesting `search_skills` only where it is offered (TOOL-6).
+fn skills_overview_notice(others: &[&str], search_skills_offered: bool) -> String {
+    let count = tools::tally(others.len(), "skill", "skills");
+    let is_are = if others.len() == 1 { "is" } else { "are" };
+    if search_skills_offered {
+        format!(
+            "{count}, of your own or the project's, {is_are} not listed above: {}. Call \
+             search_skills with a word or phrase if one of these, or something else, might \
+             apply to this task.",
+            others.join(", ")
+        )
+    } else {
+        format!(
+            "{count}, of your own or the project's, {is_are} not listed above: {}.",
+            others.join(", ")
+        )
+    }
+}
+
 fn inject_kept_facts<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -3119,6 +3140,7 @@ where
     // Built once and put in front of every round of this turn. Nothing here is stored in the
     // conversation, so a session running many turns holds one copy of AGENTS.md rather than one
     // per turn.
+    conversation.set_load_skill_offered(beside_skills.holds(tools::Named::LoadSkill));
     let mut preamble = crate::preamble::compose_in(
         policy,
         sources,
@@ -3132,6 +3154,7 @@ where
         task.working_towards.as_deref(),
         &task.attribution,
         task.system_prompts.appending.as_deref(),
+        beside_skills,
     );
     if let Some(rooted) = rooted {
         policy.exchange_file_authority(rooted);
@@ -3278,6 +3301,7 @@ where
         &kept_facts,
         offers_vet_content,
         processors,
+        tools::Beside::on(&offered),
         memory,
     );
     let system_text = system.text();
@@ -3599,14 +3623,10 @@ where
     if !conversation.skills_overview_said() {
         let others = catalogue.other_skill_names();
         if !others.is_empty() {
-            let count = tools::tally(others.len(), "skill", "skills");
-            let is_are = if others.len() == 1 { "is" } else { "are" };
             conversation.push_composed(
-                Message::user(format!(
-                    "{count}, of your own or the project's, {is_are} not listed above: {}. \
-                     Call search_skills with a word or phrase if one of these, or something \
-                     else, might apply to this task.",
-                    others.join(", ")
+                Message::user(skills_overview_notice(
+                    &others,
+                    beside_skills.holds(tools::Named::SearchSkills),
                 )),
                 Composed::Notice,
             );
@@ -11533,5 +11553,15 @@ mod tests {
             assert!(injected.is_empty());
             assert_eq!(policy.context_confidentiality(), Confidentiality::Public);
         }
+    }
+
+    #[test]
+    fn skills_overview_notice_names_search_skills_only_where_offered() {
+        let others = ["alpha", "beta"];
+        let with_tool = skills_overview_notice(&others, true);
+        let without_tool = skills_overview_notice(&others, false);
+        assert!(with_tool.contains("search_skills"), "{with_tool}");
+        assert!(!without_tool.contains("search_skills"), "{without_tool}");
+        assert!(without_tool.contains("alpha, beta"), "{without_tool}");
     }
 }
